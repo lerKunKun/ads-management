@@ -1,0 +1,40 @@
+node_modules/
+dist/
+build/
+.next/
+.turbo/
+.cache/
+.DS_Store
+
+# env
+.env
+.env.local
+.env.*.local
+
+# bun
+bun.lockb
+.bun/
+
+# logs
+*.log
+logs/
+
+# IDE
+.vscode/
+.idea/
+
+# postgres data (docker volume)
+.data/
+
+# Claude Code 本地配置(不入库)
+.claude/settings.local.json
+
+# 运行时产物
+batch.json
+*.tmp
+
+# TanStack Router 临时缓存
+.tanstack/
+
+# TS incremental build cache
+*.tsbuildinfo

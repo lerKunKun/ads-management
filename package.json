@@ -1,0 +1,23 @@
+{
+  "name": "ads-management",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:api": "bun --cwd apps/api dev",
+    "dev:worker": "bun --cwd apps/worker dev",
+    "dev:web": "bun --cwd apps/web dev",
+    "db:generate": "bun --cwd packages/db generate",
+    "db:migrate": "bun --cwd packages/db migrate",
+    "db:seed": "bun --cwd packages/db seed",
+    "typecheck": "bun --cwd apps/api typecheck && bun --cwd apps/worker typecheck && bun --cwd apps/web typecheck && bun --cwd packages/db typecheck && bun --cwd packages/shared typecheck"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "@types/bun": "latest"
+  }
+}

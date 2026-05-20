@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "paths": {
+      "@ads/db": ["../../packages/db/src/index.ts"],
+      "@ads/db/*": ["../../packages/db/src/*"],
+      "@ads/shared": ["../../packages/shared/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*"]
+}

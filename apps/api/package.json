@@ -1,0 +1,28 @@
+{
+  "name": "@ads/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --hot src/index.ts",
+    "start": "bun src/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@ads/db": "workspace:*",
+    "@ads/shared": "workspace:*",
+    "@elysiajs/cors": "^1.1.1",
+    "@elysiajs/jwt": "^1.1.1",
+    "@elysiajs/swagger": "^1.1.6",
+    "amqplib": "^0.10.4",
+    "bcryptjs": "^2.4.3",
+    "drizzle-orm": "^0.36.4",
+    "elysia": "^1.1.25",
+    "ioredis": "^5.4.1",
+    "postgres": "^3.4.5"
+  },
+  "devDependencies": {
+    "@types/amqplib": "^0.10.5",
+    "@types/bcryptjs": "^2.4.6"
+  }
+}
