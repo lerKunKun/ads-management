@@ -1,6 +1,6 @@
 import { createFileRoute, redirect, Link } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { api, getToken } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -13,6 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { SearchFilterBar, matchText } from '@/components/SearchFilterBar';
 
 export const Route = createFileRoute('/admin_/users')({
   beforeLoad: () => {
@@ -61,6 +62,21 @@ function UsersPage() {
   const users = usersQ.data ?? [];
   const roles = rolesQ.data ?? [];
 
+  const [search, setSearch] = useState('');
+  const [roleFilter, setRoleFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+
+  const filtered = useMemo(
+    () =>
+      users.filter(
+        (u) =>
+          matchText(u.email, search) &&
+          (!roleFilter || u.roles.includes(roleFilter)) &&
+          (!statusFilter || u.status === statusFilter),
+      ),
+    [users, search, roleFilter, statusFilter],
+  );
+
   return (
     <div className="space-y-6">
       <div className="text-sm text-muted-foreground">
@@ -83,6 +99,42 @@ function UsersPage() {
             (update.error as Error)?.message}
         </p>
       )}
+
+      <SearchFilterBar
+        searchValue={search}
+        onSearchChange={setSearch}
+        searchPlaceholder="搜索邮箱…"
+        filters={[
+          {
+            key: 'role',
+            label: '角色',
+            value: roleFilter,
+            onChange: setRoleFilter,
+            options: [
+              { value: '', label: '全部' },
+              ...roles.map((r) => ({ value: r.code, label: r.code })),
+            ],
+          },
+          {
+            key: 'status',
+            label: '状态',
+            value: statusFilter,
+            onChange: setStatusFilter,
+            options: [
+              { value: '', label: '全部' },
+              { value: 'active', label: 'active' },
+              { value: 'disabled', label: 'disabled' },
+            ],
+          },
+        ]}
+        total={users.length}
+        filtered={filtered.length}
+        onReset={() => {
+          setSearch('');
+          setRoleFilter('');
+          setStatusFilter('');
+        }}
+      />
 
       <div className="border rounded-md">
         <Table>
@@ -111,7 +163,14 @@ function UsersPage() {
                 </TableCell>
               </TableRow>
             )}
-            {users.map((u) => (
+            {!usersQ.isLoading && users.length > 0 && filtered.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={6} className="text-muted-foreground">
+                  无匹配项
+                </TableCell>
+              </TableRow>
+            )}
+            {filtered.map((u) => (
               <TableRow key={u.id}>
                 <TableCell className="font-medium">{u.email}</TableCell>
                 <TableCell>

@@ -1,6 +1,6 @@
 import { createFileRoute, redirect, Link } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { api, getToken, type Me } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import {
@@ -11,6 +11,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { SearchFilterBar, matchText } from '@/components/SearchFilterBar';
 
 export const Route = createFileRoute('/admin')({
   beforeLoad: () => {
@@ -66,6 +67,18 @@ function BreakersSection() {
   });
   const data = q.data ?? [];
 
+  const [search, setSearch] = useState('');
+  const [kind, setKind] = useState('');
+  const filtered = useMemo(
+    () =>
+      data.filter(
+        (b) =>
+          (matchText(b.target, search) || matchText(b.reason, search)) &&
+          (!kind || b.kind === kind),
+      ),
+    [data, search, kind],
+  );
+
   return (
     <section>
       <SectionHeader
@@ -82,6 +95,32 @@ function BreakersSection() {
       {reset.error && (
         <p className="text-sm text-destructive mb-2">{(reset.error as Error).message}</p>
       )}
+      <div className="mb-3">
+        <SearchFilterBar
+          searchValue={search}
+          onSearchChange={setSearch}
+          searchPlaceholder="搜索目标或原因…"
+          filters={[
+            {
+              key: 'kind',
+              label: '类型',
+              value: kind,
+              onChange: setKind,
+              options: [
+                { value: '', label: '全部' },
+                { value: 'fb', label: 'fb' },
+                { value: 'adacct', label: 'adacct' },
+              ],
+            },
+          ]}
+          total={data.length}
+          filtered={filtered.length}
+          onReset={() => {
+            setSearch('');
+            setKind('');
+          }}
+        />
+      </div>
       <div className="border rounded-md">
         <Table>
           <TableHeader>
@@ -108,7 +147,14 @@ function BreakersSection() {
                 </TableCell>
               </TableRow>
             )}
-            {data.map((b) => (
+            {!q.isLoading && data.length > 0 && filtered.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={5} className="text-muted-foreground">
+                  无匹配项
+                </TableCell>
+              </TableRow>
+            )}
+            {filtered.map((b) => (
               <TableRow key={b.key}>
                 <TableCell>
                   <code className="text-xs">{b.kind}</code>
@@ -177,6 +223,31 @@ function TasksSection() {
     refetchInterval: 5000,
   });
   const data = q.data ?? [];
+
+  const [search, setSearch] = useState('');
+  const [status, setStatus] = useState('');
+  const [type, setType] = useState('');
+
+  const typeOptions = useMemo(() => {
+    const set = new Set<string>();
+    data.forEach((t) => set.add(t.type));
+    return [
+      { value: '', label: '全部' },
+      ...Array.from(set).sort().map((t) => ({ value: t, label: t })),
+    ];
+  }, [data]);
+
+  const filtered = useMemo(
+    () =>
+      data.filter(
+        (t) =>
+          (matchText(t.type, search) || matchText(t.id, search)) &&
+          (!status || t.status === status) &&
+          (!type || t.type === type),
+      ),
+    [data, search, status, type],
+  );
+
   return (
     <section>
       <SectionHeader
@@ -203,6 +274,44 @@ function TasksSection() {
       {q.error && (
         <p className="text-sm text-destructive mb-2">{(q.error as Error).message}</p>
       )}
+      <div className="mb-3">
+        <SearchFilterBar
+          searchValue={search}
+          onSearchChange={setSearch}
+          searchPlaceholder="搜索 type 或 task_id…"
+          filters={[
+            {
+              key: 'type',
+              label: 'type',
+              value: type,
+              onChange: setType,
+              options: typeOptions,
+            },
+            {
+              key: 'status',
+              label: '状态',
+              value: status,
+              onChange: setStatus,
+              options: [
+                { value: '', label: '全部' },
+                { value: 'pending', label: 'pending' },
+                { value: 'running', label: 'running' },
+                { value: 'partial', label: 'partial' },
+                { value: 'success', label: 'success' },
+                { value: 'failed', label: 'failed' },
+                { value: 'cancelled', label: 'cancelled' },
+              ],
+            },
+          ]}
+          total={data.length}
+          filtered={filtered.length}
+          onReset={() => {
+            setSearch('');
+            setStatus('');
+            setType('');
+          }}
+        />
+      </div>
       <div className="border rounded-md">
         <Table>
           <TableHeader>
@@ -230,7 +339,14 @@ function TasksSection() {
                 </TableCell>
               </TableRow>
             )}
-            {data.map((t) => (
+            {!q.isLoading && data.length > 0 && filtered.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={6} className="text-muted-foreground">
+                  无匹配项
+                </TableCell>
+              </TableRow>
+            )}
+            {filtered.map((t) => (
               <TableRow key={t.id}>
                 <TableCell className="font-medium">{t.type}</TableCell>
                 <TableCell className={TASK_STATUS_COLOR[t.status] ?? ''}>{t.status}</TableCell>
@@ -255,41 +371,71 @@ function TasksSection() {
 
 /* ===================== Audit ===================== */
 function AuditSection() {
-  const [filter, setFilter] = useState('');
-  const [debounced, setDebounced] = useState('');
+  // action 走后端过滤(精确匹配),resource/free-text 走客户端
+  const [actionFilter, setActionFilter] = useState('');
   const q = useQuery({
-    queryKey: ['admin', 'audit', debounced],
-    queryFn: () => api.listAudit({ limit: 100, ...(debounced ? { action: debounced } : {}) }),
+    queryKey: ['admin', 'audit', actionFilter],
+    queryFn: () =>
+      api.listAudit({ limit: 100, ...(actionFilter ? { action: actionFilter } : {}) }),
   });
   const data = q.data ?? [];
+
+  const [search, setSearch] = useState('');
+  const filtered = useMemo(
+    () =>
+      data.filter(
+        (a) =>
+          matchText(a.action, search) ||
+          matchText(a.resource, search) ||
+          matchText(a.detail ? JSON.stringify(a.detail) : '', search),
+      ),
+    [data, search],
+  );
+
+  const actionOptions = useMemo(() => {
+    const set = new Set<string>();
+    data.forEach((a) => set.add(a.action));
+    return [
+      { value: '', label: '全部 action' },
+      ...Array.from(set).sort().map((v) => ({ value: v, label: v })),
+    ];
+  }, [data]);
 
   return (
     <section>
       <SectionHeader
         title="审计日志"
         right={
-          <div className="flex items-center gap-2">
-            <input
-              placeholder="按 action 过滤 (如 campaign:status:batch)"
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') setDebounced(filter.trim());
-              }}
-              className="h-8 w-72 rounded-md border border-input bg-background px-2 text-sm"
-            />
-            <Button size="sm" variant="outline" onClick={() => setDebounced(filter.trim())}>
-              过滤
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => q.refetch()}>
-              刷新
-            </Button>
-          </div>
+          <Button size="sm" variant="outline" onClick={() => q.refetch()}>
+            刷新
+          </Button>
         }
       />
       {q.error && (
         <p className="text-sm text-destructive mb-2">{(q.error as Error).message}</p>
       )}
+      <div className="mb-3">
+        <SearchFilterBar
+          searchValue={search}
+          onSearchChange={setSearch}
+          searchPlaceholder="搜索 action / resource / detail…"
+          filters={[
+            {
+              key: 'action',
+              label: 'action',
+              value: actionFilter,
+              onChange: setActionFilter,
+              options: actionOptions,
+            },
+          ]}
+          total={data.length}
+          filtered={filtered.length}
+          onReset={() => {
+            setSearch('');
+            setActionFilter('');
+          }}
+        />
+      </div>
       <div className="border rounded-md">
         <Table>
           <TableHeader>
@@ -316,7 +462,14 @@ function AuditSection() {
                 </TableCell>
               </TableRow>
             )}
-            {data.map((a) => (
+            {!q.isLoading && data.length > 0 && filtered.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={5} className="text-muted-foreground">
+                  无匹配项
+                </TableCell>
+              </TableRow>
+            )}
+            {filtered.map((a) => (
               <TableRow key={a.id}>
                 <TableCell className="font-mono text-xs">{a.action}</TableCell>
                 <TableCell className="font-mono text-xs">{a.resource}</TableCell>

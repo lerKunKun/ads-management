@@ -21,6 +21,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { CopyDialog } from '@/components/CopyDialog';
+import { SearchFilterBar, matchText } from '@/components/SearchFilterBar';
 
 /* ===================== 类型 ===================== */
 export interface EntityRow {
@@ -96,8 +97,22 @@ export function EntityListView<T extends EntityRow>({
   const [copyOpen, setCopyOpen] = useState<{ ids: string[]; hint?: string } | null>(null);
   const [activeTask, setActiveTask] = useState<string | null>(null);
 
-  const allIds = useMemo(() => rows.map((r) => r.id), [rows]);
-  const allSelected = allIds.length > 0 && selected.size === allIds.length;
+  // 搜索 + 状态筛选(客户端过滤)
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+
+  const filteredRows = useMemo(
+    () =>
+      rows.filter(
+        (r) =>
+          matchText(r.name, search) &&
+          (!statusFilter || r.status === statusFilter),
+      ),
+    [rows, search, statusFilter],
+  );
+
+  const allIds = useMemo(() => filteredRows.map((r) => r.id), [filteredRows]);
+  const allSelected = allIds.length > 0 && allIds.every((id) => selected.has(id));
 
   function toggle(id: string) {
     setSelected((s) => {
@@ -108,8 +123,16 @@ export function EntityListView<T extends EntityRow>({
     });
   }
   function toggleAll() {
-    if (allSelected) setSelected(new Set());
-    else setSelected(new Set(allIds));
+    // 只对当前过滤可见的项操作,保留过滤外已选项
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allSelected) {
+        for (const id of allIds) next.delete(id);
+      } else {
+        for (const id of allIds) next.add(id);
+      }
+      return next;
+    });
   }
 
   /* ----- mutations ----- */
@@ -207,7 +230,10 @@ export function EntityListView<T extends EntityRow>({
         <div className="flex items-center gap-2">
           <h2 className="font-medium">{layerLabel}</h2>
           {selected.size > 0 && (
-            <span className="text-sm text-muted-foreground">已选 {selected.size}</span>
+            <span className="text-sm text-muted-foreground">
+              已选 {selected.size}
+              {filteredRows.length !== rows.length && '(跨筛选)'}
+            </span>
           )}
         </div>
         <div className="flex items-center gap-2">
@@ -288,6 +314,33 @@ export function EntityListView<T extends EntityRow>({
         </div>
       </div>
 
+      {/* 搜索 + 筛选 */}
+      <SearchFilterBar
+        searchValue={search}
+        onSearchChange={setSearch}
+        searchPlaceholder={`搜索${layerLabel}名称…`}
+        filters={[
+          {
+            key: 'status',
+            label: '状态',
+            value: statusFilter,
+            onChange: setStatusFilter,
+            options: [
+              { value: '', label: '全部' },
+              { value: 'ACTIVE', label: 'ACTIVE' },
+              { value: 'PAUSED', label: 'PAUSED' },
+              { value: 'ARCHIVED', label: 'ARCHIVED' },
+            ],
+          },
+        ]}
+        total={rows.length}
+        filtered={filteredRows.length}
+        onReset={() => {
+          setSearch('');
+          setStatusFilter('');
+        }}
+      />
+
       {(error || setStatus.error || setBudgetMut.error || copyMut.error || deleteMut.error || batch.error) && (
         <p className="text-sm text-destructive">
           {(error as Error)?.message ||
@@ -334,7 +387,14 @@ export function EntityListView<T extends EntityRow>({
                 </TableCell>
               </TableRow>
             )}
-            {rows.map((r) => {
+            {!isLoading && rows.length > 0 && filteredRows.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={enableBudget ? 12 : 11} className="text-muted-foreground">
+                  无匹配项。试试清除筛选条件。
+                </TableCell>
+              </TableRow>
+            )}
+            {filteredRows.map((r) => {
               const ins = insights?.[r.id];
               const isSel = selected.has(r.id);
               const archived = r.status === 'ARCHIVED' || r.status === 'DELETED';

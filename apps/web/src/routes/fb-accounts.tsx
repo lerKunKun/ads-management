@@ -1,5 +1,6 @@
 import { createFileRoute, redirect, Link } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
+import { useMemo, useState } from 'react';
 import { api, getToken } from '@/lib/api';
 import {
   Table,
@@ -10,6 +11,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
+import { SearchFilterBar, matchText } from '@/components/SearchFilterBar';
 
 export const Route = createFileRoute('/fb-accounts')({
   beforeLoad: () => {
@@ -29,6 +31,18 @@ function FbAccountsPage() {
     queryKey: ['fb-accounts'],
     queryFn: api.fbAccounts,
   });
+
+  const [search, setSearch] = useState('');
+  const [status, setStatus] = useState('');
+
+  const filtered = useMemo(() => {
+    const all = data ?? [];
+    return all.filter(
+      (f) =>
+        (matchText(f.name, search) || matchText(f.fbUserId, search)) &&
+        (!status || f.status === status),
+    );
+  }, [data, search, status]);
 
   async function bindFb() {
     try {
@@ -62,6 +76,34 @@ function FbAccountsPage() {
         <p className="text-sm text-destructive mb-2">{(error as Error).message}</p>
       )}
 
+      <div className="mb-3">
+        <SearchFilterBar
+          searchValue={search}
+          onSearchChange={setSearch}
+          searchPlaceholder="搜索名称 / FB 用户 ID…"
+          filters={[
+            {
+              key: 'status',
+              label: '状态',
+              value: status,
+              onChange: setStatus,
+              options: [
+                { value: '', label: '全部' },
+                { value: 'active', label: 'active' },
+                { value: 'token_invalid', label: 'token_invalid' },
+                { value: 'disabled', label: 'disabled' },
+              ],
+            },
+          ]}
+          total={data?.length ?? 0}
+          filtered={filtered.length}
+          onReset={() => {
+            setSearch('');
+            setStatus('');
+          }}
+        />
+      </div>
+
       <div className="border rounded-md">
         <Table>
           <TableHeader>
@@ -81,14 +123,21 @@ function FbAccountsPage() {
                 </TableCell>
               </TableRow>
             )}
-            {!isLoading && data && data.length === 0 && (
+            {!isLoading && (data?.length ?? 0) === 0 && (
               <TableRow>
                 <TableCell colSpan={5} className="text-muted-foreground">
                   尚未绑定 FB 个号
                 </TableCell>
               </TableRow>
             )}
-            {data?.map((f) => (
+            {!isLoading && (data?.length ?? 0) > 0 && filtered.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={5} className="text-muted-foreground">
+                  无匹配项
+                </TableCell>
+              </TableRow>
+            )}
+            {filtered.map((f) => (
               <TableRow key={f.id}>
                 <TableCell className="font-medium">
                   <Link

@@ -1,5 +1,6 @@
 import { createFileRoute, redirect, Link } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
+import { useMemo, useState } from 'react';
 import { api, getToken } from '@/lib/api';
 import {
   Table,
@@ -10,6 +11,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
+import { SearchFilterBar, matchText } from '@/components/SearchFilterBar';
 
 export const Route = createFileRoute('/fb-accounts_/$id')({
   beforeLoad: () => {
@@ -30,6 +32,31 @@ function FbAccountAdAccountsPage() {
   });
 
   const fb = fbQ.data?.find((f) => f.id === id);
+
+  const [search, setSearch] = useState('');
+  const [status, setStatus] = useState('');
+  const [currency, setCurrency] = useState('');
+
+  const currencyOptions = useMemo(() => {
+    const set = new Set<string>();
+    (adsQ.data ?? []).forEach((a) => {
+      if (a.currency) set.add(a.currency);
+    });
+    return [
+      { value: '', label: '全部' },
+      ...Array.from(set).sort().map((c) => ({ value: c, label: c })),
+    ];
+  }, [adsQ.data]);
+
+  const filtered = useMemo(() => {
+    const all = adsQ.data ?? [];
+    return all.filter(
+      (a) =>
+        (matchText(a.name, search) || matchText(a.metaActId, search)) &&
+        (!status || a.status === status) &&
+        (!currency || a.currency === currency),
+    );
+  }, [adsQ.data, search, status, currency]);
 
   return (
     <div>
@@ -56,6 +83,43 @@ function FbAccountAdAccountsPage() {
         </Button>
       </div>
 
+      <div className="mb-3">
+        <SearchFilterBar
+          searchValue={search}
+          onSearchChange={setSearch}
+          searchPlaceholder="搜索名称 / Meta 账户 ID…"
+          filters={[
+            {
+              key: 'status',
+              label: '状态',
+              value: status,
+              onChange: setStatus,
+              options: [
+                { value: '', label: '全部' },
+                { value: 'active', label: 'active' },
+                { value: 'pending', label: 'pending' },
+                { value: 'disabled', label: 'disabled' },
+                { value: 'closed', label: 'closed' },
+              ],
+            },
+            {
+              key: 'currency',
+              label: '币种',
+              value: currency,
+              onChange: setCurrency,
+              options: currencyOptions,
+            },
+          ]}
+          total={adsQ.data?.length ?? 0}
+          filtered={filtered.length}
+          onReset={() => {
+            setSearch('');
+            setStatus('');
+            setCurrency('');
+          }}
+        />
+      </div>
+
       <div className="border rounded-md">
         <Table>
           <TableHeader>
@@ -75,14 +139,21 @@ function FbAccountAdAccountsPage() {
                 </TableCell>
               </TableRow>
             )}
-            {!adsQ.isLoading && adsQ.data && adsQ.data.length === 0 && (
+            {!adsQ.isLoading && (adsQ.data?.length ?? 0) === 0 && (
               <TableRow>
                 <TableCell colSpan={5} className="text-muted-foreground">
                   无广告账户
                 </TableCell>
               </TableRow>
             )}
-            {adsQ.data?.map((a) => (
+            {!adsQ.isLoading && (adsQ.data?.length ?? 0) > 0 && filtered.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={5} className="text-muted-foreground">
+                  无匹配项
+                </TableCell>
+              </TableRow>
+            )}
+            {filtered.map((a) => (
               <TableRow key={a.id}>
                 <TableCell className="font-medium">
                   <Link
