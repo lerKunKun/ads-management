@@ -12,6 +12,8 @@ import {
 } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
 import { SearchFilterBar, matchText } from '@/components/SearchFilterBar';
+import { Pagination, usePagination } from '@/components/Pagination';
+import { accountGroupStatusLabel } from '@/lib/labels';
 
 export const Route = createFileRoute('/fb-accounts')({
   beforeLoad: () => {
@@ -43,6 +45,7 @@ function FbAccountsPage() {
         (!status || f.status === status),
     );
   }, [data, search, status]);
+  const pager = usePagination(filtered);
 
   async function bindFb() {
     try {
@@ -57,9 +60,9 @@ function FbAccountsPage() {
     <div>
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h1 className="text-xl font-semibold">FB 个号</h1>
+          <h1 className="text-xl font-semibold">广告账户组</h1>
           <p className="text-sm text-muted-foreground">
-            登录后默认入口。点个号名称进入旗下广告账户。
+            点击账户组名称进入组内广告账户。
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -67,7 +70,7 @@ function FbAccountsPage() {
             刷新
           </Button>
           <Button size="sm" onClick={bindFb}>
-            绑定 FB 个号
+            绑定广告账户组
           </Button>
         </div>
       </div>
@@ -80,7 +83,7 @@ function FbAccountsPage() {
         <SearchFilterBar
           searchValue={search}
           onSearchChange={setSearch}
-          searchPlaceholder="搜索名称 / FB 用户 ID…"
+          searchPlaceholder="搜索组名称 / 绑定账号 ID…"
           filters={[
             {
               key: 'status',
@@ -89,9 +92,9 @@ function FbAccountsPage() {
               onChange: setStatus,
               options: [
                 { value: '', label: '全部' },
-                { value: 'active', label: 'active' },
-                { value: 'token_invalid', label: 'token_invalid' },
-                { value: 'disabled', label: 'disabled' },
+                { value: 'active', label: accountGroupStatusLabel('active') },
+                { value: 'token_invalid', label: accountGroupStatusLabel('token_invalid') },
+                { value: 'disabled', label: accountGroupStatusLabel('disabled') },
               ],
             },
           ]}
@@ -109,7 +112,7 @@ function FbAccountsPage() {
           <TableHeader>
             <TableRow>
               <TableHead>名称</TableHead>
-              <TableHead>FB 用户 ID</TableHead>
+              <TableHead>绑定账号 ID</TableHead>
               <TableHead>状态</TableHead>
               <TableHead>广告账户数</TableHead>
               <TableHead>Token 到期</TableHead>
@@ -126,7 +129,7 @@ function FbAccountsPage() {
             {!isLoading && (data?.length ?? 0) === 0 && (
               <TableRow>
                 <TableCell colSpan={5} className="text-muted-foreground">
-                  尚未绑定 FB 个号
+                  尚未绑定广告账户组
                 </TableCell>
               </TableRow>
             )}
@@ -137,7 +140,7 @@ function FbAccountsPage() {
                 </TableCell>
               </TableRow>
             )}
-            {filtered.map((f) => (
+            {pager.pageItems.map((f) => (
               <TableRow key={f.id}>
                 <TableCell className="font-medium">
                   <Link
@@ -149,7 +152,9 @@ function FbAccountsPage() {
                   </Link>
                 </TableCell>
                 <TableCell className="font-mono text-xs">{f.fbUserId}</TableCell>
-                <TableCell className={STATUS_COLOR[f.status] ?? ''}>{f.status}</TableCell>
+                <TableCell className={STATUS_COLOR[f.status] ?? ''}>
+                  {accountGroupStatusLabel(f.status)}
+                </TableCell>
                 <TableCell>{f.adAccountCount}</TableCell>
                 <TableCell className="text-xs text-muted-foreground">
                   {f.tokenExpiresAt ? new Date(f.tokenExpiresAt).toLocaleString() : '-'}
@@ -158,6 +163,12 @@ function FbAccountsPage() {
             ))}
           </TableBody>
         </Table>
+        <Pagination
+          page={pager.page}
+          pageCount={pager.pageCount}
+          total={filtered.length}
+          onPageChange={pager.setPage}
+        />
       </div>
     </div>
   );

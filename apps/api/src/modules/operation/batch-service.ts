@@ -10,10 +10,19 @@ import { and, eq, inArray, sql as dsql } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
 import { db, schema } from '../../lib/db';
 import { publishOperation, type OperationMessage } from '../../lib/rabbitmq-topology';
-import { initProgress } from '../../lib/progress';
+import { bumpProgress, initProgress } from '../../lib/progress';
 import { checkScope } from '../../middleware/auth';
 import { HttpError } from '../../lib/http-error';
+import { meta } from '../../lib/meta-client';
+import { FAKE_MODE } from '../../lib/fake-meta-state';
+import { metaProvider } from '../../providers/meta';
 import { writeAudit } from '../iam/auth-service';
+import {
+  markLocalBudget,
+  markLocalDeleted,
+  markLocalStatus,
+  upsertLocalCopyPlaceholder,
+} from '../ad-object/local-store';
 import type { AuthPrincipal } from '../iam/auth-service';
 
 export type BatchAction =
@@ -210,6 +219,14 @@ export async function batchEnqueue(
 
   await initProgress(taskId, targets.length);
 
+  const paramsByIdempotency = new Map<string, Record<string, unknown>>();
+  for (const target of targets) {
+    paramsByIdempotency.set(
+      idempotency(taskId, target, action, params),
+      { ...params, ...(target.params ?? {}) },
+    );
+  }
+
   // 拉所有刚 insert 的 item id 以放入消息
   const items = await db.transaction(async (tx) => {
     await tx.execute(dsql`SELECT set_config('app.current_company_id', ${principal.companyId}, true)`);
@@ -237,11 +254,19 @@ export async function batchEnqueue(
       targetType: it.targetType as 'campaign' | 'adset' | 'ad',
       targetId: it.targetId,
       action,
-      params: { ...params, ...(targets.find((t) => t.target_id === it.targetId)?.params ?? {}) },
+      params: paramsByIdempotency.get(it.idempotencyKey) ?? params,
       idempotencyKey: it.idempotencyKey,
       attempt: 1,
     };
-    await publishOperation(msg);
+    if (FAKE_MODE) {
+      await executeFakeBatchItem(msg);
+    } else {
+      await publishOperation(msg);
+    }
+  }
+
+  if (FAKE_MODE) {
+    await finalizeFakeTask(taskId);
   }
 
   await writeAudit({
@@ -254,4 +279,228 @@ export async function batchEnqueue(
   });
 
   return { taskId, total: targets.length };
+}
+
+async function executeFakeBatchItem(msg: OperationMessage): Promise<void> {
+  try {
+    const result = await executeFakeProvider(msg);
+    await writeLocalFakeBestEffort(msg, result);
+    await markFakeItemSuccess(msg, result);
+    await bumpProgress(msg.taskId, { success: 1 });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await markFakeItemFailed(msg, message);
+    await bumpProgress(msg.taskId, { failed: 1 });
+  }
+}
+
+async function executeFakeProvider(
+  msg: OperationMessage,
+): Promise<Record<string, unknown> | undefined> {
+  const [layer, op] = msg.action.split(':') as [
+    'campaign' | 'adset' | 'ad',
+    'status' | 'budget' | 'copy' | 'delete',
+  ];
+  const owner = await meta.getObjectOwnership('', msg.targetType, msg.targetId);
+  if (owner.actId && owner.actId !== msg.metaActId) {
+    throw new HttpError(403, 403, `${msg.targetType} not in ad_account`);
+  }
+
+  if (op === 'status') {
+    const status = msg.params['status'];
+    if (status !== 'ACTIVE' && status !== 'PAUSED' && status !== 'ARCHIVED') {
+      throw new HttpError(422, 422, 'status 必须为 ACTIVE/PAUSED/ARCHIVED');
+    }
+    await metaProvider.setStatus('', {
+      adAccountId: msg.metaActId,
+      targetId: msg.targetId,
+      targetType: layer,
+      status,
+    });
+    return undefined;
+  }
+
+  if (op === 'budget') {
+    if (layer === 'ad') throw new HttpError(422, 422, 'ad 层无 budget 操作');
+    const daily = msg.params['dailyBudget'];
+    const lifetime = msg.params['lifetimeBudget'];
+    await metaProvider.setBudget('', {
+      adAccountId: msg.metaActId,
+      targetId: msg.targetId,
+      targetType: layer,
+      ...(typeof daily === 'number' ? { dailyBudget: daily } : {}),
+      ...(typeof lifetime === 'number' ? { lifetimeBudget: lifetime } : {}),
+    });
+    return undefined;
+  }
+
+  if (op === 'copy') {
+    const deepCopy = msg.params['deepCopy'];
+    const startTime = msg.params['startTime'];
+    const statusOption = msg.params['statusOption'];
+    const copyIndex = msg.params['_copyIndex'];
+    const rawRenameOptions = msg.params['renameOptions'] as Record<string, string> | undefined;
+    const renameOptions =
+      typeof copyIndex === 'number' && copyIndex > 0
+        ? {
+            ...(rawRenameOptions ?? {}),
+            rename_suffix: `${rawRenameOptions?.['rename_suffix'] ?? ''}-${String(copyIndex).padStart(2, '0')}`,
+          }
+        : rawRenameOptions;
+    const result = await metaProvider.copy('', {
+      adAccountId: msg.metaActId,
+      sourceId: msg.targetId,
+      targetType: layer,
+      ...(typeof deepCopy === 'boolean' ? { deepCopy } : {}),
+      ...(typeof startTime === 'string' ? { startTime } : {}),
+      ...(typeof statusOption === 'string'
+        ? { statusOption: statusOption as 'ACTIVE' | 'PAUSED' | 'INHERITED_FROM_SOURCE' }
+        : {}),
+      ...(renameOptions ? { renameOptions } : {}),
+    });
+    return { newId: result.newId, layer };
+  }
+
+  if (op === 'delete') {
+    await metaProvider.remove('', {
+      adAccountId: msg.metaActId,
+      targetId: msg.targetId,
+      targetType: layer,
+      hard: msg.params['hard'] === true,
+    });
+    return undefined;
+  }
+
+  throw new HttpError(422, 422, `unknown action: ${msg.action}`);
+}
+
+async function writeLocalFakeState(
+  msg: OperationMessage,
+  result?: Record<string, unknown>,
+): Promise<void> {
+  const [layer, op] = msg.action.split(':') as [
+    'campaign' | 'adset' | 'ad',
+    'status' | 'budget' | 'copy' | 'delete',
+  ];
+  const owner = await meta.getObjectOwnership('', msg.targetType, msg.targetId);
+
+  if (op === 'status') {
+    const status = msg.params['status'];
+    if (status === 'ACTIVE' || status === 'PAUSED' || status === 'ARCHIVED') {
+      await markLocalStatus({
+        companyId: msg.companyId,
+        adAccountId: msg.adAccountId,
+        targetType: layer,
+        targetId: msg.targetId,
+        status,
+        owner,
+      });
+    }
+    return;
+  }
+
+  if (op === 'budget') {
+    if (layer === 'ad') return;
+    const daily = msg.params['dailyBudget'];
+    const lifetime = msg.params['lifetimeBudget'];
+    await markLocalBudget({
+      companyId: msg.companyId,
+      adAccountId: msg.adAccountId,
+      targetType: layer,
+      targetId: msg.targetId,
+      ...(typeof daily === 'number' ? { dailyBudget: daily } : {}),
+      ...(typeof lifetime === 'number' ? { lifetimeBudget: lifetime } : {}),
+      owner,
+    });
+    return;
+  }
+
+  if (op === 'copy') {
+    const newId = typeof result?.['newId'] === 'string' ? result['newId'] : undefined;
+    if (!newId) return;
+    await upsertLocalCopyPlaceholder({
+      companyId: msg.companyId,
+      adAccountId: msg.adAccountId,
+      targetType: layer,
+      sourceId: msg.targetId,
+      newId,
+      owner,
+    });
+    return;
+  }
+
+  if (op === 'delete') {
+    await markLocalDeleted({
+      companyId: msg.companyId,
+      adAccountId: msg.adAccountId,
+      targetType: layer,
+      targetId: msg.targetId,
+      hard: msg.params['hard'] === true,
+      owner,
+    });
+  }
+}
+
+async function writeLocalFakeBestEffort(
+  msg: OperationMessage,
+  result?: Record<string, unknown>,
+): Promise<void> {
+  try {
+    await writeLocalFakeState(msg, result);
+  } catch (err) {
+    console.error(`[local-ad-object] fake ${msg.action} write failed`, err);
+  }
+}
+
+async function markFakeItemSuccess(
+  msg: OperationMessage,
+  result?: Record<string, unknown>,
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx.execute(dsql`SELECT set_config('app.current_company_id', ${msg.companyId}, true)`);
+    await tx
+      .update(schema.operationTaskItems)
+      .set({
+        status: 'success',
+        attempts: 1,
+        error: result ? JSON.stringify(result) : null,
+      })
+      .where(eq(schema.operationTaskItems.id, msg.itemId));
+  });
+}
+
+async function markFakeItemFailed(
+  msg: OperationMessage,
+  error: string,
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx.execute(dsql`SELECT set_config('app.current_company_id', ${msg.companyId}, true)`);
+    await tx
+      .update(schema.operationTaskItems)
+      .set({
+        status: 'failed',
+        attempts: 1,
+        error,
+      })
+      .where(eq(schema.operationTaskItems.id, msg.itemId));
+  });
+}
+
+async function finalizeFakeTask(taskId: string): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx.execute(dsql`SELECT set_config('app.bypass_rls', '1', true)`);
+    const rows = await tx
+      .select({
+        status: schema.operationTaskItems.status,
+      })
+      .from(schema.operationTaskItems)
+      .where(eq(schema.operationTaskItems.taskId, taskId));
+    const success = rows.filter((row) => row.status === 'success').length;
+    const failed = rows.filter((row) => row.status === 'failed' || row.status === 'dead').length;
+    const status = failed === 0 ? 'success' : success === 0 ? 'failed' : 'partial';
+    await tx
+      .update(schema.operationTasks)
+      .set({ success, failed, status })
+      .where(eq(schema.operationTasks.id, taskId));
+  });
 }

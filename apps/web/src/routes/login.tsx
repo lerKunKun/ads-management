@@ -22,7 +22,7 @@ function LoginPage() {
     try {
       const r = await api.login(email, password);
       setToken(r.token);
-      nav({ to: '/fb-accounts' });
+      nav({ to: '/' });
     } catch (e) {
       setErr((e as Error).message || '登录失败');
     } finally {

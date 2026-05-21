@@ -32,44 +32,28 @@ function AdSetsPage() {
     queryFn: () => api.insightsByLevel(id, 'adset', preset),
   });
 
-  const campaign = campaigns.data?.find((c) => c.id === cid);
+  const campaign = campaigns.data?.find((item) => item.id === cid);
 
   return (
     <div className="space-y-4">
       <div className="text-sm text-muted-foreground">
-        <Link to="/fb-accounts" className="hover:text-foreground">
-          FB 个号
+        <Link to="/ad-accounts" className="hover:text-foreground">
+          广告账户
         </Link>
-        {summary.data?.fbAccountId && (
-          <>
-            {' / '}
-            <Link
-              to="/fb-accounts/$id"
-              params={{ id: summary.data.fbAccountId }}
-              className="hover:text-foreground"
-            >
-              {summary.data.fbAccountName}
-            </Link>
-          </>
-        )}
         {' / '}
-        <Link
-          to="/ad-accounts/$id"
-          params={{ id }}
-          className="hover:text-foreground"
-        >
-          {summary.data?.name}
+        <Link to="/ad-accounts/$id" params={{ id }} className="hover:text-foreground">
+          {summary.data?.name ?? id}
         </Link>
         {' / '}
         <span className="text-foreground">{campaign?.name ?? cid}</span>
       </div>
 
-      <div>
-        <h1 className="text-xl font-semibold">{campaign?.name ?? '…'}</h1>
-        <p className="text-sm text-muted-foreground">
-          目标: {campaign?.objective ?? '-'}
+      <header>
+        <h1 className="text-xl font-semibold">{campaign?.name ?? '广告系列'}</h1>
+        <p className="mt-1 text-sm text-muted-foreground">
+          目标：{campaign?.objective ?? '-'}
         </p>
-      </div>
+      </header>
 
       <EntityListView<AdSet>
         layer="adset"
@@ -82,9 +66,9 @@ function AdSetsPage() {
           adsets.refetch();
           insights.refetch();
         }}
-        drillTo={(r) => ({
+        drillTo={(row) => ({
           to: '/ad-accounts/$id/campaigns/$cid/adsets/$asid',
-          params: { id, cid, asid: r.id },
+          params: { id, cid, asid: row.id },
         })}
         enableBudget
         currency={summary.data?.currency ?? null}

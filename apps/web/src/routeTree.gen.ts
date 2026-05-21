@@ -12,9 +12,14 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as FbAccountsRouteImport } from './routes/fb-accounts'
 import { Route as AdminRouteImport } from './routes/admin'
+import { Route as AdAccountsRouteImport } from './routes/ad-accounts'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as FbAccountsIdRouteImport } from './routes/fb-accounts_.$id'
 import { Route as AdminUsersRouteImport } from './routes/admin_.users'
+import { Route as AdminOperationsRouteImport } from './routes/admin_.operations'
+import { Route as AdminIamRouteImport } from './routes/admin_.iam'
+import { Route as AdminCompanyRouteImport } from './routes/admin_.company'
+import { Route as AdminAuditRouteImport } from './routes/admin_.audit'
 import { Route as AdAccountsIdRouteImport } from './routes/ad-accounts_.$id'
 import { Route as OauthFbCallbackRouteImport } from './routes/oauth.fb.callback'
 import { Route as AdAccountsIdCampaignsCidRouteImport } from './routes/ad-accounts_.$id_.campaigns_.$cid'
@@ -35,6 +40,11 @@ const AdminRoute = AdminRouteImport.update({
   path: '/admin',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdAccountsRoute = AdAccountsRouteImport.update({
+  id: '/ad-accounts',
+  path: '/ad-accounts',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
@@ -48,6 +58,26 @@ const FbAccountsIdRoute = FbAccountsIdRouteImport.update({
 const AdminUsersRoute = AdminUsersRouteImport.update({
   id: '/admin_/users',
   path: '/admin/users',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminOperationsRoute = AdminOperationsRouteImport.update({
+  id: '/admin_/operations',
+  path: '/admin/operations',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminIamRoute = AdminIamRouteImport.update({
+  id: '/admin_/iam',
+  path: '/admin/iam',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminCompanyRoute = AdminCompanyRouteImport.update({
+  id: '/admin_/company',
+  path: '/admin/company',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminAuditRoute = AdminAuditRouteImport.update({
+  id: '/admin_/audit',
+  path: '/admin/audit',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdAccountsIdRoute = AdAccountsIdRouteImport.update({
@@ -75,10 +105,15 @@ const AdAccountsIdCampaignsCidAdsetsAsidRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/ad-accounts': typeof AdAccountsRoute
   '/admin': typeof AdminRoute
   '/fb-accounts': typeof FbAccountsRoute
   '/login': typeof LoginRoute
   '/ad-accounts/$id': typeof AdAccountsIdRoute
+  '/admin/audit': typeof AdminAuditRoute
+  '/admin/company': typeof AdminCompanyRoute
+  '/admin/iam': typeof AdminIamRoute
+  '/admin/operations': typeof AdminOperationsRoute
   '/admin/users': typeof AdminUsersRoute
   '/fb-accounts/$id': typeof FbAccountsIdRoute
   '/oauth/fb/callback': typeof OauthFbCallbackRoute
@@ -87,10 +122,15 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/ad-accounts': typeof AdAccountsRoute
   '/admin': typeof AdminRoute
   '/fb-accounts': typeof FbAccountsRoute
   '/login': typeof LoginRoute
   '/ad-accounts/$id': typeof AdAccountsIdRoute
+  '/admin/audit': typeof AdminAuditRoute
+  '/admin/company': typeof AdminCompanyRoute
+  '/admin/iam': typeof AdminIamRoute
+  '/admin/operations': typeof AdminOperationsRoute
   '/admin/users': typeof AdminUsersRoute
   '/fb-accounts/$id': typeof FbAccountsIdRoute
   '/oauth/fb/callback': typeof OauthFbCallbackRoute
@@ -100,10 +140,15 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/ad-accounts': typeof AdAccountsRoute
   '/admin': typeof AdminRoute
   '/fb-accounts': typeof FbAccountsRoute
   '/login': typeof LoginRoute
   '/ad-accounts_/$id': typeof AdAccountsIdRoute
+  '/admin_/audit': typeof AdminAuditRoute
+  '/admin_/company': typeof AdminCompanyRoute
+  '/admin_/iam': typeof AdminIamRoute
+  '/admin_/operations': typeof AdminOperationsRoute
   '/admin_/users': typeof AdminUsersRoute
   '/fb-accounts_/$id': typeof FbAccountsIdRoute
   '/oauth/fb/callback': typeof OauthFbCallbackRoute
@@ -114,10 +159,15 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/ad-accounts'
     | '/admin'
     | '/fb-accounts'
     | '/login'
     | '/ad-accounts/$id'
+    | '/admin/audit'
+    | '/admin/company'
+    | '/admin/iam'
+    | '/admin/operations'
     | '/admin/users'
     | '/fb-accounts/$id'
     | '/oauth/fb/callback'
@@ -126,10 +176,15 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/ad-accounts'
     | '/admin'
     | '/fb-accounts'
     | '/login'
     | '/ad-accounts/$id'
+    | '/admin/audit'
+    | '/admin/company'
+    | '/admin/iam'
+    | '/admin/operations'
     | '/admin/users'
     | '/fb-accounts/$id'
     | '/oauth/fb/callback'
@@ -138,10 +193,15 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/ad-accounts'
     | '/admin'
     | '/fb-accounts'
     | '/login'
     | '/ad-accounts_/$id'
+    | '/admin_/audit'
+    | '/admin_/company'
+    | '/admin_/iam'
+    | '/admin_/operations'
     | '/admin_/users'
     | '/fb-accounts_/$id'
     | '/oauth/fb/callback'
@@ -151,10 +211,15 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AdAccountsRoute: typeof AdAccountsRoute
   AdminRoute: typeof AdminRoute
   FbAccountsRoute: typeof FbAccountsRoute
   LoginRoute: typeof LoginRoute
   AdAccountsIdRoute: typeof AdAccountsIdRoute
+  AdminAuditRoute: typeof AdminAuditRoute
+  AdminCompanyRoute: typeof AdminCompanyRoute
+  AdminIamRoute: typeof AdminIamRoute
+  AdminOperationsRoute: typeof AdminOperationsRoute
   AdminUsersRoute: typeof AdminUsersRoute
   FbAccountsIdRoute: typeof FbAccountsIdRoute
   OauthFbCallbackRoute: typeof OauthFbCallbackRoute
@@ -185,6 +250,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/ad-accounts': {
+      id: '/ad-accounts'
+      path: '/ad-accounts'
+      fullPath: '/ad-accounts'
+      preLoaderRoute: typeof AdAccountsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
@@ -204,6 +276,34 @@ declare module '@tanstack/react-router' {
       path: '/admin/users'
       fullPath: '/admin/users'
       preLoaderRoute: typeof AdminUsersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin_/operations': {
+      id: '/admin_/operations'
+      path: '/admin/operations'
+      fullPath: '/admin/operations'
+      preLoaderRoute: typeof AdminOperationsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin_/iam': {
+      id: '/admin_/iam'
+      path: '/admin/iam'
+      fullPath: '/admin/iam'
+      preLoaderRoute: typeof AdminIamRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin_/company': {
+      id: '/admin_/company'
+      path: '/admin/company'
+      fullPath: '/admin/company'
+      preLoaderRoute: typeof AdminCompanyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin_/audit': {
+      id: '/admin_/audit'
+      path: '/admin/audit'
+      fullPath: '/admin/audit'
+      preLoaderRoute: typeof AdminAuditRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/ad-accounts_/$id': {
@@ -239,10 +339,15 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AdAccountsRoute: AdAccountsRoute,
   AdminRoute: AdminRoute,
   FbAccountsRoute: FbAccountsRoute,
   LoginRoute: LoginRoute,
   AdAccountsIdRoute: AdAccountsIdRoute,
+  AdminAuditRoute: AdminAuditRoute,
+  AdminCompanyRoute: AdminCompanyRoute,
+  AdminIamRoute: AdminIamRoute,
+  AdminOperationsRoute: AdminOperationsRoute,
   AdminUsersRoute: AdminUsersRoute,
   FbAccountsIdRoute: FbAccountsIdRoute,
   OauthFbCallbackRoute: OauthFbCallbackRoute,

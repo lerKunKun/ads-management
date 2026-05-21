@@ -140,6 +140,31 @@ CREATE POLICY p_op_items_all ON operation_task_items
     )
   );
 
+-- ---------- local ad objects ----------
+ALTER TABLE campaigns ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS p_campaigns_all ON campaigns;
+CREATE POLICY p_campaigns_all ON campaigns
+  FOR ALL USING (app_bypass_rls() OR company_id = app_current_company())
+            WITH CHECK (app_bypass_rls() OR company_id = app_current_company());
+
+ALTER TABLE adsets ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS p_adsets_all ON adsets;
+CREATE POLICY p_adsets_all ON adsets
+  FOR ALL USING (app_bypass_rls() OR company_id = app_current_company())
+            WITH CHECK (app_bypass_rls() OR company_id = app_current_company());
+
+ALTER TABLE ads ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS p_ads_all ON ads;
+CREATE POLICY p_ads_all ON ads
+  FOR ALL USING (app_bypass_rls() OR company_id = app_current_company())
+            WITH CHECK (app_bypass_rls() OR company_id = app_current_company());
+
+ALTER TABLE ad_account_sync_state ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS p_ad_sync_state_all ON ad_account_sync_state;
+CREATE POLICY p_ad_sync_state_all ON ad_account_sync_state
+  FOR ALL USING (app_bypass_rls() OR company_id = app_current_company())
+            WITH CHECK (app_bypass_rls() OR company_id = app_current_company());
+
 -- ---------- audit_logs ----------
 ALTER TABLE audit_logs ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS p_audit_all ON audit_logs;

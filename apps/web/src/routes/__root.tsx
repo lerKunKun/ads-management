@@ -19,17 +19,20 @@ function RootLayout() {
   });
 
   return (
-    <div className="min-h-screen flex flex-col">
-      <header className="border-b">
-        <div className="container mx-auto h-14 flex items-center justify-between px-4">
+    <div className="flex min-h-screen flex-col">
+      <header className="border-b bg-background">
+        <div className="container mx-auto flex h-14 items-center justify-between px-4">
           <Link to="/" className="font-semibold">
-            FB 广告管理
+            广告管理系统
           </Link>
           <nav className="flex items-center gap-4 text-sm">
             {hasToken && me.data && (
               <>
+                <Link to="/ad-accounts" className="text-muted-foreground hover:text-foreground">
+                  广告账户
+                </Link>
                 <Link to="/fb-accounts" className="text-muted-foreground hover:text-foreground">
-                  FB 个号
+                  广告账户组
                 </Link>
                 {me.data.permissions.includes('iam:manage') && (
                   <Link to="/admin" className="text-muted-foreground hover:text-foreground">
@@ -53,7 +56,7 @@ function RootLayout() {
           </nav>
         </div>
       </header>
-      <main className="flex-1 container mx-auto px-4 py-6">
+      <main className="container mx-auto flex-1 px-4 py-6">
         <Outlet />
       </main>
     </div>

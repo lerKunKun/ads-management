@@ -12,6 +12,8 @@ import {
 } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
 import { SearchFilterBar, matchText } from '@/components/SearchFilterBar';
+import { Pagination, usePagination } from '@/components/Pagination';
+import { accountGroupStatusLabel, adAccountStatusLabel } from '@/lib/labels';
 
 export const Route = createFileRoute('/fb-accounts_/$id')({
   beforeLoad: () => {
@@ -57,18 +59,19 @@ function FbAccountAdAccountsPage() {
         (!currency || a.currency === currency),
     );
   }, [adsQ.data, search, status, currency]);
+  const pager = usePagination(filtered);
 
   return (
     <div>
       <div className="text-sm text-muted-foreground mb-2">
         <Link to="/fb-accounts" className="hover:text-foreground">
-          ← FB 个号
+          ← 广告账户组
         </Link>
       </div>
       <div className="mb-4">
         <h1 className="text-xl font-semibold">{fb?.name ?? '…'}</h1>
         <p className="text-sm text-muted-foreground">
-          {fb?.fbUserId} · 状态 {fb?.status}
+          绑定账号 {fb?.fbUserId ?? '-'} · 状态 {accountGroupStatusLabel(fb?.status)}
         </p>
       </div>
 
@@ -77,7 +80,7 @@ function FbAccountAdAccountsPage() {
       )}
 
       <div className="flex items-center justify-between mb-3">
-        <h2 className="font-medium">广告账户</h2>
+        <h2 className="font-medium">组内广告账户</h2>
         <Button size="sm" variant="outline" onClick={() => adsQ.refetch()}>
           刷新
         </Button>
@@ -96,10 +99,10 @@ function FbAccountAdAccountsPage() {
               onChange: setStatus,
               options: [
                 { value: '', label: '全部' },
-                { value: 'active', label: 'active' },
-                { value: 'pending', label: 'pending' },
-                { value: 'disabled', label: 'disabled' },
-                { value: 'closed', label: 'closed' },
+                { value: 'active', label: adAccountStatusLabel('active') },
+                { value: 'pending', label: adAccountStatusLabel('pending') },
+                { value: 'disabled', label: adAccountStatusLabel('disabled') },
+                { value: 'closed', label: adAccountStatusLabel('closed') },
               ],
             },
             {
@@ -142,7 +145,7 @@ function FbAccountAdAccountsPage() {
             {!adsQ.isLoading && (adsQ.data?.length ?? 0) === 0 && (
               <TableRow>
                 <TableCell colSpan={5} className="text-muted-foreground">
-                  无广告账户
+                  该广告账户组下暂无广告账户
                 </TableCell>
               </TableRow>
             )}
@@ -153,7 +156,7 @@ function FbAccountAdAccountsPage() {
                 </TableCell>
               </TableRow>
             )}
-            {filtered.map((a) => (
+            {pager.pageItems.map((a) => (
               <TableRow key={a.id}>
                 <TableCell className="font-medium">
                   <Link
@@ -175,7 +178,7 @@ function FbAccountAdAccountsPage() {
                         : 'text-rose-600'
                   }
                 >
-                  {a.status}
+                  {adAccountStatusLabel(a.status)}
                 </TableCell>
                 <TableCell className="text-xs text-muted-foreground">
                   {a.lastSyncedAt ? new Date(a.lastSyncedAt).toLocaleString() : '-'}
@@ -184,6 +187,12 @@ function FbAccountAdAccountsPage() {
             ))}
           </TableBody>
         </Table>
+        <Pagination
+          page={pager.page}
+          pageCount={pager.pageCount}
+          total={filtered.length}
+          onPageChange={pager.setPage}
+        />
       </div>
     </div>
   );

@@ -31,6 +31,14 @@ export const env = {
 
   metaApiVersion: opt('META_API_VERSION', 'v21.0'),
   metaGraphBase: opt('META_GRAPH_BASE', 'https://graph.facebook.com'),
+  adObjectCacheTtlMs: Number(opt('AD_OBJECT_CACHE_TTL_MS', '30000')),
+  adObjectSyncEnabled: opt('AD_OBJECT_SYNC_ENABLED', '0') === '1',
+  adObjectSyncIntervalMs: Number(opt('AD_OBJECT_SYNC_INTERVAL_MS', '300000')),
+  adObjectSyncBatchSize: Number(opt('AD_OBJECT_SYNC_BATCH_SIZE', '2')),
+  adObjectSyncDepth: opt('AD_OBJECT_SYNC_DEPTH', 'campaign') as 'campaign' | 'adset' | 'ad',
+  adObjectSyncMaxCampaigns: Number(opt('AD_OBJECT_SYNC_MAX_CAMPAIGNS', '20')),
+  adObjectSyncMaxAdsets: Number(opt('AD_OBJECT_SYNC_MAX_ADSETS', '50')),
+  adObjectSyncStaleMs: Number(opt('AD_OBJECT_SYNC_STALE_MS', '900000')),
 
   fbOauthRedirectUri: opt('FB_OAUTH_REDIRECT_URI', 'http://localhost:5173/oauth/fb/callback'),
 

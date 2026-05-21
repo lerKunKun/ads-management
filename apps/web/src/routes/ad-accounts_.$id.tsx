@@ -31,8 +31,8 @@ function AdAccountCampaignsPage() {
   return (
     <div className="space-y-4">
       <div className="text-sm text-muted-foreground">
-        <Link to="/fb-accounts" className="hover:text-foreground">
-          FB 个号
+        <Link to="/ad-accounts" className="hover:text-foreground">
+          广告账户
         </Link>
         {summary.data?.fbAccountId && (
           <>
@@ -42,20 +42,20 @@ function AdAccountCampaignsPage() {
               params={{ id: summary.data.fbAccountId }}
               className="hover:text-foreground"
             >
-              {summary.data.fbAccountName}
+              广告账户组：{summary.data.fbAccountName}
             </Link>
           </>
         )}
         {' / '}
-        <span className="text-foreground">{summary.data?.name ?? '…'}</span>
+        <span className="text-foreground">{summary.data?.name ?? '加载中'}</span>
       </div>
 
-      <div>
-        <h1 className="text-xl font-semibold">{summary.data?.name ?? '…'}</h1>
-        <p className="text-sm text-muted-foreground">
-          {summary.data?.metaActId} · {summary.data?.currency ?? '-'}
+      <header>
+        <h1 className="text-xl font-semibold">{summary.data?.name ?? '广告账户'}</h1>
+        <p className="mt-1 text-sm text-muted-foreground">
+          {summary.data?.metaActId ?? '-'} / {summary.data?.currency ?? '-'}
         </p>
-      </div>
+      </header>
 
       <EntityListView<Campaign>
         layer="campaign"
@@ -68,9 +68,9 @@ function AdAccountCampaignsPage() {
           campaigns.refetch();
           insights.refetch();
         }}
-        drillTo={(r) => ({
+        drillTo={(row) => ({
           to: '/ad-accounts/$id/campaigns/$cid',
-          params: { id, cid: r.id },
+          params: { id, cid: row.id },
         })}
         enableBudget
         currency={summary.data?.currency ?? null}

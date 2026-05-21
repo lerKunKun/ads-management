@@ -14,6 +14,11 @@ import { redis } from '../../lib/redis';
 import { close as breakerClose, BreakerKey } from '../../lib/breaker';
 import { db, schema } from '../../lib/db';
 import { scanTokenHealth } from '../account/service';
+import {
+  syncAdAccountObjects,
+  syncDueAdAccounts,
+  type SyncDepth,
+} from '../ad-object/sync-service';
 import { authGuard, requirePermission } from '../../middleware/auth';
 import type { AuthPrincipal } from '../iam/auth-service';
 import { writeAudit } from '../iam/auth-service';
@@ -148,6 +153,44 @@ export const admin = new Elysia({ name: 'admin' }).group('', (g) =>
         return { code: 0, msg: 'ok', data: r };
       },
       { beforeHandle: requirePermission('iam:manage') },
+    )
+    .post(
+      '/_admin/sync-ad-objects',
+      async ({ principal, body, request }) => {
+        const depth = (body.depth ?? 'campaign') as SyncDepth;
+        const data = body.adAccountId
+          ? await syncAdAccountObjects({
+              companyId: principal.companyId,
+              adAccountId: body.adAccountId,
+              depth,
+            })
+          : await syncDueAdAccounts({
+              companyId: principal.companyId,
+              limit: body.limit ?? 2,
+              depth,
+            });
+        await writeAudit({
+          companyId: principal.companyId,
+          userId: principal.userId,
+          action: 'admin:sync-ad-objects',
+          resource: body.adAccountId ? `ad_account:${body.adAccountId}` : 'ad_object_sync_due',
+          detail: { depth, data },
+          ...(request.headers.get('x-forwarded-for')
+            ? { ip: request.headers.get('x-forwarded-for')!.split(',')[0]!.trim() }
+            : {}),
+        });
+        return { code: 0, msg: 'ok', data };
+      },
+      {
+        body: t.Object({
+          adAccountId: t.Optional(t.String({ format: 'uuid' })),
+          depth: t.Optional(
+            t.Union([t.Literal('campaign'), t.Literal('adset'), t.Literal('ad')]),
+          ),
+          limit: t.Optional(t.Integer({ minimum: 1, maximum: 20 })),
+        }),
+        beforeHandle: requirePermission('iam:manage'),
+      },
     )
     // 最近任务历史
     .get(

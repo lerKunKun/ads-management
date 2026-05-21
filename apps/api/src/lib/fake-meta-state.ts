@@ -21,6 +21,34 @@ const adsetsByCampaign = new Map<string, MetaAdSet[]>();
 const adsByAdset = new Map<string, MetaAd[]>();
 const parentChain = new Map<string, { actId?: string; campaignId?: string; adsetId?: string }>();
 
+function inferParent(objectId: string): { actId?: string; campaignId?: string; adsetId?: string } {
+  const campaign = objectId.match(/^mock_camp_(.+)_\d+$/);
+  if (campaign?.[1]) return { actId: campaign[1] };
+
+  const adset = objectId.match(/^mock_adset_(.+)_\d+$/);
+  if (adset?.[1]) {
+    const campaignId = adset[1];
+    const parent = parentChain.get(campaignId) ?? inferParent(campaignId);
+    return {
+      ...(parent.actId ? { actId: parent.actId } : {}),
+      campaignId,
+    };
+  }
+
+  const ad = objectId.match(/^mock_ad_(.+)_\d+$/);
+  if (ad?.[1]) {
+    const adsetId = ad[1];
+    const parent = parentChain.get(adsetId) ?? inferParent(adsetId);
+    return {
+      ...(parent.actId ? { actId: parent.actId } : {}),
+      ...(parent.campaignId ? { campaignId: parent.campaignId } : {}),
+      adsetId,
+    };
+  }
+
+  return {};
+}
+
 function fnv1a(str: string): number {
   let h = 2166136261;
   for (let i = 0; i < str.length; i++) {
@@ -375,5 +403,13 @@ export const fakeMeta = {
       }
     }
     return out;
+  },
+
+  getParent(objectId: string): { actId?: string; campaignId?: string; adsetId?: string } {
+    const parent = parentChain.get(objectId) ?? inferParent(objectId);
+    if (parent.actId || parent.campaignId || parent.adsetId) {
+      parentChain.set(objectId, parent);
+    }
+    return parent;
   },
 };

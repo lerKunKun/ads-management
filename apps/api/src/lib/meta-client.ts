@@ -142,6 +142,18 @@ interface MetaAdRaw {
   updated_time?: string;
 }
 
+interface MetaObjectOwnershipRaw {
+  account_id?: string;
+  campaign_id?: string;
+  adset_id?: string;
+}
+
+export interface MetaObjectOwnership {
+  actId?: string;
+  campaignId?: string;
+  adsetId?: string;
+}
+
 export interface MetaAd {
   id: string;
   name: string;
@@ -305,6 +317,11 @@ function n(v: string | number | undefined): number | undefined {
   return Number.isFinite(x) ? x : undefined;
 }
 
+function toActId(accountId: string | undefined): string | undefined {
+  if (!accountId) return undefined;
+  return accountId.startsWith('act_') ? accountId : `act_${accountId}`;
+}
+
 function pageAll<TRaw>(
   pathFn: () => Promise<MetaPagedEnvelope<TRaw>>,
 ): Promise<TRaw[]> {
@@ -383,6 +400,28 @@ export const meta = {
       if (!page.paging?.next) break;
     } while (after);
     return out;
+  },
+
+  async getObjectOwnership(
+    token: string,
+    targetType: 'campaign' | 'adset' | 'ad',
+    objectId: string,
+  ): Promise<MetaObjectOwnership> {
+    if (FAKE_MODE) return fakeMeta.getParent(objectId);
+    const fields =
+      targetType === 'campaign'
+        ? 'account_id'
+        : targetType === 'adset'
+          ? 'account_id,campaign_id'
+          : 'account_id,campaign_id,adset_id';
+    const raw = await graph<MetaObjectOwnershipRaw>(`/${objectId}`, token, {
+      query: { fields },
+    });
+    return {
+      ...(toActId(raw.account_id) ? { actId: toActId(raw.account_id)! } : {}),
+      ...(raw.campaign_id ? { campaignId: raw.campaign_id } : {}),
+      ...(raw.adset_id ? { adsetId: raw.adset_id } : {}),
+    };
   },
 
   // ----- Campaign -----

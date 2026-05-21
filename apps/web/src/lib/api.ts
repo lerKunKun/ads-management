@@ -18,6 +18,19 @@ interface Envelope<T> {
   code: number;
   msg: string;
   data: T;
+  requestId?: string;
+}
+
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public status: number,
+    public code: number,
+    public requestId?: string,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
 }
 
 async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -30,14 +43,14 @@ async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
   try {
     body = (await res.json()) as Envelope<T>;
   } catch {
-    throw new Error(`HTTP ${res.status}`);
+    throw new ApiError(`HTTP ${res.status}`, res.status, res.status);
   }
   if (res.status === 401) {
     clearToken();
-    throw new Error(body.msg ?? 'unauthorized');
+    throw new ApiError(body.msg ?? 'unauthorized', res.status, body.code, body.requestId);
   }
   if (body.code !== 0) {
-    throw new Error(body.msg ?? `code=${body.code}`);
+    throw new ApiError(body.msg ?? `code=${body.code}`, res.status, body.code, body.requestId);
   }
   return body.data;
 }
@@ -327,6 +340,7 @@ export const api = {
         metaActId: string;
         fbAccountId: string;
         status: string;
+        currency: string | null;
       }>;
     }>('/iam/grant-resources'),
 
@@ -342,6 +356,38 @@ export const api = {
     }),
   scanTokenHealth: () =>
     call<{ scanned: number; notified: number }>('/_admin/scan-token-health', { method: 'POST' }),
+  syncAdObjects: (args: {
+    adAccountId?: string;
+    depth?: 'campaign' | 'adset' | 'ad';
+    limit?: number;
+  } = {}) =>
+    call<
+      | {
+          adAccountId: string;
+          metaActId: string;
+          campaigns: number;
+          adsets: number;
+          ads: number;
+          depth: 'campaign' | 'adset' | 'ad';
+        }
+      | {
+          candidates: number;
+          synced: number;
+          failed: number;
+          skipped: number;
+          results: Array<{
+            adAccountId: string;
+            metaActId: string;
+            campaigns: number;
+            adsets: number;
+            ads: number;
+            depth: 'campaign' | 'adset' | 'ad';
+          }>;
+        }
+    >('/_admin/sync-ad-objects', {
+      method: 'POST',
+      body: JSON.stringify(args),
+    }),
   listTasks: (limit = 50) =>
     call<
       Array<{

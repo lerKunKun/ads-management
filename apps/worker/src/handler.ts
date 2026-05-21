@@ -24,7 +24,14 @@ import { BreakerKey, isOpen, openFor } from '../../api/src/lib/breaker';
 import { acquireOpLock } from '../../api/src/lib/op-lock';
 import { bumpProgress, setRunning } from '../../api/src/lib/progress';
 import { metaProvider } from '../../api/src/providers/meta';
-import { MetaApiError } from '../../api/src/lib/meta-client';
+import { meta, MetaApiError, type MetaObjectOwnership } from '../../api/src/lib/meta-client';
+import { HttpError } from '../../api/src/lib/http-error';
+import {
+  markLocalBudget,
+  markLocalDeleted,
+  markLocalStatus,
+  upsertLocalCopyPlaceholder,
+} from '../../api/src/modules/ad-object/local-store';
 import {
   RMQ,
   publishRetry,
@@ -138,6 +145,8 @@ export async function handle(msg: OperationMessage): Promise<Outcome> {
       return await handleErr(msg, err);
     }
 
+    await writeLocalBestEffort(msg, token, result);
+
     // 7. 成功
     await markSuccess(msg, result);
     await bumpProgress(msg.taskId, { success: 1 });
@@ -155,6 +164,8 @@ async function executeProvider(
     'campaign' | 'adset' | 'ad',
     'status' | 'budget' | 'copy' | 'delete',
   ];
+
+  await assertMessageTargetOwnership(msg, token);
 
   if (op === 'status') {
     const status = msg.params['status'] as 'ACTIVE' | 'PAUSED' | 'ARCHIVED' | 'DELETED';
@@ -226,9 +237,117 @@ async function executeProvider(
   throw new Error(`unknown action: ${msg.action}`);
 }
 
+async function assertMessageTargetOwnership(
+  msg: OperationMessage,
+  token: string,
+): Promise<MetaObjectOwnership> {
+  const owner = await meta.getObjectOwnership(token, msg.targetType, msg.targetId);
+  if (owner.actId !== msg.metaActId) {
+    throw new HttpError(403, 403, `${msg.targetType} not in ad_account`);
+  }
+  return owner;
+}
+
+async function writeLocalObjectState(
+  msg: OperationMessage,
+  token: string,
+  result?: Record<string, unknown>,
+): Promise<void> {
+  const [layer, op] = msg.action.split(':') as [
+    'campaign' | 'adset' | 'ad',
+    'status' | 'budget' | 'copy' | 'delete',
+  ];
+  const owner = await resolveMessageOwner(msg, token);
+
+  if (op === 'status') {
+    const status = msg.params['status'];
+    if (
+      status === 'ACTIVE' ||
+      status === 'PAUSED' ||
+      status === 'ARCHIVED' ||
+      status === 'DELETED'
+    ) {
+      await markLocalStatus({
+        companyId: msg.companyId,
+        adAccountId: msg.adAccountId,
+        targetType: layer,
+        targetId: msg.targetId,
+        status,
+        owner,
+      });
+    }
+    return;
+  }
+
+  if (op === 'budget') {
+    if (layer === 'ad') return;
+    const daily = msg.params['dailyBudget'];
+    const lifetime = msg.params['lifetimeBudget'];
+    await markLocalBudget({
+      companyId: msg.companyId,
+      adAccountId: msg.adAccountId,
+      targetType: layer,
+      targetId: msg.targetId,
+      ...(typeof daily === 'number' ? { dailyBudget: daily } : {}),
+      ...(typeof lifetime === 'number' ? { lifetimeBudget: lifetime } : {}),
+      owner,
+    });
+    return;
+  }
+
+  if (op === 'copy') {
+    const newId = typeof result?.['newId'] === 'string' ? result['newId'] : undefined;
+    if (!newId) return;
+    await upsertLocalCopyPlaceholder({
+      companyId: msg.companyId,
+      adAccountId: msg.adAccountId,
+      targetType: layer,
+      sourceId: msg.targetId,
+      newId,
+      owner,
+    });
+    return;
+  }
+
+  if (op === 'delete') {
+    await markLocalDeleted({
+      companyId: msg.companyId,
+      adAccountId: msg.adAccountId,
+      targetType: layer,
+      targetId: msg.targetId,
+      hard: msg.params['hard'] === true,
+      owner,
+    });
+  }
+}
+
+async function writeLocalBestEffort(
+  msg: OperationMessage,
+  token: string,
+  result?: Record<string, unknown>,
+): Promise<void> {
+  try {
+    await writeLocalObjectState(msg, token, result);
+  } catch (err) {
+    console.error(`[local-ad-object] ${msg.action} write failed`, err);
+  }
+}
+
+async function resolveMessageOwner(
+  msg: OperationMessage,
+  token: string,
+): Promise<MetaObjectOwnership> {
+  if (isFake()) return meta.getObjectOwnership('', msg.targetType, msg.targetId);
+  return meta.getObjectOwnership(token, msg.targetType, msg.targetId);
+}
 
 async function handleErr(msg: OperationMessage, err: unknown): Promise<Outcome> {
   const message = err instanceof Error ? err.message : String(err);
+  if (err instanceof HttpError && err.status < 500 && err.status !== 429) {
+    await failItem(msg, message);
+    await bumpProgress(msg.taskId, { failed: 1 });
+    return { kind: 'dead', reason: message };
+  }
   if (err instanceof MetaApiError) {
     if (err.isTokenInvalid) {
       // 熔断个号

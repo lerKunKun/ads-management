@@ -1,6 +1,7 @@
 import { createFileRoute, redirect, Link } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { Plus, ShieldCheck, Users } from 'lucide-react';
 import { api, getToken } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -14,6 +15,8 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { SearchFilterBar, matchText } from '@/components/SearchFilterBar';
+import { Pagination, usePagination } from '@/components/Pagination';
+import { userStatusLabel } from '@/lib/labels';
 
 export const Route = createFileRoute('/admin_/users')({
   beforeLoad: () => {
@@ -22,14 +25,8 @@ export const Route = createFileRoute('/admin_/users')({
   component: UsersPage,
 });
 
-interface UserRow {
-  id: string;
-  email: string;
-  status: 'active' | 'disabled';
-  createdAt: string;
-  roles: string[];
-  grantsCount: number;
-}
+type UserRow = Awaited<ReturnType<typeof api.listUsers>>[number];
+type RoleOption = Awaited<ReturnType<typeof api.listRoles>>[number];
 
 function UsersPage() {
   const qc = useQueryClient();
@@ -37,7 +34,9 @@ function UsersPage() {
   const rolesQ = useQuery({ queryKey: ['admin', 'roles'], queryFn: api.listRoles });
 
   const [creating, setCreating] = useState(false);
-  const [editingScope, setEditingScope] = useState<UserRow | null>(null);
+  const [search, setSearch] = useState('');
+  const [roleFilter, setRoleFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
 
   const create = useMutation({
     mutationFn: (args: { email: string; password: string; roleCode: string }) =>
@@ -56,54 +55,71 @@ function UsersPage() {
       id: string;
       patch: { roleCode?: string; status?: 'active' | 'disabled' };
     }) => api.updateUser(id, patch),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'users'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin', 'users'] });
+      qc.invalidateQueries({ queryKey: ['me'] });
+    },
   });
 
   const users = usersQ.data ?? [];
   const roles = rolesQ.data ?? [];
-
-  const [search, setSearch] = useState('');
-  const [roleFilter, setRoleFilter] = useState('');
-  const [statusFilter, setStatusFilter] = useState('');
-
   const filtered = useMemo(
     () =>
       users.filter(
-        (u) =>
-          matchText(u.email, search) &&
-          (!roleFilter || u.roles.includes(roleFilter)) &&
-          (!statusFilter || u.status === statusFilter),
+        (user) =>
+          matchText(user.email, search) &&
+          (!roleFilter || user.roles.includes(roleFilter)) &&
+          (!statusFilter || user.status === statusFilter),
       ),
-    [users, search, roleFilter, statusFilter],
+    [roleFilter, search, statusFilter, users],
   );
+  const pager = usePagination(filtered);
+  const error =
+    (usersQ.error as Error | null)?.message ??
+    (rolesQ.error as Error | null)?.message ??
+    (create.error as Error | null)?.message ??
+    (update.error as Error | null)?.message;
 
   return (
     <div className="space-y-6">
       <div className="text-sm text-muted-foreground">
         <Link to="/admin" className="hover:text-foreground">
-          ← 返回管理
+          返回管理中心
         </Link>
       </div>
-      <header className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">用户与作用域</h1>
-        <Button size="sm" onClick={() => setCreating(true)}>
-          新建用户
-        </Button>
+
+      <header className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Users className="h-4 w-4" />
+            <span>用户目录</span>
+          </div>
+          <h1 className="mt-1 text-xl font-semibold">用户与角色</h1>
+        </div>
+        <div className="flex gap-2">
+          <Button asChild variant="outline" size="sm">
+            <Link to="/admin/iam" search={{}}>
+              <ShieldCheck className="mr-2 h-4 w-4" />
+              IAM 权限
+            </Link>
+          </Button>
+          <Button size="sm" onClick={() => setCreating(true)}>
+            <Plus className="mr-2 h-4 w-4" />
+            新建用户
+          </Button>
+        </div>
       </header>
 
-      {(usersQ.error || rolesQ.error || create.error || update.error) && (
-        <p className="text-sm text-destructive">
-          {(usersQ.error as Error)?.message ||
-            (rolesQ.error as Error)?.message ||
-            (create.error as Error)?.message ||
-            (update.error as Error)?.message}
+      {error && (
+        <p className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          {error}
         </p>
       )}
 
       <SearchFilterBar
         searchValue={search}
         onSearchChange={setSearch}
-        searchPlaceholder="搜索邮箱…"
+        searchPlaceholder="搜索邮箱"
         filters={[
           {
             key: 'role',
@@ -112,7 +128,7 @@ function UsersPage() {
             onChange: setRoleFilter,
             options: [
               { value: '', label: '全部' },
-              ...roles.map((r) => ({ value: r.code, label: r.code })),
+              ...roles.map((role) => ({ value: role.code, label: role.code })),
             ],
           },
           {
@@ -122,8 +138,8 @@ function UsersPage() {
             onChange: setStatusFilter,
             options: [
               { value: '', label: '全部' },
-              { value: 'active', label: 'active' },
-              { value: 'disabled', label: 'disabled' },
+              { value: 'active', label: userStatusLabel('active') },
+              { value: 'disabled', label: userStatusLabel('disabled') },
             ],
           },
         ]}
@@ -136,7 +152,7 @@ function UsersPage() {
         }}
       />
 
-      <div className="border rounded-md">
+      <div className="overflow-hidden rounded-md border">
         <Table>
           <TableHeader>
             <TableRow>
@@ -152,7 +168,7 @@ function UsersPage() {
             {usersQ.isLoading && (
               <TableRow>
                 <TableCell colSpan={6} className="text-muted-foreground">
-                  加载中…
+                  加载中...
                 </TableCell>
               </TableRow>
             )}
@@ -170,64 +186,23 @@ function UsersPage() {
                 </TableCell>
               </TableRow>
             )}
-            {filtered.map((u) => (
-              <TableRow key={u.id}>
-                <TableCell className="font-medium">{u.email}</TableCell>
-                <TableCell>
-                  <select
-                    className="h-8 rounded-md border border-input bg-background px-2 text-sm"
-                    value={u.roles[0] ?? ''}
-                    disabled={update.isPending}
-                    onChange={(e) =>
-                      update.mutate({
-                        id: u.id,
-                        patch: { roleCode: e.target.value },
-                      })
-                    }
-                  >
-                    {!u.roles.length && <option value="">—</option>}
-                    {roles.map((r) => (
-                      <option key={r.code} value={r.code}>
-                        {r.name} ({r.code})
-                      </option>
-                    ))}
-                  </select>
-                </TableCell>
-                <TableCell>
-                  <select
-                    className="h-8 rounded-md border border-input bg-background px-2 text-sm"
-                    value={u.status}
-                    disabled={update.isPending}
-                    onChange={(e) =>
-                      update.mutate({
-                        id: u.id,
-                        patch: {
-                          status: e.target.value as 'active' | 'disabled',
-                        },
-                      })
-                    }
-                  >
-                    <option value="active">active</option>
-                    <option value="disabled">disabled</option>
-                  </select>
-                </TableCell>
-                <TableCell className="text-sm">{u.grantsCount}</TableCell>
-                <TableCell className="text-xs text-muted-foreground">
-                  {new Date(u.createdAt).toLocaleString()}
-                </TableCell>
-                <TableCell className="text-right">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setEditingScope(u)}
-                  >
-                    编辑作用域
-                  </Button>
-                </TableCell>
-              </TableRow>
+            {pager.pageItems.map((user) => (
+              <UserTableRow
+                key={user.id}
+                user={user}
+                roles={roles}
+                updating={update.isPending}
+                onUpdate={(patch) => update.mutate({ id: user.id, patch })}
+              />
             ))}
           </TableBody>
         </Table>
+        <Pagination
+          page={pager.page}
+          pageCount={pager.pageCount}
+          total={filtered.length}
+          onPageChange={pager.setPage}
+        />
       </div>
 
       <CreateUserDialog
@@ -237,19 +212,67 @@ function UsersPage() {
         onSubmit={(args) => create.mutate(args)}
         submitting={create.isPending}
       />
-
-      <ScopeDialog
-        user={editingScope}
-        onClose={() => {
-          setEditingScope(null);
-          qc.invalidateQueries({ queryKey: ['admin', 'users'] });
-        }}
-      />
     </div>
   );
 }
 
-/* ===================== Create dialog ===================== */
+function UserTableRow({
+  user,
+  roles,
+  updating,
+  onUpdate,
+}: {
+  user: UserRow;
+  roles: RoleOption[];
+  updating: boolean;
+  onUpdate: (patch: { roleCode?: string; status?: 'active' | 'disabled' }) => void;
+}) {
+  return (
+    <TableRow>
+      <TableCell className="font-medium">{user.email}</TableCell>
+      <TableCell>
+        <select
+          className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+          value={user.roles[0] ?? ''}
+          disabled={updating}
+          onChange={(event) => onUpdate({ roleCode: event.target.value })}
+        >
+          {!user.roles.length && <option value="">未分配</option>}
+          {roles.map((role) => (
+            <option key={role.code} value={role.code}>
+              {role.name} ({role.code})
+            </option>
+          ))}
+        </select>
+      </TableCell>
+      <TableCell>
+        <select
+          className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+          value={user.status}
+          disabled={updating}
+          onChange={(event) =>
+            onUpdate({ status: event.target.value as 'active' | 'disabled' })
+          }
+        >
+          <option value="active">{userStatusLabel('active')}</option>
+          <option value="disabled">{userStatusLabel('disabled')}</option>
+        </select>
+      </TableCell>
+      <TableCell className="text-sm">{user.grantsCount}</TableCell>
+      <TableCell className="text-xs text-muted-foreground">
+        {new Date(user.createdAt).toLocaleString()}
+      </TableCell>
+      <TableCell className="text-right">
+        <Button asChild size="sm" variant="outline">
+          <Link to="/admin/iam" search={{ userId: user.id }}>
+            分配作用域
+          </Link>
+        </Button>
+      </TableCell>
+    </TableRow>
+  );
+}
+
 function CreateUserDialog({
   open,
   roles,
@@ -258,17 +281,22 @@ function CreateUserDialog({
   submitting,
 }: {
   open: boolean;
-  roles: Array<{ code: string; name: string }>;
+  roles: RoleOption[];
   onCancel: () => void;
   onSubmit: (args: { email: string; password: string; roleCode: string }) => void;
   submitting: boolean;
 }) {
+  const defaultRole = roles.find((role) => role.code === 'Operator')?.code ?? roles[0]?.code ?? '';
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [roleCode, setRoleCode] = useState('Operator');
+  const [roleCode, setRoleCode] = useState(defaultRole);
+
+  useEffect(() => {
+    if (!roleCode && defaultRole) setRoleCode(defaultRole);
+  }, [defaultRole, roleCode]);
 
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onCancel()} title="新建用户">
+    <Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && onCancel()} title="新建用户">
       <div className="space-y-3">
         <div>
           <label className="text-sm text-muted-foreground">邮箱</label>
@@ -276,16 +304,16 @@ function CreateUserDialog({
             type="email"
             autoComplete="off"
             value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            onChange={(event) => setEmail(event.target.value)}
           />
         </div>
         <div>
-          <label className="text-sm text-muted-foreground">密码 (≥6 位)</label>
+          <label className="text-sm text-muted-foreground">密码，至少 6 位</label>
           <Input
             type="password"
             autoComplete="new-password"
             value={password}
-            onChange={(e) => setPassword(e.target.value)}
+            onChange={(event) => setPassword(event.target.value)}
           />
         </div>
         <div>
@@ -293,11 +321,11 @@ function CreateUserDialog({
           <select
             className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
             value={roleCode}
-            onChange={(e) => setRoleCode(e.target.value)}
+            onChange={(event) => setRoleCode(event.target.value)}
           >
-            {roles.map((r) => (
-              <option key={r.code} value={r.code}>
-                {r.name} ({r.code})
+            {roles.map((role) => (
+              <option key={role.code} value={role.code}>
+                {role.name} ({role.code})
               </option>
             ))}
           </select>
@@ -308,155 +336,11 @@ function CreateUserDialog({
           取消
         </Button>
         <Button
-          disabled={submitting || !email || password.length < 6}
+          disabled={submitting || !email || password.length < 6 || !roleCode}
           onClick={() => onSubmit({ email, password, roleCode })}
         >
-          {submitting ? '创建中…' : '创建'}
+          {submitting ? '创建中...' : '创建'}
         </Button>
-      </DialogFooter>
-    </Dialog>
-  );
-}
-
-/* ===================== Scope dialog ===================== */
-function ScopeDialog({
-  user,
-  onClose,
-}: {
-  user: UserRow | null;
-  onClose: () => void;
-}) {
-  const qc = useQueryClient();
-  const grantsQ = useQuery({
-    queryKey: ['admin', 'grants', user?.id],
-    queryFn: () => (user ? api.listGrants(user.id) : Promise.resolve([])),
-    enabled: !!user,
-  });
-  const resQ = useQuery({
-    queryKey: ['admin', 'grant-resources'],
-    queryFn: api.listGrantResources,
-    enabled: !!user,
-  });
-
-  const add = useMutation({
-    mutationFn: ({
-      type,
-      id,
-    }: {
-      type: 'fb_account' | 'ad_account';
-      id: string;
-    }) => api.addGrant(user!.id, type, id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'grants', user?.id] }),
-  });
-  const remove = useMutation({
-    mutationFn: (grantId: string) => api.removeGrant(user!.id, grantId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'grants', user?.id] }),
-  });
-
-  if (!user) return null;
-  const grants = grantsQ.data ?? [];
-  const fb = resQ.data?.fbAccounts ?? [];
-  const ad = resQ.data?.adAccounts ?? [];
-
-  const grantedFb = new Set(
-    grants.filter((g) => g.resourceType === 'fb_account').map((g) => g.resourceId),
-  );
-  const grantedAd = new Set(
-    grants.filter((g) => g.resourceType === 'ad_account').map((g) => g.resourceId),
-  );
-
-  function toggleFb(id: string) {
-    const existing = grants.find(
-      (g) => g.resourceType === 'fb_account' && g.resourceId === id,
-    );
-    if (existing) remove.mutate(existing.id);
-    else add.mutate({ type: 'fb_account', id });
-  }
-  function toggleAd(id: string) {
-    const existing = grants.find(
-      (g) => g.resourceType === 'ad_account' && g.resourceId === id,
-    );
-    if (existing) remove.mutate(existing.id);
-    else add.mutate({ type: 'ad_account', id });
-  }
-
-  return (
-    <Dialog
-      open
-      onOpenChange={(o) => !o && onClose()}
-      title={`编辑作用域 · ${user.email}`}
-    >
-      <p className="text-sm text-muted-foreground mb-3">
-        勾选用户可访问的 FB 个号 或 单个广告账户。CompanyAdmin / PlatformAdmin 自动绕过作用域(不需要授权)。
-      </p>
-
-      {(grantsQ.error || resQ.error || add.error || remove.error) && (
-        <p className="text-sm text-destructive mb-2">
-          {(grantsQ.error as Error)?.message ||
-            (resQ.error as Error)?.message ||
-            (add.error as Error)?.message ||
-            (remove.error as Error)?.message}
-        </p>
-      )}
-
-      <div className="space-y-4 max-h-96 overflow-auto">
-        <section>
-          <h3 className="text-sm font-medium mb-2">
-            FB 个号 ({grantedFb.size}/{fb.length})
-          </h3>
-          {fb.length === 0 ? (
-            <p className="text-xs text-muted-foreground">本公司无 FB 个号</p>
-          ) : (
-            <ul className="space-y-1">
-              {fb.map((f) => (
-                <li key={f.id} className="text-sm">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={grantedFb.has(f.id)}
-                      onChange={() => toggleFb(f.id)}
-                      disabled={add.isPending || remove.isPending}
-                    />
-                    <span>{f.name}</span>
-                    <span className="text-xs text-muted-foreground">({f.status})</span>
-                  </label>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-
-        <section>
-          <h3 className="text-sm font-medium mb-2">
-            广告账户 ({grantedAd.size}/{ad.length})
-          </h3>
-          {ad.length === 0 ? (
-            <p className="text-xs text-muted-foreground">本公司无广告账户</p>
-          ) : (
-            <ul className="space-y-1">
-              {ad.map((a) => (
-                <li key={a.id} className="text-sm">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={grantedAd.has(a.id)}
-                      onChange={() => toggleAd(a.id)}
-                      disabled={add.isPending || remove.isPending}
-                    />
-                    <span>{a.name}</span>
-                    <span className="text-xs text-muted-foreground font-mono">
-                      {a.metaActId}
-                    </span>
-                  </label>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-      </div>
-
-      <DialogFooter>
-        <Button onClick={onClose}>关闭</Button>
       </DialogFooter>
     </Dialog>
   );

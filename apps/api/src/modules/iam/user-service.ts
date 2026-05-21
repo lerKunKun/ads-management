@@ -388,6 +388,7 @@ export async function listResourcesForGrant(
     metaActId: string;
     fbAccountId: string;
     status: string;
+    currency: string | null;
   }>;
 }> {
   return db.transaction(async (tx) => {
@@ -410,6 +411,7 @@ export async function listResourcesForGrant(
           metaActId: schema.adAccounts.metaActId,
           fbAccountId: schema.adAccounts.fbAccountId,
           status: schema.adAccounts.status,
+          currency: schema.adAccounts.currency,
         })
         .from(schema.adAccounts)
         .where(eq(schema.adAccounts.companyId, principal.companyId)),

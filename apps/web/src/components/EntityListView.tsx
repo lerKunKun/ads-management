@@ -1,17 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import {
   api,
   openTaskStream,
+  type CopyParams,
   type DatePreset,
   type InsightsSummary,
-  type CopyParams,
 } from '@/lib/api';
 import { Button } from '@/components/ui/button';
+import { Dialog, DialogFooter } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
-import { Dialog, DialogFooter } from '@/components/ui/dialog';
 import {
   Table,
   TableBody,
@@ -21,9 +21,10 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { CopyDialog } from '@/components/CopyDialog';
+import { Pagination, usePagination } from '@/components/Pagination';
 import { SearchFilterBar, matchText } from '@/components/SearchFilterBar';
+import { metaEntityStatusLabel, taskStatusLabel } from '@/lib/labels';
 
-/* ===================== 类型 ===================== */
 export interface EntityRow {
   id: string;
   name: string;
@@ -35,45 +36,45 @@ export interface EntityRow {
 
 export interface EntityListViewProps<T extends EntityRow> {
   layer: 'campaign' | 'adset' | 'ad';
-  layerLabel: string; // "系列" / "广告组" / "广告"
+  layerLabel: string;
   adAccountId: string;
   rows: T[];
   isLoading: boolean;
   error?: unknown;
   refetch: () => void;
-  /** 点击行名跳到下一层(undefined 表示无下钻,如 ad 层) */
   drillTo?: (row: T) => { to: string; params: Record<string, string> };
-  /** 该层是否支持预算编辑(ad 层 false) */
   enableBudget?: boolean;
-  /** 该层货币 */
   currency?: string | null;
-  /** insights 数据 */
   insights?: Record<string, InsightsSummary>;
-  /** 当前选 preset */
   datePreset: DatePreset;
   onDatePresetChange: (p: DatePreset) => void;
-  /** 用于 invalidate 父查询 */
   invalidateKey: unknown[];
 }
 
-const TASK_TERMINAL: Array<'success' | 'failed' | 'partial' | 'cancelled'> = [
-  'success',
-  'failed',
-  'partial',
-  'cancelled',
-];
+type TerminalTaskStatus = 'success' | 'failed' | 'partial' | 'cancelled';
+type TaskStatus = 'pending' | 'running' | TerminalTaskStatus;
+type RowPatch = Partial<Pick<EntityRow, 'status' | 'dailyBudget' | 'lifetimeBudget'>>;
+type BatchState = {
+  action: string;
+  params: Record<string, unknown>;
+  ids: string[];
+};
 
 interface ProgressSnap {
   taskId: string;
   total: number;
   success: number;
   failed: number;
-  status: 'pending' | 'running' | 'partial' | 'success' | 'failed' | 'cancelled';
+  status: TaskStatus;
 }
 
+const TASK_TERMINAL: TerminalTaskStatus[] = ['success', 'failed', 'partial', 'cancelled'];
 const PRESETS: DatePreset[] = ['today', 'yesterday', 'last_7d', 'last_30d', 'maximum'];
 
-/* ===================== 主组件 ===================== */
+function isTerminalTaskStatus(status: string): status is TerminalTaskStatus {
+  return (TASK_TERMINAL as readonly string[]).includes(status);
+}
+
 export function EntityListView<T extends EntityRow>({
   layer,
   layerLabel,
@@ -90,42 +91,61 @@ export function EntityListView<T extends EntityRow>({
   onDatePresetChange,
   invalidateKey,
 }: EntityListViewProps<T>) {
-  const qc = useQueryClient();
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [rowPatches, setRowPatches] = useState<Map<string, RowPatch>>(new Map());
   const [budgetEditing, setBudgetEditing] = useState<{ id: string; name: string; daily?: number } | null>(null);
   const [batchBudgetOpen, setBatchBudgetOpen] = useState(false);
   const [copyOpen, setCopyOpen] = useState<{ ids: string[]; hint?: string } | null>(null);
   const [activeTask, setActiveTask] = useState<string | null>(null);
-
-  // 搜索 + 状态筛选(客户端过滤)
+  const [trackedTaskId, setTrackedTaskId] = useState<string | null>(null);
+  const [pendingBatch, setPendingBatch] = useState<BatchState | null>(null);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
 
+  const keySignature = JSON.stringify(invalidateKey);
+  useEffect(() => {
+    setRowPatches(new Map());
+    setSelected(new Set());
+  }, [keySignature]);
+
   const filteredRows = useMemo(
     () =>
-      rows.filter(
-        (r) =>
-          matchText(r.name, search) &&
-          (!statusFilter || r.status === statusFilter),
-      ),
-    [rows, search, statusFilter],
+      rows
+        .filter(
+          (row) =>
+            matchText(row.name, search) &&
+            (!statusFilter || row.status === statusFilter),
+        )
+        .map((row) => applyPatch(row, rowPatches.get(row.id))),
+    [rows, rowPatches, search, statusFilter],
   );
 
-  const allIds = useMemo(() => filteredRows.map((r) => r.id), [filteredRows]);
+  const pager = usePagination(filteredRows);
+  const allIds = useMemo(() => pager.pageItems.map((row) => row.id), [pager.pageItems]);
   const allSelected = allIds.length > 0 && allIds.every((id) => selected.has(id));
 
+  function patchRows(ids: string[], patch: RowPatch) {
+    setRowPatches((current) => {
+      const next = new Map(current);
+      for (const id of ids) {
+        next.set(id, { ...(next.get(id) ?? {}), ...patch });
+      }
+      return next;
+    });
+  }
+
   function toggle(id: string) {
-    setSelected((s) => {
-      const next = new Set(s);
+    setSelected((current) => {
+      const next = new Set(current);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
   }
+
   function toggleAll() {
-    // 只对当前过滤可见的项操作,保留过滤外已选项
-    setSelected((prev) => {
-      const next = new Set(prev);
+    setSelected((current) => {
+      const next = new Set(current);
       if (allSelected) {
         for (const id of allIds) next.delete(id);
       } else {
@@ -135,35 +155,38 @@ export function EntityListView<T extends EntityRow>({
     });
   }
 
-  /* ----- mutations ----- */
   const setStatus = useMutation({
-    mutationFn: ({
-      id,
-      status,
-    }: {
-      id: string;
-      status: 'ACTIVE' | 'PAUSED' | 'ARCHIVED';
-    }) => api.setStatus(layer, id, adAccountId, status),
-    onSuccess: () => qc.invalidateQueries({ queryKey: invalidateKey }),
+    mutationFn: ({ id, status }: { id: string; status: 'ACTIVE' | 'PAUSED' | 'ARCHIVED' }) =>
+      api.setStatus(layer, id, adAccountId, status),
+    onSuccess: (_data, variables) => {
+      patchRows([variables.id], { status: variables.status });
+    },
   });
+
   const setBudgetMut = useMutation({
     mutationFn: ({ id, dailyBudget }: { id: string; dailyBudget: number }) =>
       api.setBudget(layer as 'campaign' | 'adset', id, adAccountId, { dailyBudget }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: invalidateKey }),
+    onSuccess: (_data, variables) => {
+      patchRows([variables.id], { dailyBudget: variables.dailyBudget });
+    },
   });
+
   const copyMut = useMutation({
     mutationFn: ({ id, params }: { id: string; params: CopyParams }) =>
       api.copyEntity(layer, id, adAccountId, params),
-    onSuccess: () => qc.invalidateQueries({ queryKey: invalidateKey }),
   });
+
   const deleteMut = useMutation({
     mutationFn: (id: string) => api.deleteEntity(layer, id, adAccountId, false),
-    onSuccess: () => qc.invalidateQueries({ queryKey: invalidateKey }),
+    onSuccess: (_data, id) => {
+      patchRows([id], { status: 'ARCHIVED' });
+    },
   });
+
   const batch = useMutation({
-    mutationFn: (req: { action: string; params: Record<string, unknown>; ids: string[] }) =>
+    mutationFn: (req: BatchState) =>
       api.batchOperations({
-        action: req.action as 'campaign:status' | 'campaign:budget' | 'campaign:copy' | 'campaign:delete' | 'adset:status' | 'adset:budget' | 'adset:copy' | 'adset:delete' | 'ad:status' | 'ad:copy' | 'ad:delete',
+        action: req.action as Parameters<typeof api.batchOperations>[0]['action'],
         params: req.params,
         targets: req.ids.map((id) => ({
           ad_account_id: adAccountId,
@@ -171,21 +194,50 @@ export function EntityListView<T extends EntityRow>({
           target_id: id,
         })),
       }),
-    onSuccess: (r) => setActiveTask(r.taskId),
+    onSuccess: (result, variables) => {
+      setPendingBatch(variables);
+      setActiveTask(result.taskId);
+      setTrackedTaskId(result.taskId);
+    },
   });
 
-  /* ----- helpers ----- */
+  const trackedTask = useQuery({
+    queryKey: ['task-status', trackedTaskId],
+    queryFn: () => api.taskStatus(trackedTaskId!),
+    enabled: !!trackedTaskId,
+    refetchInterval: 2000,
+  });
+
+  useEffect(() => {
+    const task = trackedTask.data;
+    if (!trackedTaskId || !task || !isTerminalTaskStatus(task.status)) return;
+    if (pendingBatch && task.status !== 'failed') {
+      const failedIds = new Set(task.failures.map((item) => item.targetId));
+      applyBatchPatch(pendingBatch, pendingBatch.ids.filter((id) => !failedIds.has(id)), patchRows);
+    }
+    setSelected(new Set());
+    setTrackedTaskId(null);
+    setPendingBatch(null);
+  }, [pendingBatch, trackedTask.data, trackedTaskId]);
+
+  function runBatch(action: string, params: Record<string, unknown>, ids = Array.from(selected)) {
+    if (ids.length === 0) return;
+    batch.mutate({ action, params, ids });
+  }
+
   function statusFromSwitch(currentStatus: T['status']): 'ACTIVE' | 'PAUSED' {
     return currentStatus === 'ACTIVE' ? 'PAUSED' : 'ACTIVE';
   }
 
   function singleCopyClicked(row: T) {
-    setCopyOpen({ ids: [row.id], hint: `源: ${row.name}` });
+    setCopyOpen({ ids: [row.id], hint: `来源：${row.name}` });
   }
+
   function batchCopyClicked() {
     if (selected.size === 0) return;
-    setCopyOpen({ ids: Array.from(selected), hint: `共 ${selected.size} 个源` });
+    setCopyOpen({ ids: Array.from(selected), hint: `共 ${selected.size} 个来源` });
   }
+
   function doCopy(params: CopyParams) {
     if (!copyOpen) return;
     if (copyOpen.ids.length === 1) {
@@ -193,58 +245,40 @@ export function EntityListView<T extends EntityRow>({
         { id: copyOpen.ids[0]!, params },
         { onSuccess: () => setCopyOpen(null) },
       );
-    } else {
-      // 走批量入队
-      batch.mutate(
-        {
-          action: `${layer}:copy`,
-          params: params as unknown as Record<string, unknown>,
-          ids: copyOpen.ids,
-        },
-        {
-          onSuccess: () => {
-            setCopyOpen(null);
-            setSelected(new Set());
-          },
-        },
-      );
+      return;
     }
+    runBatch(`${layer}:copy`, params as unknown as Record<string, unknown>, copyOpen.ids);
+    setCopyOpen(null);
   }
 
-  /* ===== render ===== */
   const fmtBudget = (minor?: number) =>
     minor !== undefined ? `${(minor / 100).toFixed(2)} ${currency ?? ''}`.trim() : '-';
-  const fmtMoney = (v: number) =>
-    v === 0 ? '-' : `${v.toFixed(2)}${currency ? ' ' + currency : ''}`;
+  const fmtMoney = (value: number) =>
+    value === 0 ? '-' : `${value.toFixed(2)}${currency ? ` ${currency}` : ''}`;
 
-  const layerActionLabel: Record<typeof layer, string> = {
-    campaign: '系列',
-    adset: '广告组',
-    ad: '广告',
-  };
+  const layerActionLabel = layer === 'campaign' ? '广告系列' : layer === 'adset' ? '广告组' : '广告';
 
   return (
     <div className="space-y-3">
-      {/* 顶部工具栏 */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <h2 className="font-medium">{layerLabel}</h2>
           {selected.size > 0 && (
             <span className="text-sm text-muted-foreground">
               已选 {selected.size}
-              {filteredRows.length !== rows.length && '(跨筛选)'}
+              {filteredRows.length !== rows.length ? '（跨筛选）' : ''}
             </span>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <select
             className="h-9 rounded-md border border-input bg-background px-2 text-sm"
             value={datePreset}
-            onChange={(e) => onDatePresetChange(e.target.value as DatePreset)}
+            onChange={(event) => onDatePresetChange(event.target.value as DatePreset)}
           >
-            {PRESETS.map((p) => (
-              <option key={p} value={p}>
-                {p === 'last_7d' ? '近 7 天' : p === 'last_30d' ? '近 30 天' : p === 'today' ? '今天' : p === 'yesterday' ? '昨天' : '全部'}
+            {PRESETS.map((preset) => (
+              <option key={preset} value={preset}>
+                {presetLabel(preset)}
               </option>
             ))}
           </select>
@@ -255,26 +289,14 @@ export function EntityListView<T extends EntityRow>({
             size="sm"
             variant="outline"
             disabled={selected.size === 0 || batch.isPending}
-            onClick={() =>
-              batch.mutate({
-                action: `${layer}:status`,
-                params: { status: 'PAUSED' },
-                ids: Array.from(selected),
-              })
-            }
+            onClick={() => runBatch(`${layer}:status`, { status: 'PAUSED' })}
           >
             批量暂停
           </Button>
           <Button
             size="sm"
             disabled={selected.size === 0 || batch.isPending}
-            onClick={() =>
-              batch.mutate({
-                action: `${layer}:status`,
-                params: { status: 'ACTIVE' },
-                ids: Array.from(selected),
-              })
-            }
+            onClick={() => runBatch(`${layer}:status`, { status: 'ACTIVE' })}
           >
             批量启用
           </Button>
@@ -301,12 +323,8 @@ export function EntityListView<T extends EntityRow>({
             variant="destructive"
             disabled={selected.size === 0 || batch.isPending}
             onClick={() => {
-              if (!confirm(`批量归档 ${selected.size} 个${layerActionLabel[layer]}？`)) return;
-              batch.mutate({
-                action: `${layer}:delete`,
-                params: { hard: false },
-                ids: Array.from(selected),
-              });
+              if (!confirm(`批量归档 ${selected.size} 个${layerActionLabel}？`)) return;
+              runBatch(`${layer}:delete`, { hard: false });
             }}
           >
             批量归档
@@ -314,11 +332,10 @@ export function EntityListView<T extends EntityRow>({
         </div>
       </div>
 
-      {/* 搜索 + 筛选 */}
       <SearchFilterBar
         searchValue={search}
         onSearchChange={setSearch}
-        searchPlaceholder={`搜索${layerLabel}名称…`}
+        searchPlaceholder={`搜索${layerLabel}名称...`}
         filters={[
           {
             key: 'status',
@@ -327,9 +344,9 @@ export function EntityListView<T extends EntityRow>({
             onChange: setStatusFilter,
             options: [
               { value: '', label: '全部' },
-              { value: 'ACTIVE', label: 'ACTIVE' },
-              { value: 'PAUSED', label: 'PAUSED' },
-              { value: 'ARCHIVED', label: 'ARCHIVED' },
+              { value: 'ACTIVE', label: metaEntityStatusLabel('ACTIVE') },
+              { value: 'PAUSED', label: metaEntityStatusLabel('PAUSED') },
+              { value: 'ARCHIVED', label: metaEntityStatusLabel('ARCHIVED') },
             ],
           },
         ]}
@@ -341,25 +358,26 @@ export function EntityListView<T extends EntityRow>({
         }}
       />
 
-      {(error || setStatus.error || setBudgetMut.error || copyMut.error || deleteMut.error || batch.error) && (
+      {(error || setStatus.error || setBudgetMut.error || copyMut.error || deleteMut.error || batch.error || trackedTask.error) && (
         <p className="text-sm text-destructive">
           {(error as Error)?.message ||
             (setStatus.error as Error)?.message ||
             (setBudgetMut.error as Error)?.message ||
             (copyMut.error as Error)?.message ||
             (deleteMut.error as Error)?.message ||
-            (batch.error as Error)?.message}
+            (batch.error as Error)?.message ||
+            (trackedTask.error as Error)?.message}
         </p>
       )}
 
-      <div className="border rounded-md overflow-x-auto">
+      <div className="overflow-x-auto rounded-md border">
         <Table>
           <TableHeader>
             <TableRow>
               <TableHead className="w-8">
                 <input type="checkbox" checked={allSelected} onChange={toggleAll} />
               </TableHead>
-              <TableHead className="w-12"></TableHead>
+              <TableHead className="w-12" />
               <TableHead>名称</TableHead>
               {enableBudget && <TableHead>日预算</TableHead>}
               <TableHead className="text-right">花费</TableHead>
@@ -374,45 +392,33 @@ export function EntityListView<T extends EntityRow>({
           </TableHeader>
           <TableBody>
             {isLoading && (
-              <TableRow>
-                <TableCell colSpan={enableBudget ? 12 : 11} className="text-muted-foreground">
-                  加载中…
-                </TableCell>
-              </TableRow>
+              <EmptyTableRow colSpan={enableBudget ? 12 : 11} text="加载中..." />
             )}
             {!isLoading && rows.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={enableBudget ? 12 : 11} className="text-muted-foreground">
-                  无{layerLabel}。
-                </TableCell>
-              </TableRow>
+              <EmptyTableRow colSpan={enableBudget ? 12 : 11} text={`暂无${layerLabel}`} />
             )}
             {!isLoading && rows.length > 0 && filteredRows.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={enableBudget ? 12 : 11} className="text-muted-foreground">
-                  无匹配项。试试清除筛选条件。
-                </TableCell>
-              </TableRow>
+              <EmptyTableRow colSpan={enableBudget ? 12 : 11} text="无匹配项，请清除筛选条件" />
             )}
-            {filteredRows.map((r) => {
-              const ins = insights?.[r.id];
-              const isSel = selected.has(r.id);
-              const archived = r.status === 'ARCHIVED' || r.status === 'DELETED';
-              const drill = drillTo?.(r);
+            {pager.pageItems.map((row) => {
+              const insight = insights?.[row.id];
+              const isSelected = selected.has(row.id);
+              const archived = row.status === 'ARCHIVED' || row.status === 'DELETED';
+              const drill = drillTo?.(row);
               return (
-                <TableRow key={r.id} className={isSel ? 'bg-muted/30' : ''}>
+                <TableRow key={row.id} className={isSelected ? 'bg-muted/30' : ''}>
                   <TableCell>
-                    <input type="checkbox" checked={isSel} onChange={() => toggle(r.id)} />
+                    <input type="checkbox" checked={isSelected} onChange={() => toggle(row.id)} />
                   </TableCell>
                   <TableCell>
                     <Switch
                       size="sm"
-                      checked={r.status === 'ACTIVE'}
+                      checked={row.status === 'ACTIVE'}
                       disabled={archived || setStatus.isPending}
                       onCheckedChange={() =>
-                        setStatus.mutate({ id: r.id, status: statusFromSwitch(r.status) })
+                        setStatus.mutate({ id: row.id, status: statusFromSwitch(row.status) })
                       }
-                      aria-label={`status-${r.id}`}
+                      aria-label={`status-${row.id}`}
                     />
                   </TableCell>
                   <TableCell className="font-medium">
@@ -422,39 +428,62 @@ export function EntityListView<T extends EntityRow>({
                         params={drill.params}
                         className="text-primary hover:underline"
                       >
-                        {r.name}
+                        {row.name}
                       </Link>
                     ) : (
-                      r.name
+                      row.name
                     )}
-                    {r.status !== 'ACTIVE' && (
-                      <span className="ml-2 text-xs text-muted-foreground">[{r.status}]</span>
+                    {row.status !== 'ACTIVE' && (
+                      <span className="ml-2 text-xs text-muted-foreground">
+                        [{metaEntityStatusLabel(row.status)}]
+                      </span>
                     )}
                   </TableCell>
                   {enableBudget && (
                     <TableCell>
                       <button
-                        onClick={() => setBudgetEditing({ id: r.id, name: r.name, ...(r.dailyBudget !== undefined ? { daily: r.dailyBudget } : {}) })}
+                        type="button"
+                        onClick={() =>
+                          setBudgetEditing({
+                            id: row.id,
+                            name: row.name,
+                            ...(row.dailyBudget !== undefined ? { daily: row.dailyBudget } : {}),
+                          })
+                        }
                         disabled={archived}
                         className="text-left hover:underline disabled:opacity-50"
                       >
-                        {fmtBudget(r.dailyBudget)}
+                        {fmtBudget(row.dailyBudget)}
                       </button>
                     </TableCell>
                   )}
-                  <TableCell className="text-right tabular-nums">{ins ? fmtMoney(ins.spend) : '-'}</TableCell>
-                  <TableCell className="text-right tabular-nums">{ins ? (ins.orders || '-') : '-'}</TableCell>
-                  <TableCell className="text-right tabular-nums">{ins ? (ins.cpa ? fmtMoney(ins.cpa) : '-') : '-'}</TableCell>
-                  <TableCell className="text-right tabular-nums">{ins ? (ins.cpc ? ins.cpc.toFixed(2) : '-') : '-'}</TableCell>
-                  <TableCell className="text-right tabular-nums">{ins ? (ins.addToCart || '-') : '-'}</TableCell>
-                  <TableCell className="text-right tabular-nums">{ins ? (ins.initiateCheckout || '-') : '-'}</TableCell>
-                  <TableCell className="text-right tabular-nums">{ins ? (ins.cpm ? ins.cpm.toFixed(2) : '-') : '-'}</TableCell>
-                  <TableCell className="text-right space-x-1">
+                  <TableCell className="text-right tabular-nums">
+                    {insight ? fmtMoney(insight.spend) : '-'}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {insight ? insight.orders || '-' : '-'}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {insight ? (insight.cpa ? fmtMoney(insight.cpa) : '-') : '-'}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {insight ? (insight.cpc ? insight.cpc.toFixed(2) : '-') : '-'}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {insight ? insight.addToCart || '-' : '-'}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {insight ? insight.initiateCheckout || '-' : '-'}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {insight ? (insight.cpm ? insight.cpm.toFixed(2) : '-') : '-'}
+                  </TableCell>
+                  <TableCell className="space-x-1 text-right">
                     <Button
                       size="sm"
                       variant="outline"
                       disabled={archived || copyMut.isPending}
-                      onClick={() => singleCopyClicked(r)}
+                      onClick={() => singleCopyClicked(row)}
                     >
                       复制
                     </Button>
@@ -463,8 +492,8 @@ export function EntityListView<T extends EntityRow>({
                       variant="destructive"
                       disabled={archived || deleteMut.isPending}
                       onClick={() => {
-                        if (!confirm(`归档 "${r.name}" ?`)) return;
-                        deleteMut.mutate(r.id);
+                        if (!confirm(`归档 "${row.name}"？`)) return;
+                        deleteMut.mutate(row.id);
                       }}
                     >
                       归档
@@ -475,9 +504,14 @@ export function EntityListView<T extends EntityRow>({
             })}
           </TableBody>
         </Table>
+        <Pagination
+          page={pager.page}
+          pageCount={pager.pageCount}
+          total={filteredRows.length}
+          onPageChange={pager.setPage}
+        />
       </div>
 
-      {/* 单 budget */}
       <BudgetEditDialog
         open={!!budgetEditing}
         layer={layer}
@@ -486,16 +520,14 @@ export function EntityListView<T extends EntityRow>({
         onCancel={() => setBudgetEditing(null)}
         submitting={setBudgetMut.isPending}
         onSubmit={(daily) => {
-          if (budgetEditing) {
-            setBudgetMut.mutate(
-              { id: budgetEditing.id, dailyBudget: daily },
-              { onSuccess: () => setBudgetEditing(null) },
-            );
-          }
+          if (!budgetEditing) return;
+          setBudgetMut.mutate(
+            { id: budgetEditing.id, dailyBudget: daily },
+            { onSuccess: () => setBudgetEditing(null) },
+          );
         }}
       />
 
-      {/* 批量 budget */}
       <BudgetEditDialog
         open={batchBudgetOpen}
         layer={layer}
@@ -505,15 +537,10 @@ export function EntityListView<T extends EntityRow>({
         submitting={batch.isPending}
         onSubmit={(daily) => {
           setBatchBudgetOpen(false);
-          batch.mutate({
-            action: `${layer}:budget`,
-            params: { dailyBudget: daily },
-            ids: Array.from(selected),
-          });
+          runBatch(`${layer}:budget`, { dailyBudget: daily });
         }}
       />
 
-      {/* 复制 */}
       <CopyDialog
         open={!!copyOpen}
         layer={layer}
@@ -524,20 +551,16 @@ export function EntityListView<T extends EntityRow>({
         submitting={copyMut.isPending || batch.isPending}
       />
 
-      {/* SSE 任务进度 */}
       <TaskProgress
         taskId={activeTask}
         onClose={() => {
           setActiveTask(null);
-          setSelected(new Set());
-          qc.invalidateQueries({ queryKey: invalidateKey });
         }}
       />
     </div>
   );
 }
 
-/* ===================== Budget Dialog ===================== */
 function BudgetEditDialog({
   open,
   layer,
@@ -555,11 +578,10 @@ function BudgetEditDialog({
   onSubmit: (dailyMinor: number) => void;
   submitting: boolean;
 }) {
-  const [val, setVal] = useState('');
+  const [value, setValue] = useState('');
+
   useEffect(() => {
-    if (open) {
-      setVal(target?.daily !== undefined ? (target.daily / 100).toFixed(2) : '');
-    }
+    if (open) setValue(target?.daily !== undefined ? (target.daily / 100).toFixed(2) : '');
   }, [open, target?.daily]);
 
   if (layer === 'ad') return null;
@@ -567,18 +589,18 @@ function BudgetEditDialog({
   return (
     <Dialog
       open={open}
-      onOpenChange={(o) => !o && !submitting && onCancel()}
-      title={`日预算 · ${target?.name ?? ''}`}
+      onOpenChange={(nextOpen) => !nextOpen && !submitting && onCancel()}
+      title={`日预算 - ${target?.name ?? ''}`}
     >
-      <p className="text-sm text-muted-foreground mb-2">
-        单位 {currency ?? '主单位'}(提交时 ×100 转最小单位)
+      <p className="mb-2 text-sm text-muted-foreground">
+        单位：{currency ?? '主币种'}，提交时会自动换算为最小货币单位。
       </p>
       <Input
         type="number"
         step="0.01"
         min="0.01"
-        value={val}
-        onChange={(e) => setVal(e.target.value)}
+        value={value}
+        onChange={(event) => setValue(event.target.value)}
         autoFocus
       />
       <DialogFooter>
@@ -587,77 +609,112 @@ function BudgetEditDialog({
         </Button>
         <Button
           onClick={() => {
-            const n = Number(val);
+            const n = Number(value);
             if (!Number.isFinite(n) || n <= 0) {
-              alert('请输入正数');
+              alert('请输入大于 0 的预算');
               return;
             }
             onSubmit(Math.round(n * 100));
           }}
           disabled={submitting}
         >
-          {submitting ? '提交中…' : '提交'}
+          {submitting ? '提交中...' : '提交'}
         </Button>
       </DialogFooter>
     </Dialog>
   );
 }
 
-/* ===================== Task progress ===================== */
 function TaskProgress({ taskId, onClose }: { taskId: string | null; onClose: () => void }) {
   const [snap, setSnap] = useState<ProgressSnap | null>(null);
+
   useEffect(() => {
     if (!taskId) return;
     setSnap(null);
     const es = openTaskStream(taskId);
-    es.addEventListener('progress', (ev) => {
+    es.addEventListener('progress', (event) => {
       try {
-        const data = JSON.parse((ev as MessageEvent).data) as ProgressSnap;
+        const data = JSON.parse((event as MessageEvent).data) as ProgressSnap;
         setSnap(data);
-        if (TASK_TERMINAL.includes(data.status as 'success' | 'failed' | 'partial' | 'cancelled')) {
-          es.close();
-        }
+        if (isTerminalTaskStatus(data.status)) es.close();
       } catch {
-        /* */
+        /* ignore malformed progress event */
       }
     });
-    return () => {
-      es.close();
-    };
+    return () => es.close();
   }, [taskId]);
 
   if (!taskId) return null;
   const pct = snap && snap.total > 0
     ? Math.round(((snap.success + snap.failed) / snap.total) * 100)
     : 0;
-  const terminal =
-    !!snap &&
-    TASK_TERMINAL.includes(snap.status as 'success' | 'failed' | 'partial' | 'cancelled');
+  const terminal = !!snap && isTerminalTaskStatus(snap.status);
 
   return (
-    <Dialog open onOpenChange={(o) => !o && terminal && onClose()} title="任务进度">
-      <p className="text-xs text-muted-foreground font-mono">task: {taskId}</p>
-      <div className="mt-3 mb-2 h-2 rounded bg-muted overflow-hidden">
+    <Dialog open onOpenChange={(open) => !open && terminal && onClose()} title="任务进度">
+      <p className="font-mono text-xs text-muted-foreground">task: {taskId}</p>
+      <div className="mb-2 mt-3 h-2 overflow-hidden rounded bg-muted">
         <div className="h-full bg-primary transition-all" style={{ width: `${pct}%` }} />
       </div>
       <p className="text-sm">
         {snap ? (
           <>
-            <b>{snap.status}</b> · {snap.success}/{snap.total} 成功 · {snap.failed} 失败 ({pct}%)
+            <b>{taskStatusLabel(snap.status)}</b> - {snap.success}/{snap.total} 成功 - {snap.failed} 失败 ({pct}%)
           </>
         ) : (
-          '连接中…'
+          '连接中...'
         )}
       </p>
       <DialogFooter>
-        <Button
-          variant={terminal ? 'default' : 'outline'}
-          onClick={onClose}
-          disabled={!terminal && !snap}
-        >
-          {terminal ? '完成' : '在后台运行'}
+        <Button variant={terminal ? 'default' : 'outline'} onClick={onClose} disabled={!terminal && !snap}>
+          {terminal ? '完成' : '后台运行'}
         </Button>
       </DialogFooter>
     </Dialog>
   );
+}
+
+function EmptyTableRow({ colSpan, text }: { colSpan: number; text: string }) {
+  return (
+    <TableRow>
+      <TableCell colSpan={colSpan} className="text-muted-foreground">
+        {text}
+      </TableCell>
+    </TableRow>
+  );
+}
+
+function applyPatch<T extends EntityRow>(row: T, patch: RowPatch | undefined): T {
+  return patch ? ({ ...row, ...patch } as T) : row;
+}
+
+function applyBatchPatch(
+  batch: BatchState,
+  ids: string[],
+  patchRows: (ids: string[], patch: RowPatch) => void,
+) {
+  if (ids.length === 0) return;
+  if (batch.action.endsWith(':status')) {
+    const status = batch.params['status'];
+    if (status === 'ACTIVE' || status === 'PAUSED' || status === 'ARCHIVED') {
+      patchRows(ids, { status });
+    }
+    return;
+  }
+  if (batch.action.endsWith(':budget')) {
+    const dailyBudget = batch.params['dailyBudget'];
+    if (typeof dailyBudget === 'number') patchRows(ids, { dailyBudget });
+    return;
+  }
+  if (batch.action.endsWith(':delete')) {
+    patchRows(ids, { status: 'ARCHIVED' });
+  }
+}
+
+function presetLabel(preset: DatePreset): string {
+  if (preset === 'today') return '今天';
+  if (preset === 'yesterday') return '昨天';
+  if (preset === 'last_7d') return '近 7 天';
+  if (preset === 'last_30d') return '近 30 天';
+  return '全部';
 }

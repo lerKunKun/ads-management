@@ -14,6 +14,7 @@ import {
   type MetaAd,
   type InsightsSummary,
   type DatePreset,
+  type MetaObjectOwnership,
 } from '../../lib/meta-client';
 import { writeAudit } from '../iam/auth-service';
 import { resolveAdAccount, markTokenInvalid } from '../account/token-service';
@@ -21,6 +22,18 @@ import { checkScope } from '../../middleware/auth';
 import { HttpError, Forbidden, NotFound } from '../../lib/http-error';
 import type { AuthPrincipal } from '../iam/auth-service';
 import type { RenameOptions, CopyInput } from '@ads/shared';
+import {
+  markLocalBudget,
+  markLocalDeleted,
+  markLocalStatus,
+  readFreshAds,
+  readFreshAdSets,
+  readFreshCampaigns,
+  upsertAdSetSnapshots,
+  upsertAdSnapshots,
+  upsertCampaignSnapshots,
+  upsertLocalCopyPlaceholder,
+} from '../ad-object/local-store';
 
 type CampaignStatus = 'ACTIVE' | 'PAUSED' | 'ARCHIVED';
 
@@ -30,15 +43,44 @@ function assertScope(principal: AuthPrincipal, adAccountId: string) {
   }
 }
 
+async function assertTargetOwnership(
+  principal: AuthPrincipal,
+  ctx: { token: string; metaActId: string; fbAccountId: string },
+  targetType: 'campaign' | 'adset' | 'ad',
+  targetId: string,
+  parents: { campaignId?: string; adsetId?: string } = {},
+): Promise<MetaObjectOwnership> {
+  try {
+    const owner = await meta.getObjectOwnership(ctx.token, targetType, targetId);
+    if (owner.actId !== ctx.metaActId) {
+      throw Forbidden(`${targetType} not in ad_account`);
+    }
+    if (parents.campaignId && owner.campaignId !== parents.campaignId) {
+      throw Forbidden(`${targetType} not in campaign`);
+    }
+    if (parents.adsetId && owner.adsetId !== parents.adsetId) {
+      throw Forbidden(`${targetType} not in adset`);
+    }
+    return owner;
+  } catch (err) {
+    await handleMetaError(err, principal.companyId, ctx.fbAccountId);
+    throw err;
+  }
+}
+
 // =================== Campaign list / 单操作 ===================
 export async function listCampaigns(
   principal: AuthPrincipal,
   adAccountId: string,
 ): Promise<MetaCampaign[]> {
   assertScope(principal, adAccountId);
+  const cached = await readFreshCampaigns(principal.companyId, adAccountId);
+  if (cached) return cached;
   const ctx = await resolveAdAccount(principal.companyId, adAccountId);
   try {
-    return await meta.listCampaigns(ctx.token, ctx.metaActId);
+    const rows = await meta.listCampaigns(ctx.token, ctx.metaActId);
+    await upsertCampaignSnapshots(principal.companyId, adAccountId, rows);
+    return rows;
   } catch (err) {
     await handleMetaError(err, principal.companyId, ctx.fbAccountId);
     throw err;
@@ -51,6 +93,7 @@ export async function setCampaignStatus(
 ): Promise<void> {
   assertScope(principal, args.adAccountId);
   const ctx = await resolveAdAccount(principal.companyId, args.adAccountId);
+  const owner = await assertTargetOwnership(principal, ctx, 'campaign', args.campaignId);
   try {
     await metaProvider.setStatus(ctx.token, {
       adAccountId: ctx.metaActId,
@@ -62,6 +105,14 @@ export async function setCampaignStatus(
     await handleMetaError(err, principal.companyId, ctx.fbAccountId);
     throw err;
   }
+  await writeLocalBestEffort('campaign:status', () => markLocalStatus({
+    companyId: principal.companyId,
+    adAccountId: args.adAccountId,
+    targetType: 'campaign',
+    targetId: args.campaignId,
+    status: args.status,
+    owner,
+  }));
   await writeAudit({
     companyId: principal.companyId,
     userId: principal.userId,
@@ -90,6 +141,7 @@ export async function setCampaignBudget(
     throw new HttpError(422, 422, 'dailyBudget 与 lifetimeBudget 二选一');
   }
   const ctx = await resolveAdAccount(principal.companyId, args.adAccountId);
+  const owner = await assertTargetOwnership(principal, ctx, 'campaign', args.campaignId);
   try {
     await metaProvider.setBudget(ctx.token, {
       adAccountId: ctx.metaActId,
@@ -102,6 +154,15 @@ export async function setCampaignBudget(
     await handleMetaError(err, principal.companyId, ctx.fbAccountId);
     throw err;
   }
+  await writeLocalBestEffort('campaign:budget', () => markLocalBudget({
+    companyId: principal.companyId,
+    adAccountId: args.adAccountId,
+    targetType: 'campaign',
+    targetId: args.campaignId,
+    ...(args.dailyBudget !== undefined ? { dailyBudget: args.dailyBudget } : {}),
+    ...(args.lifetimeBudget !== undefined ? { lifetimeBudget: args.lifetimeBudget } : {}),
+    owner,
+  }));
   await writeAudit({
     companyId: principal.companyId,
     userId: principal.userId,
@@ -124,9 +185,14 @@ export async function listAdSets(
   campaignId: string,
 ): Promise<MetaAdSet[]> {
   assertScope(principal, adAccountId);
+  const cached = await readFreshAdSets(principal.companyId, adAccountId, campaignId);
+  if (cached) return cached;
   const ctx = await resolveAdAccount(principal.companyId, adAccountId);
+  await assertTargetOwnership(principal, ctx, 'campaign', campaignId);
   try {
-    return await meta.listAdSets(ctx.token, campaignId);
+    const rows = await meta.listAdSets(ctx.token, campaignId);
+    await upsertAdSetSnapshots(principal.companyId, adAccountId, campaignId, rows);
+    return rows;
   } catch (err) {
     await handleMetaError(err, principal.companyId, ctx.fbAccountId);
     throw err;
@@ -139,6 +205,7 @@ export async function setAdSetStatus(
 ): Promise<void> {
   assertScope(principal, args.adAccountId);
   const ctx = await resolveAdAccount(principal.companyId, args.adAccountId);
+  const owner = await assertTargetOwnership(principal, ctx, 'adset', args.adsetId);
   try {
     await metaProvider.setStatus(ctx.token, {
       adAccountId: ctx.metaActId,
@@ -150,6 +217,14 @@ export async function setAdSetStatus(
     await handleMetaError(err, principal.companyId, ctx.fbAccountId);
     throw err;
   }
+  await writeLocalBestEffort('adset:status', () => markLocalStatus({
+    companyId: principal.companyId,
+    adAccountId: args.adAccountId,
+    targetType: 'adset',
+    targetId: args.adsetId,
+    status: args.status,
+    owner,
+  }));
   await writeAudit({
     companyId: principal.companyId,
     userId: principal.userId,
@@ -178,6 +253,7 @@ export async function setAdSetBudget(
     throw new HttpError(422, 422, 'dailyBudget 与 lifetimeBudget 二选一');
   }
   const ctx = await resolveAdAccount(principal.companyId, args.adAccountId);
+  const owner = await assertTargetOwnership(principal, ctx, 'adset', args.adsetId);
   try {
     await metaProvider.setBudget(ctx.token, {
       adAccountId: ctx.metaActId,
@@ -190,6 +266,15 @@ export async function setAdSetBudget(
     await handleMetaError(err, principal.companyId, ctx.fbAccountId);
     throw err;
   }
+  await writeLocalBestEffort('adset:budget', () => markLocalBudget({
+    companyId: principal.companyId,
+    adAccountId: args.adAccountId,
+    targetType: 'adset',
+    targetId: args.adsetId,
+    ...(args.dailyBudget !== undefined ? { dailyBudget: args.dailyBudget } : {}),
+    ...(args.lifetimeBudget !== undefined ? { lifetimeBudget: args.lifetimeBudget } : {}),
+    owner,
+  }));
   await writeAudit({
     companyId: principal.companyId,
     userId: principal.userId,
@@ -211,9 +296,14 @@ export async function listAds(
   adsetId: string,
 ): Promise<MetaAd[]> {
   assertScope(principal, adAccountId);
+  const cached = await readFreshAds(principal.companyId, adAccountId, adsetId);
+  if (cached) return cached;
   const ctx = await resolveAdAccount(principal.companyId, adAccountId);
+  await assertTargetOwnership(principal, ctx, 'adset', adsetId);
   try {
-    return await meta.listAds(ctx.token, adsetId);
+    const rows = await meta.listAds(ctx.token, adsetId);
+    await upsertAdSnapshots(principal.companyId, adAccountId, adsetId, rows);
+    return rows;
   } catch (err) {
     await handleMetaError(err, principal.companyId, ctx.fbAccountId);
     throw err;
@@ -226,6 +316,7 @@ export async function setAdStatus(
 ): Promise<void> {
   assertScope(principal, args.adAccountId);
   const ctx = await resolveAdAccount(principal.companyId, args.adAccountId);
+  const owner = await assertTargetOwnership(principal, ctx, 'ad', args.adId);
   try {
     await metaProvider.setStatus(ctx.token, {
       adAccountId: ctx.metaActId,
@@ -237,6 +328,14 @@ export async function setAdStatus(
     await handleMetaError(err, principal.companyId, ctx.fbAccountId);
     throw err;
   }
+  await writeLocalBestEffort('ad:status', () => markLocalStatus({
+    companyId: principal.companyId,
+    adAccountId: args.adAccountId,
+    targetType: 'ad',
+    targetId: args.adId,
+    status: args.status,
+    owner,
+  }));
   await writeAudit({
     companyId: principal.companyId,
     userId: principal.userId,
@@ -270,6 +369,7 @@ export async function copyEntity(
   assertScope(principal, args.adAccountId);
   const count = Math.max(1, args.count ?? 1);
   const ctx = await resolveAdAccount(principal.companyId, args.adAccountId);
+  const owner = await assertTargetOwnership(principal, ctx, args.targetType, args.sourceId);
   const out: string[] = [];
   for (let i = 0; i < count; i++) {
     const renameForThis: RenameOptions | undefined = args.renameOptions
@@ -288,6 +388,14 @@ export async function copyEntity(
     try {
       const r = await metaProvider.copy(ctx.token, input);
       out.push(r.newId);
+      await writeLocalBestEffort(`${args.targetType}:copy`, () => upsertLocalCopyPlaceholder({
+        companyId: principal.companyId,
+        adAccountId: args.adAccountId,
+        targetType: args.targetType,
+        sourceId: args.sourceId,
+        newId: r.newId,
+        owner,
+      }));
     } catch (err) {
       await handleMetaError(err, principal.companyId, ctx.fbAccountId);
       throw err;
@@ -331,6 +439,7 @@ export async function deleteEntity(
 ): Promise<void> {
   assertScope(principal, args.adAccountId);
   const ctx = await resolveAdAccount(principal.companyId, args.adAccountId);
+  const owner = await assertTargetOwnership(principal, ctx, args.targetType, args.targetId);
   try {
     await metaProvider.remove(ctx.token, {
       adAccountId: ctx.metaActId,
@@ -342,6 +451,14 @@ export async function deleteEntity(
     await handleMetaError(err, principal.companyId, ctx.fbAccountId);
     throw err;
   }
+  await writeLocalBestEffort(`${args.targetType}:delete`, () => markLocalDeleted({
+    companyId: principal.companyId,
+    adAccountId: args.adAccountId,
+    targetType: args.targetType,
+    targetId: args.targetId,
+    hard: args.hard === true,
+    owner,
+  }));
   await writeAudit({
     companyId: principal.companyId,
     userId: principal.userId,
@@ -384,6 +501,14 @@ async function handleMetaError(
       throw new HttpError(429, 1002, `meta rate limited: ${err.message}`);
     }
     throw new HttpError(502, 1002, `meta error: ${err.message}`);
+  }
+}
+
+async function writeLocalBestEffort(label: string, fn: () => Promise<void>): Promise<void> {
+  try {
+    await fn();
+  } catch (err) {
+    console.error(`[local-ad-object] ${label} write failed`, err);
   }
 }
 

@@ -38,18 +38,18 @@ function AdsPage() {
     queryFn: () => api.insightsByLevel(id, 'ad', preset),
   });
 
-  const campaign = campaigns.data?.find((c) => c.id === cid);
-  const adset = adsets.data?.find((s) => s.id === asid);
+  const campaign = campaigns.data?.find((item) => item.id === cid);
+  const adset = adsets.data?.find((item) => item.id === asid);
 
   return (
     <div className="space-y-4">
       <div className="text-sm text-muted-foreground">
-        <Link to="/fb-accounts" className="hover:text-foreground">
-          FB 个号
+        <Link to="/ad-accounts" className="hover:text-foreground">
+          广告账户
         </Link>
         {' / '}
         <Link to="/ad-accounts/$id" params={{ id }} className="hover:text-foreground">
-          {summary.data?.name}
+          {summary.data?.name ?? id}
         </Link>
         {' / '}
         <Link
@@ -63,12 +63,12 @@ function AdsPage() {
         <span className="text-foreground">{adset?.name ?? asid}</span>
       </div>
 
-      <div>
-        <h1 className="text-xl font-semibold">{adset?.name ?? '…'}</h1>
-        <p className="text-sm text-muted-foreground">
-          优化目标: {adset?.optimizationGoal ?? '-'}
+      <header>
+        <h1 className="text-xl font-semibold">{adset?.name ?? '广告组'}</h1>
+        <p className="mt-1 text-sm text-muted-foreground">
+          优化目标：{adset?.optimizationGoal ?? '-'}
         </p>
-      </div>
+      </header>
 
       <EntityListView<Ad>
         layer="ad"

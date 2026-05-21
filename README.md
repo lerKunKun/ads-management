@@ -1,8 +1,10 @@
-# FB 广告管理系统
+# 广告管理系统
 
-> 多公司隔离、RBAC + 资源作用域的 Facebook 广告管理系统。基于外部 CRM API 获取 FB 个号 user token,承载 **1000+ 广告账户** 的批量 **复制 / 开关 / 删除 / 控预算** 操作,API 秒级响应。
+> 多公司隔离、RBAC + 资源作用域的 Facebook 广告管理系统。基于外部 CRM API 获取授权账号 token；前端统一将授权账号展示为 **广告账户组**，承载 **1000+ 广告账户** 的批量 **复制 / 开关 / 删除 / 控预算** 操作，API 秒级响应。
 
-业务层级: `公司 (租户) → FB 个号 → 广告账户 → 广告系列 → 广告组 → 广告`。
+业务层级: `公司 (租户) → 广告账户组 → 广告账户 → 广告系列 → 广告组 → 广告`。
+
+> 说明：数据库和 API 内部仍沿用历史命名 `fb_account`，前端和用户文档统一称为“广告账户组”。
 
 ## 技术栈
 
@@ -22,21 +24,31 @@
 
 ## 信息架构
 
-登录后默认 drill-down 路径:
+登录后默认进入首页总览:
 ```
 登录
-  └─ /fb-accounts (FB 个号列表)
-       └─ /fb-accounts/$id (该个号下广告账户)
-             └─ /ad-accounts/$id (广告系列)
-                   └─ /ad-accounts/$id/campaigns/$cid (广告组)
-                         └─ /ad-accounts/$id/campaigns/$cid/adsets/$asid (广告)
+  └─ / (首页仪表盘：公司、账户组、广告账户、后台任务概览)
+       ├─ /fb-accounts (广告账户组列表)
+       │    └─ /fb-accounts/$id (该账户组下广告账户)
+       └─ /ad-accounts (完整广告管理入口)
+            └─ /ad-accounts/$id (广告系列)
+                  └─ /ad-accounts/$id/campaigns/$cid (广告组)
+                        └─ /ad-accounts/$id/campaigns/$cid/adsets/$asid (广告)
 ```
 
-每一层都支持:
+完整广告管理页支持:
 - 名称左侧 **Switch toggle**(开/关)
 - 多选 + 批量(暂停/启用/改预算/复制/归档)
 - `spend / orders / CPA / CPC / 加购 / 结账 / CPM` 列(可切换日期范围: today/yesterday/last_7d/last_30d/lifetime)
 - 复制 Dialog: 排期起始时间 + N 份 + 前缀 + 国家后缀 + 日期后缀 + 测试编号
+- 操作后列表不强制刷新，保留当前分页、滚动位置和筛选上下文
+
+管理端入口:
+- `/admin/company`: 当前公司资产、用户、账户组、广告账户和任务概览
+- `/admin/iam`: 用户 / 广告账户组 / 广告账户三栏联动授权
+- `/admin/users`: 用户目录、角色和启停
+- `/admin/operations`: 熔断、Token 健康、广告对象同步、后台任务
+- `/admin/audit`: 全局审计日志
 
 ## 快速开始(本地 mock 模式)
 
@@ -57,7 +69,7 @@ bun --cwd packages/db run migrate
 # 种子: 1 个 Demo Co. 公司 + 4 个角色 + admin@demo.local/admin123
 bun --cwd packages/db run seed
 
-# (mock 模式可选)演示用假 FB 个号 + 8 个广告账户
+# (mock 模式可选)演示用假广告账户组 + 8 个广告账户
 $env:MOCK_AD_ACCOUNT_COUNT='8'; bun --cwd packages/db run src/seed-mock-fb.ts
 ```
 
@@ -104,7 +116,7 @@ $env:CRM_BASE_URL='https://adtool-api.gimc-hk.com'
 $env:CRM_CID='<你的 cid>'
 $env:CRM_ACCESS_TOKEN='<你的 accessToken>'
 ```
-启动后在前端"绑定 FB 个号" → CRM 给授权链接 → Meta 用户授权回调 → API 用 code 换 token → AES-GCM 加密入库 + 拉取该个号下广告账户。
+启动后在前端"绑定广告账户组" → CRM 给授权链接 → Meta 用户授权回调 → API 用 code 换 token → AES-GCM 加密入库 + 拉取该账户组下广告账户。
 
 ### Token 加密(生产必填)
 ```powershell
@@ -134,7 +146,7 @@ $env:FEISHU_WEBHOOK_URL='https://open.feishu.cn/open-apis/bot/v2/hook/xxx'
 
 权限码 `resource:action`:`ad_account:read` / `campaign:status` / `campaign:budget` / `campaign:copy` / `campaign:delete` / `iam:manage` / `fb_account:bind`。
 
-管理后台 `/admin/users` 给员工分配角色 + 在"编辑作用域"里勾选可访问的 FB 个号 / 广告账户。修改后 5 分钟 Redis 权限缓存自动失效(写入立即 invalidate)。
+管理后台 `/admin/iam` 给员工分配广告账户组 / 广告账户作用域。修改后 5 分钟 Redis 权限缓存自动失效(写入立即 invalidate)。
 
 ## 异步流水线(M3)
 
@@ -151,23 +163,29 @@ Worker(16 个分片 consumer)
   ├─ 取/解密 token → metaProvider 调 Meta
   ├─ 写 item 结果 + DB counter + Redis 进度
   └─ 错误分类:
-       token 失效(190) → 永久熔断个号 + dead
+       token 失效(190) → 永久熔断广告账户组 + dead
        限流(17/4/32/80004) → 账户级 60s 熔断 + 短 retry
        瞬时 → 5s/30s/2m 阶梯 retry,maxAttempts=6 入 ad.ops.failed
 
 前端 ─GET /operations/:taskId/stream─▶ SSE 实时进度
 ```
 
+## 数据同步与落库
+
+- 广告系列、广告组、广告支持同步落库，表结构位于 `packages/db/src/schema/ad-objects.ts`。
+- 管理端 `/admin/operations` 可触发广告对象同步，支持按广告账户或到期账户批量同步，深度可选 `广告系列 / 广告组 / 广告`。
+- mock 模式下批量操作会在 API 进程内执行并写入本地广告对象快照，方便前端列表立即看到状态和预算变化。
+
 ## 项目结构
 
 ```
 .
 ├── apps/
-│   ├── api/                Elysia API + 三层 routes + admin 模块
+│   ├── api/                Elysia API + 账户/操作/IAM/admin 模块
 │   ├── worker/             RabbitMQ consumer
 │   └── web/                React 前端
 ├── packages/
-│   ├── db/                 Drizzle schema + RLS + 迁移 + 种子
+│   ├── db/                 Drizzle schema + RLS + 迁移 + 种子 + 广告对象快照
 │   ├── shared/             权限码 / 角色 / Provider 接口
 │   └── eden/               Elysia Eden 客户端导出
 ├── docker-compose.yml      pg / redis / rabbitmq
@@ -205,9 +223,9 @@ docker exec ads_rabbit rabbitmqctl list_queues name | Select-Object -Skip 3 | Fo
 
 ## 已知限制
 
-- mock 模式数据不持久(`META_FAKE=1` 用进程内 Map,API 重启清零)
+- mock 模式 Meta 进程内状态不持久(`META_FAKE=1` 的 Meta 假数据重启清零)，已同步落库的广告对象快照仍在数据库中
 - 复制操作 MVP 仅同账户(跨账户涉及素材搬运,在 M5 实现)
-- `fb_account` 永久熔断需在 /admin 手动重置(管理员 reset + 用户重新走 OAuth)
+- 广告账户组 token 永久熔断需在 /admin 手动重置(管理员 reset + 用户重新走 OAuth)
 - 内置定时器单实例(多副本部署需上分布式锁)
 
 详细的"已完成 / 后续计划 / 限制",见 [PROGRESS.md](./PROGRESS.md)。

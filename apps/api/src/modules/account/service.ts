@@ -28,6 +28,84 @@ export async function getAuthorizeUrl(): Promise<string> {
   return r.authorize_url;
 }
 
+export interface EffectiveScope {
+  bypass: boolean;
+  fbAccountIds: string[];
+  adAccountIds: string[];
+}
+
+interface EffectiveScopeInternal {
+  bypass: boolean;
+  fbAccountIds: Set<string>;
+  adAccountIds: Set<string>;
+  visibleAdCountByFb: Map<string, number>;
+}
+
+async function resolveEffectiveScopeInTenant(
+  tx: typeof db,
+  principal: AuthPrincipal,
+): Promise<EffectiveScopeInternal> {
+  const [fbRows, adRows] = await Promise.all([
+    tx
+      .select({ id: schema.fbAccounts.id })
+      .from(schema.fbAccounts)
+      .where(eq(schema.fbAccounts.companyId, principal.companyId)),
+    tx
+      .select({
+        id: schema.adAccounts.id,
+        fbAccountId: schema.adAccounts.fbAccountId,
+      })
+      .from(schema.adAccounts)
+      .where(eq(schema.adAccounts.companyId, principal.companyId)),
+  ]);
+
+  const fbGrantSet = new Set(principal.scope.fbAccounts);
+  const adGrantSet = new Set(principal.scope.adAccounts);
+  const fbAccountIds = new Set<string>();
+  const adAccountIds = new Set<string>();
+  const visibleAdCountByFb = new Map<string, number>();
+
+  for (const fb of fbRows) {
+    if (principal.scope.bypass || fbGrantSet.has(fb.id)) {
+      fbAccountIds.add(fb.id);
+    }
+  }
+
+  for (const ad of adRows) {
+    const visible =
+      principal.scope.bypass ||
+      fbGrantSet.has(ad.fbAccountId) ||
+      adGrantSet.has(ad.id);
+    if (!visible) continue;
+    adAccountIds.add(ad.id);
+    fbAccountIds.add(ad.fbAccountId);
+    visibleAdCountByFb.set(
+      ad.fbAccountId,
+      (visibleAdCountByFb.get(ad.fbAccountId) ?? 0) + 1,
+    );
+  }
+
+  return {
+    bypass: principal.scope.bypass,
+    fbAccountIds,
+    adAccountIds,
+    visibleAdCountByFb,
+  };
+}
+
+export async function resolveEffectiveScope(
+  principal: AuthPrincipal,
+): Promise<EffectiveScope> {
+  return withTenant(principal.companyId, async (tx) => {
+    const scope = await resolveEffectiveScopeInTenant(tx, principal);
+    return {
+      bypass: scope.bypass,
+      fbAccountIds: Array.from(scope.fbAccountIds),
+      adAccountIds: Array.from(scope.adAccountIds),
+    };
+  });
+}
+
 /**
  * code → token → 拉 me + 广告账户 → 写库（fb_accounts + ad_accounts）
  * 返回 fb_account 与新增广告账户列表（不含 token）
@@ -153,42 +231,29 @@ export async function listFbAccounts(principal: AuthPrincipal): Promise<
   }>
 > {
   return withTenant(principal.companyId, async (tx) => {
-    const rows = (await tx.execute(dsql`
-      SELECT
-        f.id::text          AS id,
-        f.fb_user_id        AS fb_user_id,
-        f.name              AS name,
-        f.status::text      AS status,
-        f.token_expires_at  AS token_expires_at,
-        (SELECT COUNT(*)::int FROM ad_accounts a WHERE a.fb_account_id = f.id) AS ad_account_count
-      FROM fb_accounts f
-      WHERE f.company_id = ${principal.companyId}
-      ORDER BY f.created_at ASC
-    `)) as unknown as Array<{
-      id: string;
-      fb_user_id: string;
-      name: string;
-      status: string;
-      token_expires_at: Date | string | null;
-      ad_account_count: number;
-    }>;
+    const scope = await resolveEffectiveScopeInTenant(tx, principal);
+    const fbRows = await tx
+      .select({
+        id: schema.fbAccounts.id,
+        fbUserId: schema.fbAccounts.fbUserId,
+        name: schema.fbAccounts.name,
+        status: schema.fbAccounts.status,
+        tokenExpiresAt: schema.fbAccounts.tokenExpiresAt,
+        createdAt: schema.fbAccounts.createdAt,
+      })
+      .from(schema.fbAccounts)
+      .where(eq(schema.fbAccounts.companyId, principal.companyId));
 
-    // Operator/Viewer: 过滤到 grants 内
-    const filtered = principal.scope.bypass
-      ? rows
-      : rows.filter((r) => {
-          if (principal.scope.fbAccounts.includes(r.id)) return true;
-          // 没直接授权 fb,但有授权该 fb 下的某 ad_account → 也能看到这个 fb
-          return false; // 简化:不下钻;若用户希望可以扩展
-        });
-
-    return filtered.map((r) => ({
-      id: r.id,
-      fbUserId: r.fb_user_id,
-      name: r.name,
-      status: (r.status as 'active' | 'token_invalid' | 'disabled') ?? 'active',
-      tokenExpiresAt: r.token_expires_at ? new Date(r.token_expires_at).toISOString() : null,
-      adAccountCount: r.ad_account_count ?? 0,
+    return fbRows
+      .filter((f) => scope.fbAccountIds.has(f.id))
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+      .map((f) => ({
+        id: f.id,
+        fbUserId: f.fbUserId,
+        name: f.name,
+        status: f.status,
+        tokenExpiresAt: f.tokenExpiresAt ? f.tokenExpiresAt.toISOString() : null,
+        adAccountCount: scope.visibleAdCountByFb.get(f.id) ?? 0,
     }));
   });
 }
@@ -203,6 +268,7 @@ export async function listAdAccounts(
   filter: { fbAccountId?: string } = {},
 ) {
   return withTenant(principal.companyId, async (tx) => {
+    const scope = await resolveEffectiveScopeInTenant(tx, principal);
     const select = {
       id: schema.adAccounts.id,
       metaActId: schema.adAccounts.metaActId,
@@ -217,21 +283,15 @@ export async function listAdAccounts(
       ? eq(schema.adAccounts.fbAccountId, filter.fbAccountId)
       : undefined;
 
-    if (principal.scope.bypass) {
+    if (scope.bypass) {
       const q = tx.select(select).from(schema.adAccounts);
       return fbFilter ? await q.where(fbFilter) : await q;
     }
 
-    const adIds = principal.scope.adAccounts;
-    const fbIds = principal.scope.fbAccounts;
-    if (!adIds.length && !fbIds.length) return [];
+    const adIds = Array.from(scope.adAccountIds);
+    if (!adIds.length) return [];
 
-    const scopeConds: ReturnType<typeof inArray>[] = [];
-    if (adIds.length) scopeConds.push(inArray(schema.adAccounts.id, adIds));
-    if (fbIds.length) scopeConds.push(inArray(schema.adAccounts.fbAccountId, fbIds));
-    const scopeCond =
-      scopeConds.length === 1 ? scopeConds[0] : dsql`${scopeConds[0]} OR ${scopeConds[1]}`;
-
+    const scopeCond = inArray(schema.adAccounts.id, adIds);
     const finalCond = fbFilter ? dsql`(${scopeCond}) AND ${fbFilter}` : scopeCond;
     return tx.select(select).from(schema.adAccounts).where(finalCond);
   });
