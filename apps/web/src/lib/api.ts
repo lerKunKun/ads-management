@@ -113,7 +113,6 @@ export type DatePreset =
   | 'yesterday'
   | 'last_7d'
   | 'last_30d'
-  | 'lifetime'
   | 'maximum';
 
 export interface RenameOptions {

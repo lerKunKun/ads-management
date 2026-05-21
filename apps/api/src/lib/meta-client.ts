@@ -159,6 +159,7 @@ export type DatePreset =
   | 'yesterday'
   | 'last_7d'
   | 'last_30d'
+  // v21 不再使用 lifetime；保留为旧调用兼容，发给 Meta 前映射到 maximum。
   | 'lifetime'
   | 'maximum';
 
@@ -231,6 +232,27 @@ function sumActions(actions: MetaActionRow[] | undefined, keys: string[]): numbe
     if (keys.includes(a.action_type)) s += Number(a.value) || 0;
   }
   return s;
+}
+
+function normalizeDatePreset(datePreset: DatePreset): Exclude<DatePreset, 'lifetime'> {
+  return datePreset === 'lifetime' ? 'maximum' : datePreset;
+}
+
+function toInsightsSummary(row: MetaInsightsRaw): InsightsSummary {
+  const spend = Number(row.spend ?? 0);
+  const orders = sumActions(row.actions, ORDER_ACTIONS);
+  return {
+    spend,
+    impressions: Number(row.impressions ?? 0),
+    clicks: Number(row.clicks ?? 0),
+    cpc: Number(row.cpc ?? 0),
+    cpm: Number(row.cpm ?? 0),
+    ctr: Number(row.ctr ?? 0),
+    orders,
+    cpa: orders > 0 ? spend / orders : 0,
+    addToCart: sumActions(row.actions, ADD_TO_CART_ACTIONS),
+    initiateCheckout: sumActions(row.actions, CHECKOUT_ACTIONS),
+  };
 }
 
 // ===== HTTP =====
@@ -679,7 +701,7 @@ export const meta = {
   ): Promise<InsightsSummary> {
     if (FAKE_MODE) return fakeMeta.getInsights(objectId, datePreset);
     const q: Record<string, string> = {
-      date_preset: datePreset,
+      date_preset: normalizeDatePreset(datePreset),
       fields: 'spend,impressions,clicks,cpc,cpm,ctr,reach,actions,cost_per_action_type',
     };
     const r = await graph<MetaPagedEnvelope<MetaInsightsRaw>>(`/${objectId}/insights`, token, {
@@ -687,20 +709,7 @@ export const meta = {
     });
     const row = r.data[0];
     if (!row) return EMPTY_INSIGHTS;
-    const spend = Number(row.spend ?? 0);
-    const orders = sumActions(row.actions, ORDER_ACTIONS);
-    return {
-      spend,
-      impressions: Number(row.impressions ?? 0),
-      clicks: Number(row.clicks ?? 0),
-      cpc: Number(row.cpc ?? 0),
-      cpm: Number(row.cpm ?? 0),
-      ctr: Number(row.ctr ?? 0),
-      orders,
-      cpa: orders > 0 ? spend / orders : 0,
-      addToCart: sumActions(row.actions, ADD_TO_CART_ACTIONS),
-      initiateCheckout: sumActions(row.actions, CHECKOUT_ACTIONS),
-    };
+    return toInsightsSummary(row);
   },
 
   /** 批量拉同账户下所有 children 的 insights, 一次 API + level breakdown */
@@ -711,8 +720,8 @@ export const meta = {
     datePreset: DatePreset = 'last_7d',
   ): Promise<Record<string, InsightsSummary>> {
     if (FAKE_MODE) return fakeMeta.getInsightsByChild(metaActId, level, datePreset);
-    const q: Record<string, string> = {
-      date_preset: datePreset,
+    const baseQuery: Record<string, string> = {
+      date_preset: normalizeDatePreset(datePreset),
       level,
       fields:
         (level === 'campaign'
@@ -723,30 +732,22 @@ export const meta = {
         'spend,impressions,clicks,cpc,cpm,ctr,reach,actions,cost_per_action_type',
       limit: '500',
     };
-    const r = await graph<MetaPagedEnvelope<MetaInsightsRaw & { campaign_id?: string; adset_id?: string; ad_id?: string }>>(
-      `/${metaActId}/insights`,
-      token,
-      { query: q },
-    );
     const out: Record<string, InsightsSummary> = {};
-    for (const row of r.data) {
-      const key = (row.campaign_id ?? row.adset_id ?? row.ad_id ?? '') as string;
-      if (!key) continue;
-      const spend = Number(row.spend ?? 0);
-      const orders = sumActions(row.actions, ORDER_ACTIONS);
-      out[key] = {
-        spend,
-        impressions: Number(row.impressions ?? 0),
-        clicks: Number(row.clicks ?? 0),
-        cpc: Number(row.cpc ?? 0),
-        cpm: Number(row.cpm ?? 0),
-        ctr: Number(row.ctr ?? 0),
-        orders,
-        cpa: orders > 0 ? spend / orders : 0,
-        addToCart: sumActions(row.actions, ADD_TO_CART_ACTIONS),
-        initiateCheckout: sumActions(row.actions, CHECKOUT_ACTIONS),
-      };
-    }
+    let after: string | undefined;
+    do {
+      const query = { ...baseQuery };
+      if (after) query['after'] = after;
+      const page = await graph<
+        MetaPagedEnvelope<MetaInsightsRaw & { campaign_id?: string; adset_id?: string; ad_id?: string }>
+      >(`/${metaActId}/insights`, token, { query });
+      for (const row of page.data) {
+        const key = (row.campaign_id ?? row.adset_id ?? row.ad_id ?? '') as string;
+        if (!key) continue;
+        out[key] = toInsightsSummary(row);
+      }
+      after = page.paging?.cursors?.after;
+      if (!page.paging?.next) break;
+    } while (after);
     return out;
   },
 };

@@ -9,6 +9,7 @@ import { crm } from '../../lib/crm-client';
 import { env } from '../../env';
 import { notifier } from '../../lib/notifier';
 import { redis } from '../../lib/redis';
+import { BreakerKey } from '../../lib/breaker';
 import { writeAudit } from '../iam/auth-service';
 import type { AuthPrincipal } from '../iam/auth-service';
 
@@ -125,6 +126,7 @@ export async function bindFbAccount(args: {
 
     return { fbAccountId, adAccountsSynced: synced };
   }).then(async (res) => {
+    await redis.del(`token:${res.fbAccountId}`, BreakerKey.fbAccount(res.fbAccountId));
     await writeAudit({
       companyId: principal.companyId,
       userId: principal.userId,

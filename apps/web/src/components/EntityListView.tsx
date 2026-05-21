@@ -71,7 +71,7 @@ interface ProgressSnap {
   status: 'pending' | 'running' | 'partial' | 'success' | 'failed' | 'cancelled';
 }
 
-const PRESETS: DatePreset[] = ['today', 'yesterday', 'last_7d', 'last_30d', 'lifetime'];
+const PRESETS: DatePreset[] = ['today', 'yesterday', 'last_7d', 'last_30d', 'maximum'];
 
 /* ===================== 主组件 ===================== */
 export function EntityListView<T extends EntityRow>({
