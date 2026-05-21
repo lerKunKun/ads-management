@@ -153,7 +153,6 @@ const DATE_MULT: Record<DatePreset, number> = {
   yesterday: 1,
   last_7d: 7,
   last_30d: 30,
-  lifetime: 120,
   maximum: 120,
 };
 

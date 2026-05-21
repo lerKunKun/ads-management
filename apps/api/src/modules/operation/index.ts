@@ -19,7 +19,6 @@ const datePresetSchema = t.Union([
   t.Literal('yesterday'),
   t.Literal('last_7d'),
   t.Literal('last_30d'),
-  t.Literal('lifetime'),
   t.Literal('maximum'),
 ]);
 

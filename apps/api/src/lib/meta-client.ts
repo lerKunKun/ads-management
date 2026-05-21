@@ -159,8 +159,6 @@ export type DatePreset =
   | 'yesterday'
   | 'last_7d'
   | 'last_30d'
-  // v21 不再使用 lifetime；保留为旧调用兼容，发给 Meta 前映射到 maximum。
-  | 'lifetime'
   | 'maximum';
 
 interface MetaActionRow {
@@ -232,10 +230,6 @@ function sumActions(actions: MetaActionRow[] | undefined, keys: string[]): numbe
     if (keys.includes(a.action_type)) s += Number(a.value) || 0;
   }
   return s;
-}
-
-function normalizeDatePreset(datePreset: DatePreset): Exclude<DatePreset, 'lifetime'> {
-  return datePreset === 'lifetime' ? 'maximum' : datePreset;
 }
 
 function toInsightsSummary(row: MetaInsightsRaw): InsightsSummary {
@@ -701,7 +695,7 @@ export const meta = {
   ): Promise<InsightsSummary> {
     if (FAKE_MODE) return fakeMeta.getInsights(objectId, datePreset);
     const q: Record<string, string> = {
-      date_preset: normalizeDatePreset(datePreset),
+      date_preset: datePreset,
       fields: 'spend,impressions,clicks,cpc,cpm,ctr,reach,actions,cost_per_action_type',
     };
     const r = await graph<MetaPagedEnvelope<MetaInsightsRaw>>(`/${objectId}/insights`, token, {
@@ -721,7 +715,7 @@ export const meta = {
   ): Promise<Record<string, InsightsSummary>> {
     if (FAKE_MODE) return fakeMeta.getInsightsByChild(metaActId, level, datePreset);
     const baseQuery: Record<string, string> = {
-      date_preset: normalizeDatePreset(datePreset),
+      date_preset: datePreset,
       level,
       fields:
         (level === 'campaign'

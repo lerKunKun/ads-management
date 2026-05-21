@@ -80,12 +80,12 @@ export function CopyDialog({
       ...(layer !== 'ad' ? { deepCopy } : {}),
       ...((prefix || suffix)
         ? {
-            renameOptions: {
-              rename_strategy: 'ONLY_TOP_LEVEL_RENAME',
-              ...(prefix ? { rename_prefix: prefix } : {}),
-              ...(suffix ? { rename_suffix: suffix } : {}),
-            },
-          }
+          renameOptions: {
+            rename_strategy: 'ONLY_TOP_LEVEL_RENAME',
+            ...(prefix ? { rename_prefix: prefix } : {}),
+            ...(suffix ? { rename_suffix: suffix } : {}),
+          },
+        }
         : {}),
     };
     onSubmit(params);
