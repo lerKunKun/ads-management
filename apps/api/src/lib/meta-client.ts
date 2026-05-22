@@ -78,8 +78,12 @@ interface MetaCampaignRaw {
   status?: EntityStatus;
   effective_status?: string;
   objective?: string;
+  buying_type?: string;
+  bid_strategy?: string;
   daily_budget?: string;
   lifetime_budget?: string;
+  special_ad_categories?: string[];
+  special_ad_category_country?: string[];
   account_id?: string;
   start_time?: string;
   stop_time?: string;
@@ -111,7 +115,12 @@ interface MetaAdSetRaw {
   lifetime_budget?: string;
   optimization_goal?: string;
   billing_event?: string;
+  bid_strategy?: string;
   bid_amount?: number | string;
+  targeting?: unknown;
+  promoted_object?: unknown;
+  attribution_spec?: unknown;
+  destination_type?: string;
   start_time?: string;
   end_time?: string;
   updated_time?: string;
@@ -141,6 +150,7 @@ interface MetaAdRaw {
   adset_id?: string;
   campaign_id?: string;
   creative?: { id?: string };
+  bid_amount?: number | string;
   updated_time?: string;
 }
 
@@ -501,6 +511,39 @@ function copyForm(opts: CopyOptions): Record<string, string> {
   return f;
 }
 
+function addFormValue(form: Record<string, string>, key: string, value: unknown): void {
+  if (value === undefined || value === null || value === '') return;
+  if (Array.isArray(value) || typeof value === 'object') {
+    form[key] = JSON.stringify(value);
+    return;
+  }
+  form[key] = String(value);
+}
+
+function applyCopyName(name: string | undefined, opts: RenameOptions | undefined, isTopLevel: boolean): string {
+  const base = name || 'Untitled';
+  if (!isTopLevel && opts?.rename_strategy === 'ONLY_TOP_LEVEL_RENAME') return base;
+  if (opts?.rename_strategy === 'NO_RENAME') return base;
+  const prefix = opts?.rename_prefix ?? '';
+  const suffix = opts?.rename_suffix ?? '';
+  return prefix || suffix ? `${prefix}${base}${suffix}` : `Copy of ${base}`;
+}
+
+function copyCreateStatus(source: EntityStatus | undefined, opts: CopyOptions): 'ACTIVE' | 'PAUSED' {
+  if (opts.statusOption === 'ACTIVE') return 'ACTIVE';
+  if (opts.statusOption === 'INHERITED_FROM_SOURCE') {
+    return source === 'ACTIVE' ? 'ACTIVE' : 'PAUSED';
+  }
+  return 'PAUSED';
+}
+
+function futureIso(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const t = Date.parse(value);
+  if (!Number.isFinite(t)) return undefined;
+  return t > Date.now() ? value : undefined;
+}
+
 function asyncCopyForm(input: AsyncCopyInput): Record<string, string> {
   const f =
     input.targetType === 'ad'
@@ -530,10 +573,6 @@ function asyncCopyRequest(input: AsyncCopyInput): MetaAsyncBatchRequest {
     body,
     name: input.requestName ?? 'copy',
   };
-}
-
-function asyncCopyRequests(input: AsyncCopyInput): MetaAsyncBatchRequest[] {
-  return [asyncCopyRequest(input)];
 }
 
 function graphBatchCopyRequest(input: AsyncCopyInput): MetaBatchRequest {
@@ -719,6 +758,151 @@ function batchCopyResultFromEntry(
   };
 }
 
+async function countAdsOnObjectEdge(
+  token: string,
+  objectId: string,
+  max: number,
+): Promise<number> {
+  let count = 0;
+  let after: string | undefined;
+  do {
+    const q: Record<string, string> = {
+      fields: 'id',
+      limit: String(Math.max(1, Math.min(100, max - count))),
+    };
+    if (after) q['after'] = after;
+    const page = await graph<MetaPagedEnvelope<{ id: string }>>(`/${objectId}/ads`, token, {
+      query: q,
+    });
+    count += page.data.length;
+    if (count >= max) return count;
+    after = page.paging?.cursors?.after;
+    if (!page.paging?.next) break;
+  } while (after);
+  return count;
+}
+
+function copyCampaignCreateForm(source: MetaCampaignRaw, opts: CopyOptions, isTopLevel: boolean): Record<string, string> {
+  const form: Record<string, string> = {
+    name: applyCopyName(source.name ?? source.id, opts.renameOptions, isTopLevel),
+    status: copyCreateStatus(source.status, opts),
+    objective: source.objective ?? 'OUTCOME_SALES',
+    special_ad_categories: JSON.stringify(source.special_ad_categories ?? []),
+  };
+  addFormValue(form, 'buying_type', source.buying_type ?? 'AUCTION');
+  addFormValue(form, 'bid_strategy', source.bid_strategy);
+  addFormValue(form, 'daily_budget', source.daily_budget);
+  addFormValue(form, 'lifetime_budget', source.lifetime_budget);
+  addFormValue(form, 'special_ad_category_country', source.special_ad_category_country);
+  return form;
+}
+
+function copyAdSetCreateForm(
+  source: MetaAdSetRaw,
+  targetCampaignId: string,
+  opts: CopyOptions,
+  isTopLevel: boolean,
+): Record<string, string> {
+  const form: Record<string, string> = {
+    name: applyCopyName(source.name ?? source.id, opts.renameOptions, isTopLevel),
+    campaign_id: targetCampaignId,
+    status: copyCreateStatus(source.status, opts),
+  };
+  addFormValue(form, 'billing_event', source.billing_event);
+  addFormValue(form, 'optimization_goal', source.optimization_goal);
+  addFormValue(form, 'bid_strategy', source.bid_strategy);
+  addFormValue(form, 'bid_amount', source.bid_amount);
+  addFormValue(form, 'daily_budget', source.daily_budget);
+  addFormValue(form, 'lifetime_budget', source.lifetime_budget);
+  addFormValue(form, 'targeting', source.targeting);
+  addFormValue(form, 'promoted_object', source.promoted_object);
+  addFormValue(form, 'attribution_spec', source.attribution_spec);
+  addFormValue(form, 'destination_type', source.destination_type);
+  addFormValue(form, 'start_time', opts.startTime ?? futureIso(source.start_time));
+  addFormValue(form, 'end_time', opts.endTime ?? futureIso(source.end_time));
+  return form;
+}
+
+function copyAdCreateForm(
+  source: MetaAdRaw,
+  targetAdSetId: string,
+  opts: CopyOptions,
+  isTopLevel: boolean,
+): Record<string, string> {
+  if (!source.creative?.id) {
+    throw new MetaApiError(400, 100, undefined, undefined, undefined, `ad ${source.id} 缺 creative_id, 无法自建复制`);
+  }
+  const form: Record<string, string> = {
+    name: applyCopyName(source.name ?? source.id, opts.renameOptions, isTopLevel),
+    adset_id: targetAdSetId,
+    status: copyCreateStatus(source.status, opts),
+    creative: JSON.stringify({ creative_id: source.creative.id }),
+  };
+  addFormValue(form, 'bid_amount', source.bid_amount);
+  return form;
+}
+
+async function readCampaignForCopy(token: string, campaignId: string): Promise<MetaCampaignRaw> {
+  return graph<MetaCampaignRaw>(`/${campaignId}`, token, {
+    query: {
+      fields:
+        'id,name,status,objective,buying_type,bid_strategy,daily_budget,lifetime_budget,special_ad_categories,special_ad_category_country,account_id',
+    },
+  });
+}
+
+async function readAdSetForCopy(token: string, adsetId: string): Promise<MetaAdSetRaw> {
+  return graph<MetaAdSetRaw>(`/${adsetId}`, token, {
+    query: {
+      fields:
+        'id,name,status,campaign_id,daily_budget,lifetime_budget,optimization_goal,billing_event,bid_strategy,bid_amount,targeting,promoted_object,attribution_spec,destination_type,start_time,end_time',
+    },
+  });
+}
+
+async function readAdForCopy(token: string, adId: string): Promise<MetaAdRaw> {
+  return graph<MetaAdRaw>(`/${adId}`, token, {
+    query: {
+      fields: 'id,name,status,adset_id,campaign_id,creative{id},bid_amount',
+    },
+  });
+}
+
+async function listAdSetsForCopy(token: string, campaignId: string): Promise<MetaAdSetRaw[]> {
+  const out: MetaAdSetRaw[] = [];
+  let after: string | undefined;
+  do {
+    const q: Record<string, string> = {
+      fields:
+        'id,name,status,campaign_id,daily_budget,lifetime_budget,optimization_goal,billing_event,bid_strategy,bid_amount,targeting,promoted_object,attribution_spec,destination_type,start_time,end_time',
+      limit: '100',
+    };
+    if (after) q['after'] = after;
+    const page = await graph<MetaPagedEnvelope<MetaAdSetRaw>>(`/${campaignId}/adsets`, token, { query: q });
+    out.push(...page.data);
+    after = page.paging?.cursors?.after;
+    if (!page.paging?.next) break;
+  } while (after);
+  return out;
+}
+
+async function listAdsForCopy(token: string, adsetId: string): Promise<MetaAdRaw[]> {
+  const out: MetaAdRaw[] = [];
+  let after: string | undefined;
+  do {
+    const q: Record<string, string> = {
+      fields: 'id,name,status,adset_id,campaign_id,creative{id},bid_amount',
+      limit: '100',
+    };
+    if (after) q['after'] = after;
+    const page = await graph<MetaPagedEnvelope<MetaAdRaw>>(`/${adsetId}/ads`, token, { query: q });
+    out.push(...page.data);
+    after = page.paging?.cursors?.after;
+    if (!page.paging?.next) break;
+  } while (after);
+  return out;
+}
+
 // ===== 主对象 =====
 export const meta = {
   async me(token: string): Promise<{ id: string; name: string }> {
@@ -808,6 +992,15 @@ export const meta = {
       ...(raw.campaign_id ? { campaignId: raw.campaign_id } : {}),
       ...(raw.adset_id ? { adsetId: raw.adset_id } : {}),
     };
+  },
+
+  async countCopiedChildAds(
+    token: string,
+    input: Pick<AsyncCopyInput, 'targetType' | 'sourceId' | 'deepCopy'>,
+    max: number,
+  ): Promise<number> {
+    if (FAKE_MODE || input.targetType === 'ad' || input.deepCopy === false) return 0;
+    return countAdsOnObjectEdge(token, input.sourceId, max);
   },
 
   async submitAsyncCopy(
@@ -1011,6 +1204,42 @@ export const meta = {
     });
   },
 
+  async customCopyCampaign(
+    token: string,
+    metaActId: string,
+    campaignId: string,
+    opts: CopyOptions & { targetAdAccountId?: string } = {},
+  ): Promise<{ newCampaignId: string }> {
+    if (FAKE_MODE) {
+      return { newCampaignId: fakeMeta.copyCampaign(campaignId, opts.renameOptions) };
+    }
+    const targetActId = toActId(opts.targetAdAccountId ?? metaActId);
+    if (!targetActId) {
+      throw new MetaApiError(400, 100, undefined, undefined, undefined, 'customCopyCampaign: 缺 target ad account');
+    }
+    const source = await readCampaignForCopy(token, campaignId);
+    const created = await graph<{ id?: string }>(`/${targetActId}/campaigns`, token, {
+      method: 'POST',
+      form: copyCampaignCreateForm(source, opts, true),
+    });
+    if (!created.id) {
+      throw new MetaApiError(500, undefined, undefined, undefined, undefined, 'customCopyCampaign: 缺 new campaign id');
+    }
+
+    if (opts.deepCopy !== false) {
+      const adsets = await listAdSetsForCopy(token, campaignId);
+      for (const adset of adsets) {
+        const newAdSet = await meta.createAdSetFromSource(token, targetActId, adset, created.id, opts, false);
+        const ads = await listAdsForCopy(token, adset.id);
+        for (const ad of ads) {
+          await meta.createAdFromSource(token, targetActId, ad, newAdSet.newAdSetId, opts, false);
+        }
+      }
+    }
+
+    return { newCampaignId: created.id };
+  },
+
   async copyCampaign(
     token: string,
     campaignId: string,
@@ -1128,6 +1357,52 @@ export const meta = {
     });
   },
 
+  async createAdSetFromSource(
+    token: string,
+    metaActId: string,
+    source: MetaAdSetRaw,
+    targetCampaignId: string,
+    opts: CopyOptions,
+    isTopLevel: boolean,
+  ): Promise<{ newAdSetId: string }> {
+    const targetActId = toActId(metaActId);
+    if (!targetActId) {
+      throw new MetaApiError(400, 100, undefined, undefined, undefined, 'createAdSetFromSource: 缺 ad account');
+    }
+    const created = await graph<{ id?: string }>(`/${targetActId}/adsets`, token, {
+      method: 'POST',
+      form: copyAdSetCreateForm(source, targetCampaignId, opts, isTopLevel),
+    });
+    if (!created.id) {
+      throw new MetaApiError(500, undefined, undefined, undefined, undefined, 'createAdSetFromSource: 缺 new adset id');
+    }
+    return { newAdSetId: created.id };
+  },
+
+  async customCopyAdSet(
+    token: string,
+    metaActId: string,
+    adsetId: string,
+    opts: CopyOptions & { targetCampaignId?: string } = {},
+  ): Promise<{ newAdSetId: string }> {
+    if (FAKE_MODE) {
+      return { newAdSetId: fakeMeta.copyAdSet(adsetId, opts.renameOptions) };
+    }
+    const source = await readAdSetForCopy(token, adsetId);
+    const targetCampaignId = opts.targetCampaignId ?? source.campaign_id;
+    if (!targetCampaignId) {
+      throw new MetaApiError(400, 100, undefined, undefined, undefined, `adset ${adsetId} 缺 campaign_id, 无法自建复制`);
+    }
+    const created = await meta.createAdSetFromSource(token, metaActId, source, targetCampaignId, opts, true);
+    if (opts.deepCopy !== false) {
+      const ads = await listAdsForCopy(token, adsetId);
+      for (const ad of ads) {
+        await meta.createAdFromSource(token, metaActId, ad, created.newAdSetId, opts, false);
+      }
+    }
+    return created;
+  },
+
   async copyAdSet(
     token: string,
     adsetId: string,
@@ -1207,6 +1482,45 @@ export const meta = {
       method: 'POST',
       form: { status },
     });
+  },
+
+  async createAdFromSource(
+    token: string,
+    metaActId: string,
+    source: MetaAdRaw,
+    targetAdSetId: string,
+    opts: CopyOptions,
+    isTopLevel: boolean,
+  ): Promise<{ newAdId: string }> {
+    const targetActId = toActId(metaActId);
+    if (!targetActId) {
+      throw new MetaApiError(400, 100, undefined, undefined, undefined, 'createAdFromSource: 缺 ad account');
+    }
+    const created = await graph<{ id?: string }>(`/${targetActId}/ads`, token, {
+      method: 'POST',
+      form: copyAdCreateForm(source, targetAdSetId, opts, isTopLevel),
+    });
+    if (!created.id) {
+      throw new MetaApiError(500, undefined, undefined, undefined, undefined, 'createAdFromSource: 缺 new ad id');
+    }
+    return { newAdId: created.id };
+  },
+
+  async customCopyAd(
+    token: string,
+    metaActId: string,
+    adId: string,
+    opts: CopyOptions & { targetAdSetId?: string } = {},
+  ): Promise<{ newAdId: string }> {
+    if (FAKE_MODE) {
+      return { newAdId: fakeMeta.copyAd(adId, opts.renameOptions) };
+    }
+    const source = await readAdForCopy(token, adId);
+    const targetAdSetId = opts.targetAdSetId ?? source.adset_id;
+    if (!targetAdSetId) {
+      throw new MetaApiError(400, 100, undefined, undefined, undefined, `ad ${adId} 缺 adset_id, 无法自建复制`);
+    }
+    return meta.createAdFromSource(token, metaActId, source, targetAdSetId, opts, true);
   },
 
   async copyAd(

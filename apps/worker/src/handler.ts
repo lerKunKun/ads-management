@@ -66,6 +66,9 @@ interface AsyncCopyStateRequest {
   targetType: 'campaign' | 'adset' | 'ad';
 }
 
+const SYNC_COPY_CHILD_AD_LIMIT = 3;
+const ASYNC_COPY_CHILD_AD_LIMIT = 51;
+
 interface BatchHandledResult extends Record<string, unknown> {
   __batchHandled: true;
 }
@@ -116,6 +119,18 @@ function isTerminalStatus(status: string | null | undefined): boolean {
 
 function isBatchHandled(result: Record<string, unknown> | undefined): result is BatchHandledResult {
   return result?.['__batchHandled'] === true;
+}
+
+async function readItemStatus(itemId: string): Promise<string | undefined> {
+  return db.transaction(async (tx) => {
+    await tx.execute(dsql`SELECT set_config('app.bypass_rls', '1', true)`);
+    const rows = await tx
+      .select({ status: schema.operationTaskItems.status })
+      .from(schema.operationTaskItems)
+      .where(eq(schema.operationTaskItems.id, itemId))
+      .limit(1);
+    return rows[0]?.status;
+  });
 }
 
 async function acquireTargetLocks(targetIds: string[]): Promise<Array<{ release(): Promise<void> }> | null> {
@@ -226,10 +241,9 @@ export async function handle(msg: OperationMessage): Promise<Outcome> {
           result = { newId: `fake_copy_of_${msg.targetId}`, layer };
         }
       } else if (msg.copyBatch && msg.copyBatch.length > 1) {
-        result = await executeAsyncCopyBatchProvider(
+        result = await executeCustomCopyBatchProvider(
           msg,
           token,
-          copyItemsForMessage(msg),
           copyItemsForMessage(msg),
         );
       } else {
@@ -327,7 +341,7 @@ async function executeProvider(
       ...(renameOptions ? { renameOptions } : {}),
       requestName: `${msg.taskId}_${msg.itemId}`,
     };
-    return await executeAsyncCopyProvider(msg, token, input);
+    return await executeCustomCopyProvider(msg, token, input);
   }
 
   if (op === 'delete') {
@@ -464,11 +478,85 @@ function isAsyncRelativeUrlInvalid(err: unknown): boolean {
   );
 }
 
+function isMetaPermanentParameterError(err: MetaApiError): boolean {
+  return err.metaCode === 100;
+}
+
+function copyChildLimitExceededMessage(
+  mode: 'sync' | 'async',
+  input: AsyncCopyInput,
+  childAdCount: number,
+): string {
+  const limit = mode === 'async' ? ASYNC_COPY_CHILD_AD_LIMIT : SYNC_COPY_CHILD_AD_LIMIT;
+  return [
+    `Meta ${mode} copy limit exceeded for ${input.targetType} ${input.sourceId}:`,
+    `deep copy would copy ${childAdCount} child ads, limit is ${limit}.`,
+  ].join(' ');
+}
+
+async function assertAsyncCopyChildAdLimit(
+  token: string,
+  input: AsyncCopyInput,
+): Promise<void> {
+  const childAdCount = await meta.countCopiedChildAds(
+    token,
+    input,
+    ASYNC_COPY_CHILD_AD_LIMIT + 1,
+  );
+  if (childAdCount > ASYNC_COPY_CHILD_AD_LIMIT) {
+    throw new HttpError(422, 422, copyChildLimitExceededMessage('async', input, childAdCount));
+  }
+}
+
+async function assertAsyncCopyInputsChildAdLimit(
+  token: string,
+  inputs: AsyncCopyInput[],
+): Promise<void> {
+  const checked = new Map<string, number>();
+  for (const input of inputs) {
+    const key = `${input.targetType}:${input.sourceId}:${input.deepCopy !== false}`;
+    const childAdCount = checked.get(key) ?? await meta.countCopiedChildAds(
+      token,
+      input,
+      ASYNC_COPY_CHILD_AD_LIMIT + 1,
+    );
+    checked.set(key, childAdCount);
+    if (childAdCount > ASYNC_COPY_CHILD_AD_LIMIT) {
+      throw new HttpError(422, 422, copyChildLimitExceededMessage('async', input, childAdCount));
+    }
+  }
+}
+
+async function canFallbackToSyncCopy(
+  token: string,
+  input: AsyncCopyInput,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const childAdCount = await meta.countCopiedChildAds(
+    token,
+    input,
+    SYNC_COPY_CHILD_AD_LIMIT + 1,
+  );
+  if (childAdCount > SYNC_COPY_CHILD_AD_LIMIT) {
+    return {
+      ok: false,
+      reason: [
+        'Meta rejected async copy, and sync fallback is unsafe:',
+        copyChildLimitExceededMessage('sync', input, childAdCount),
+      ].join(' '),
+    };
+  }
+  return { ok: true };
+}
+
 async function executeSyncCopyFallback(
   msg: OperationMessage,
   token: string,
   input: AsyncCopyInput,
 ): Promise<Record<string, unknown>> {
+  const syncFallback = await canFallbackToSyncCopy(token, input);
+  if (!syncFallback.ok) {
+    throw new HttpError(409, 409, syncFallback.reason);
+  }
   console.warn(
     `[meta-async-copy] single request rejected by async batch; falling back to sync copy task=${msg.taskId} item=${msg.itemId}`,
   );
@@ -490,6 +578,56 @@ async function executeSyncCopyFallback(
     layer: input.targetType,
     fallback: 'sync_copy',
   };
+}
+
+async function executeCustomCopyProvider(
+  msg: OperationMessage,
+  token: string,
+  input: AsyncCopyInput,
+): Promise<Record<string, unknown>> {
+  const result = await metaProvider.copy(token, {
+    adAccountId: msg.metaActId,
+    sourceId: input.sourceId,
+    targetType: input.targetType,
+    ...(input.targetAdAccountId ? { targetAdAccountId: input.targetAdAccountId } : {}),
+    ...(input.targetCampaignId ? { targetCampaignId: input.targetCampaignId } : {}),
+    ...(input.targetAdSetId ? { targetAdSetId: input.targetAdSetId } : {}),
+    ...(input.deepCopy !== undefined ? { deepCopy: input.deepCopy } : {}),
+    ...(input.startTime ? { startTime: input.startTime } : {}),
+    ...(input.endTime ? { endTime: input.endTime } : {}),
+    ...(input.statusOption ? { statusOption: input.statusOption } : {}),
+    ...(input.renameOptions ? { renameOptions: input.renameOptions } : {}),
+  });
+  return {
+    newId: result.newId,
+    layer: input.targetType,
+    fallback: 'custom_create_copy',
+  };
+}
+
+async function executeCustomCopyBatchProvider(
+  msg: OperationMessage,
+  token: string,
+  copyItems: OperationCopyBatchItem[],
+): Promise<BatchHandledResult> {
+  console.warn(`[meta-custom-copy-batch] sequential copy task=${msg.taskId} count=${copyItems.length}`);
+  for (const item of copyItems) {
+    const itemMsg = messageForCopyItem(msg, item);
+    const status = await readItemStatus(item.itemId);
+    if (isTerminalStatus(status)) continue;
+
+    try {
+      const result = await executeProvider(itemMsg, token);
+      await writeLocalBestEffort(itemMsg, token, result);
+      await markSuccess(itemMsg, result);
+      await bumpProgress(itemMsg.taskId, { success: 1 });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await failItem(itemMsg, message);
+      await bumpProgress(itemMsg.taskId, { failed: 1 });
+    }
+  }
+  return { __batchHandled: true };
 }
 
 async function executeAsyncCopyBatchProvider(
@@ -575,9 +713,22 @@ async function executeGraphBatchCopyProvider(
   console.warn(
     `[meta-copy-batch] async request set rejected relative_url; falling back to Graph batch task=${msg.taskId} count=${activeItems.length}`,
   );
+  const syncEligibleItems: OperationCopyBatchItem[] = [];
+  for (const item of activeItems) {
+    const itemMsg = messageForCopyItem(msg, item);
+    const input = buildAsyncCopyInput(itemMsg, asyncCopyRequestName(item.itemId));
+    const syncFallback = await canFallbackToSyncCopy(token, input);
+    if (syncFallback.ok) {
+      syncEligibleItems.push(item);
+      continue;
+    }
+    await failItem(itemMsg, syncFallback.reason);
+    await bumpProgress(itemMsg.taskId, { failed: 1 });
+  }
+
   const chunkSize = 3;
-  for (let offset = 0; offset < activeItems.length; offset += chunkSize) {
-    const chunk = activeItems.slice(offset, offset + chunkSize);
+  for (let offset = 0; offset < syncEligibleItems.length; offset += chunkSize) {
+    const chunk = syncEligibleItems.slice(offset, offset + chunkSize);
     const inputs = chunk.map((item) => {
       const itemMsg = messageForCopyItem(msg, item);
       return buildAsyncCopyInput(itemMsg, asyncCopyRequestName(item.itemId));
@@ -611,6 +762,7 @@ async function submitAsyncCopy(
   token: string,
   input: AsyncCopyInput,
 ): Promise<AsyncCopyState> {
+  await assertAsyncCopyChildAdLimit(token, input);
   const submitted = await meta.submitAsyncCopy(token, msg.metaActId, input);
   const state: AsyncCopyState = {
     kind: 'meta_async_copy',
@@ -638,6 +790,7 @@ async function submitAsyncCopyBatch(
     const itemMsg = messageForCopyItem(msg, item);
     return buildAsyncCopyInput(itemMsg, asyncCopyRequestName(item.itemId));
   });
+  await assertAsyncCopyInputsChildAdLimit(token, inputs);
   const submitted = await meta.submitAsyncCopyBatch(token, msg.metaActId, inputs);
   const state: AsyncCopyState = {
     kind: 'meta_async_copy',
@@ -829,6 +982,16 @@ async function writeLocalObjectState(
   if (op === 'copy') {
     const newId = typeof result?.['newId'] === 'string' ? result['newId'] : undefined;
     if (!newId) return;
+    const renameOptionsRaw = msg.params['renameOptions'] as Record<string, string> | undefined;
+    const copyIndex = msg.params['_copyIndex'];
+    let renameOptions = renameOptionsRaw;
+    if (typeof copyIndex === 'number' && copyIndex > 0) {
+      const baseSuffix = renameOptionsRaw?.['rename_suffix'] ?? '';
+      renameOptions = {
+        ...(renameOptionsRaw ?? {}),
+        rename_suffix: `${baseSuffix}-${String(copyIndex).padStart(2, '0')}`,
+      };
+    }
     await upsertLocalCopyPlaceholder({
       companyId: msg.companyId,
       adAccountId: msg.adAccountId,
@@ -836,6 +999,7 @@ async function writeLocalObjectState(
       sourceId: msg.targetId,
       newId,
       owner,
+      ...(renameOptions ? { renameOptions } : {}),
     });
     return;
   }
@@ -902,6 +1066,10 @@ async function handleErr(
       return { kind: 'retry', reason: 'meta rate limited', bumpAttempt: false };
       // 限流命中时让该账户挂 60s breaker；本消息走短 retry（attempt 不增）
       return { kind: 'retry', reason: 'meta rate limited', bumpAttempt: false };
+    }
+    if (isMetaPermanentParameterError(err)) {
+      await failMessages(msg, batchItems, message);
+      return { kind: 'dead', reason: message };
     }
   }
   // 瞬时错误 → attempts++

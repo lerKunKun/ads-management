@@ -1,8 +1,10 @@
 # 批量复制链路梳理
 
+状态：历史文档。当前线上复制主路径已改为串行自建复制，不再以 Meta async_batch_requests / Graph Batch copy edge 为主。当前实现说明见 `docs/copy-flow-serial-current.md`。
+
 更新时间：2026-05-22
 
-本文档描述当前版本的批量复制链路，重点覆盖广告系列、广告组、广告三层的 `*:copy` 批量操作。当前线上环境使用 `META_API_VERSION=v21.0`。
+本文档描述历史版本的批量复制链路，重点覆盖广告系列、广告组、广告三层的 `*:copy` 批量操作。该版本线上环境使用 `META_API_VERSION=v21.0`。
 
 ## 1. 总览
 

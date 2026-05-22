@@ -44,8 +44,9 @@ export const metaProvider: AdsProvider = {
         if (input.targetAdAccountId && input.targetAdAccountId !== input.adAccountId) {
           throw new HttpError(422, 422, 'MVP 仅支持同账户复制');
         }
-        const r = await meta.copyCampaign(token, input.sourceId, {
+        const r = await meta.customCopyCampaign(token, input.adAccountId, input.sourceId, {
           deepCopy: input.deepCopy ?? true,
+          ...(input.targetAdAccountId ? { targetAdAccountId: input.targetAdAccountId } : {}),
           ...(input.startTime ? { startTime: input.startTime } : {}),
           ...(input.endTime ? { endTime: input.endTime } : {}),
           ...(input.statusOption ? { statusOption: input.statusOption } : {}),
@@ -54,7 +55,7 @@ export const metaProvider: AdsProvider = {
         return { newId: r.newCampaignId };
       }
       case 'adset': {
-        const r = await meta.copyAdSet(token, input.sourceId, {
+        const r = await meta.customCopyAdSet(token, input.adAccountId, input.sourceId, {
           deepCopy: input.deepCopy ?? true,
           ...(input.targetCampaignId ? { targetCampaignId: input.targetCampaignId } : {}),
           ...(input.startTime ? { startTime: input.startTime } : {}),
@@ -65,7 +66,7 @@ export const metaProvider: AdsProvider = {
         return { newId: r.newAdSetId };
       }
       case 'ad': {
-        const r = await meta.copyAd(token, input.sourceId, {
+        const r = await meta.customCopyAd(token, input.adAccountId, input.sourceId, {
           ...(input.targetAdSetId ? { targetAdSetId: input.targetAdSetId } : {}),
           ...(input.statusOption ? { statusOption: input.statusOption } : {}),
           ...(input.renameOptions ? { renameOptions: input.renameOptions } : {}),
