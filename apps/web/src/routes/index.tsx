@@ -95,7 +95,7 @@ function DashboardPage() {
       <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <Metric
           label="当前公司"
-          value={shortId(me.data?.companyId)}
+          value={me.data?.companyName ?? '-'}
           detail={me.data?.email ?? '加载中'}
           icon={Building2}
         />
@@ -155,7 +155,7 @@ function DashboardPage() {
                 value={me.data?.scope.bypass ? '全量自动授权' : `${me.data?.scope.fbAccounts.length ?? 0} 个`}
               />
               <SummaryRow
-                label="广告账户作用域"
+                label="广告账户"
                 value={
                   me.data?.scope.bypass ? '全量自动授权' : `${me.data?.scope.adAccounts.length ?? 0} 个`
                 }
@@ -311,10 +311,4 @@ function HealthLine({ ok, label }: { ok: boolean; label: string }) {
 
 function EmptyState({ text }: { text: string }) {
   return <div className="p-4 text-sm text-muted-foreground">{text}</div>;
-}
-
-function shortId(value: string | undefined): string {
-  if (!value) return '-';
-  if (value.length <= 12) return value;
-  return `${value.slice(0, 8)}...${value.slice(-4)}`;
 }

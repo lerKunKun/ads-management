@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { api, getToken, type Campaign, type DatePreset } from '@/lib/api';
 import { EntityListView } from '@/components/EntityListView';
+import { Button } from '@/components/ui/button';
 
 export const Route = createFileRoute('/ad-accounts_/$id')({
   beforeLoad: () => {
@@ -30,30 +31,31 @@ function AdAccountCampaignsPage() {
 
   return (
     <div className="space-y-4">
-      <div className="text-sm text-muted-foreground">
-        <Link to="/ad-accounts" className="hover:text-foreground">
-          广告账户
-        </Link>
-        {summary.data?.fbAccountId && (
-          <>
-            {' / '}
-            <Link
-              to="/fb-accounts/$id"
-              params={{ id: summary.data.fbAccountId }}
-              className="hover:text-foreground"
-            >
-              广告账户组：{summary.data.fbAccountName}
-            </Link>
-          </>
-        )}
-        {' / '}
-        <span className="text-foreground">{summary.data?.name ?? '加载中'}</span>
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border bg-background p-3">
+        <div>
+          <div className="text-xs text-muted-foreground">当前广告账户</div>
+          <div className="mt-1 font-medium">{summary.data?.name ?? '加载中'}</div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button asChild size="sm" variant="outline">
+            <Link to="/ad-accounts">广告账户列表</Link>
+          </Button>
+          {summary.data?.fbAccountId && (
+            <Button asChild size="sm" variant="outline">
+              <Link to="/fb-accounts/$id" params={{ id: summary.data.fbAccountId }}>
+                广告账户组
+              </Link>
+            </Button>
+          )}
+        </div>
       </div>
 
       <header>
         <h1 className="text-xl font-semibold">{summary.data?.name ?? '广告账户'}</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          {summary.data?.metaActId ?? '-'} / {summary.data?.currency ?? '-'}
+          {summary.data?.metaActId ?? '-'} / 币种 {summary.data?.currency ?? '-'} / 时区{' '}
+          {summary.data?.timezoneName ?? '-'} / 投放国家{' '}
+          {countryLabel(summary.data?.businessCountryCode)}
         </p>
       </header>
 
@@ -81,4 +83,9 @@ function AdAccountCampaignsPage() {
       />
     </div>
   );
+}
+
+function countryLabel(code: string | null | undefined): string {
+  if (!code) return '-';
+  return code.toUpperCase();
 }

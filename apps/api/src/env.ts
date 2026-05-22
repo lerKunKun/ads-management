@@ -31,6 +31,7 @@ export const env = {
 
   metaApiVersion: opt('META_API_VERSION', 'v21.0'),
   metaGraphBase: opt('META_GRAPH_BASE', 'https://graph.facebook.com'),
+  metaAsyncCopyTimeoutMs: Number(opt('META_ASYNC_COPY_TIMEOUT_MS', '1800000')),
   adObjectCacheTtlMs: Number(opt('AD_OBJECT_CACHE_TTL_MS', '30000')),
   adObjectSyncEnabled: opt('AD_OBJECT_SYNC_ENABLED', '0') === '1',
   adObjectSyncIntervalMs: Number(opt('AD_OBJECT_SYNC_INTERVAL_MS', '300000')),

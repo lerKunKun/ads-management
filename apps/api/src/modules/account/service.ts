@@ -184,6 +184,8 @@ export async function bindFbAccount(args: {
             fbAccountId,
             name: a.name,
             currency: a.currency ?? null,
+            timezoneName: a.timezoneName ?? null,
+            businessCountryCode: a.businessCountryCode ?? null,
             status: a.status,
             lastSyncedAt: new Date(),
           })
@@ -195,6 +197,8 @@ export async function bindFbAccount(args: {
           metaActId: a.metaActId,
           name: a.name,
           currency: a.currency ?? null,
+          timezoneName: a.timezoneName ?? null,
+          businessCountryCode: a.businessCountryCode ?? null,
           status: a.status,
           lastSyncedAt: new Date(),
         });
@@ -274,6 +278,8 @@ export async function listAdAccounts(
       metaActId: schema.adAccounts.metaActId,
       name: schema.adAccounts.name,
       currency: schema.adAccounts.currency,
+      timezoneName: schema.adAccounts.timezoneName,
+      businessCountryCode: schema.adAccounts.businessCountryCode,
       status: schema.adAccounts.status,
       lastSyncedAt: schema.adAccounts.lastSyncedAt,
       fbAccountId: schema.adAccounts.fbAccountId,

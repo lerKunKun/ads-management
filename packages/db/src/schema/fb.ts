@@ -50,6 +50,8 @@ export const adAccounts = pgTable(
     metaActId: text('meta_act_id').notNull(),
     name: text('name').notNull(),
     currency: text('currency'),
+    timezoneName: text('timezone_name'),
+    businessCountryCode: text('business_country_code'),
     status: adAccountStatus('status').notNull().default('active'),
     lastSyncedAt: timestamp('last_synced_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

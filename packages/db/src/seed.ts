@@ -1,6 +1,6 @@
 /**
  * 种子: 1 个 company + 平台级 PlatformAdmin + 公司级 CompanyAdmin/Operator/Viewer
- *       + 所有权限 + 1 个 CompanyAdmin 用户。
+ *       + 所有权限 + 1 个 PlatformAdmin/CompanyAdmin 用户。
  *   bun run db:seed
  */
 import { drizzle } from 'drizzle-orm/postgres-js';
@@ -127,6 +127,10 @@ async function main() {
   await db
     .insert(userRoles)
     .values({ userId: user.id, roleId: companyAdmin.id })
+    .onConflictDoNothing();
+  await db
+    .insert(userRoles)
+    .values({ userId: user.id, roleId: platformAdmin.id })
     .onConflictDoNothing();
 
   console.log('[seed] done:');

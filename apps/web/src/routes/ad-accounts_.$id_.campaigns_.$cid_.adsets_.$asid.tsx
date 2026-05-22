@@ -1,8 +1,9 @@
-import { createFileRoute, redirect, Link } from '@tanstack/react-router';
+import { createFileRoute, redirect, Link, useNavigate } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { api, getToken, type Ad, type DatePreset } from '@/lib/api';
 import { EntityListView } from '@/components/EntityListView';
+import { Button } from '@/components/ui/button';
 
 export const Route = createFileRoute(
   '/ad-accounts_/$id_/campaigns_/$cid_/adsets_/$asid',
@@ -15,6 +16,7 @@ export const Route = createFileRoute(
 
 function AdsPage() {
   const { id, cid, asid } = Route.useParams();
+  const navigate = useNavigate();
   const [preset, setPreset] = useState<DatePreset>('last_7d');
 
   const summary = useQuery({
@@ -43,24 +45,65 @@ function AdsPage() {
 
   return (
     <div className="space-y-4">
-      <div className="text-sm text-muted-foreground">
-        <Link to="/ad-accounts" className="hover:text-foreground">
-          广告账户
-        </Link>
-        {' / '}
-        <Link to="/ad-accounts/$id" params={{ id }} className="hover:text-foreground">
-          {summary.data?.name ?? id}
-        </Link>
-        {' / '}
-        <Link
-          to="/ad-accounts/$id/campaigns/$cid"
-          params={{ id, cid }}
-          className="hover:text-foreground"
-        >
-          {campaign?.name ?? cid}
-        </Link>
-        {' / '}
-        <span className="text-foreground">{adset?.name ?? asid}</span>
+      <div className="grid gap-3 rounded-md border bg-background p-3 xl:grid-cols-[1fr_auto]">
+        <div className="grid gap-3 md:grid-cols-3">
+          <label className="space-y-1 text-sm">
+            <span className="text-xs text-muted-foreground">广告账户</span>
+            <div className="h-9 truncate rounded-md border bg-muted px-3 py-2 text-sm">
+              {summary.data?.name ?? id}
+            </div>
+          </label>
+          <label className="space-y-1 text-sm">
+            <span className="text-xs text-muted-foreground">广告系列</span>
+            <select
+              className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+              value={cid}
+              onChange={(event) =>
+                navigate({
+                  to: '/ad-accounts/$id/campaigns/$cid',
+                  params: { id, cid: event.currentTarget.value },
+                })
+              }
+            >
+              {(campaigns.data ?? []).map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="space-y-1 text-sm">
+            <span className="text-xs text-muted-foreground">当前广告组</span>
+            <select
+              className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+              value={asid}
+              onChange={(event) =>
+                navigate({
+                  to: '/ad-accounts/$id/campaigns/$cid/adsets/$asid',
+                  params: { id, cid, asid: event.currentTarget.value },
+                })
+              }
+            >
+              {(adsets.data ?? []).map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <div className="flex flex-wrap items-end gap-2">
+          <Button asChild size="sm" variant="outline">
+            <Link to="/ad-accounts/$id" params={{ id }}>
+              广告系列列表
+            </Link>
+          </Button>
+          <Button asChild size="sm" variant="outline">
+            <Link to="/ad-accounts/$id/campaigns/$cid" params={{ id, cid }}>
+              广告组列表
+            </Link>
+          </Button>
+        </div>
       </div>
 
       <header>

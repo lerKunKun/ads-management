@@ -11,7 +11,7 @@ import {
   ShieldCheck,
   UserRound,
 } from 'lucide-react';
-import { api, getToken, type Me } from '@/lib/api';
+import { api, getToken, setToken, type Me } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
@@ -38,12 +38,23 @@ type GrantChange =
   | { action: 'add'; resourceType: ResourceType; resourceId: string }
   | { action: 'remove'; grantId: string };
 
+type DraftScope = {
+  userId: string;
+  fbAccountIds: string[];
+  adAccountIds: string[];
+};
+
 const BYPASS_ROLES = new Set(['CompanyAdmin', 'PlatformAdmin']);
 
 function IamWorkspacePage() {
   const routeSearch = Route.useSearch();
   const qc = useQueryClient();
   const me = useQuery<Me>({ queryKey: ['me'], queryFn: api.me });
+  const companiesQ = useQuery({
+    queryKey: ['admin', 'companies'],
+    queryFn: api.listCompanies,
+    enabled: me.data?.permissions.includes('iam:manage') ?? false,
+  });
   const usersQ = useQuery({ queryKey: ['admin', 'users'], queryFn: api.listUsers });
   const resourcesQ = useQuery({
     queryKey: ['admin', 'grant-resources'],
@@ -54,6 +65,8 @@ function IamWorkspacePage() {
   const [userSearch, setUserSearch] = useState('');
   const [fbSearch, setFbSearch] = useState('');
   const [adSearch, setAdSearch] = useState('');
+  const [draftScope, setDraftScope] = useState<DraftScope | null>(null);
+  const canSwitchCompany = me.data?.roles.includes('PlatformAdmin') ?? false;
 
   const users = usersQ.data ?? [];
   const selectedUser = useMemo(
@@ -99,17 +112,17 @@ function IamWorkspacePage() {
       qc.invalidateQueries({ queryKey: ['me'] });
     },
   });
+  const switchCompany = useMutation({
+    mutationFn: (companyId: string) => api.switchCompany(companyId),
+    onSuccess: (result) => {
+      setToken(result.token);
+      setSelectedUserId('');
+      qc.clear();
+    },
+  });
 
   const grants = grantsQ.data ?? [];
-  const grantByKey = useMemo(() => {
-    const map = new Map<string, Grant>();
-    for (const grant of grants) {
-      map.set(grantKey(grant.resourceType, grant.resourceId), grant);
-    }
-    return map;
-  }, [grants]);
-
-  const grantedFbIds = useMemo(
+  const savedFbIds = useMemo(
     () =>
       new Set(
         grants
@@ -118,7 +131,7 @@ function IamWorkspacePage() {
       ),
     [grants],
   );
-  const grantedAdIds = useMemo(
+  const savedAdIds = useMemo(
     () =>
       new Set(
         grants
@@ -126,6 +139,33 @@ function IamWorkspacePage() {
           .map((grant) => grant.resourceId),
       ),
     [grants],
+  );
+
+  useEffect(() => {
+    if (!selectedUser) {
+      setDraftScope(null);
+      return;
+    }
+    if (!grantsQ.data) return;
+    setDraftScope({
+      userId: selectedUser.id,
+      fbAccountIds: grantsQ.data
+        .filter((grant) => grant.resourceType === 'fb_account')
+        .map((grant) => grant.resourceId),
+      adAccountIds: grantsQ.data
+        .filter((grant) => grant.resourceType === 'ad_account')
+        .map((grant) => grant.resourceId),
+    });
+  }, [grantsQ.data, selectedUser?.id]);
+
+  const draftReady = !!selectedUser && !!grantsQ.data && draftScope?.userId === selectedUser.id;
+  const draftFbIds = useMemo(
+    () => new Set(draftReady ? draftScope.fbAccountIds : []),
+    [draftReady, draftScope],
+  );
+  const draftAdIds = useMemo(
+    () => new Set(draftReady ? draftScope.adAccountIds : []),
+    [draftReady, draftScope],
   );
 
   const fbAccounts = resourcesQ.data?.fbAccounts ?? [];
@@ -158,10 +198,10 @@ function IamWorkspacePage() {
 
   const scopedAdAccounts = useMemo(
     () =>
-      grantedFbIds.size === 0
+      draftFbIds.size === 0
         ? adAccounts
-        : adAccounts.filter((account) => grantedFbIds.has(account.fbAccountId)),
-    [adAccounts, grantedFbIds],
+        : adAccounts.filter((account) => draftFbIds.has(account.fbAccountId)),
+    [adAccounts, draftFbIds],
   );
 
   const filteredAdAccounts = useMemo(
@@ -179,15 +219,24 @@ function IamWorkspacePage() {
   );
 
   const bypassScope = selectedUser?.roles.some((role) => BYPASS_ROLES.has(role)) ?? false;
-  const busy = grantMutation.isPending;
+  const busy = grantMutation.isPending || grantsQ.isFetching;
+  const draftChangeCount = useMemo(() => {
+    if (!draftReady) return 0;
+    return countSetDiff(savedFbIds, draftFbIds) + countSetDiff(savedAdIds, draftAdIds);
+  }, [draftAdIds, draftFbIds, draftReady, savedAdIds, savedFbIds]);
+  const hasDraftChanges = draftChangeCount > 0;
 
   function toggleResource(resourceType: ResourceType, resourceId: string) {
-    if (!selectedUser || bypassScope || busy) return;
-    const current = grantByKey.get(grantKey(resourceType, resourceId));
-    const ops: GrantChange[] = current
-      ? [{ action: 'remove', grantId: current.id }]
-      : [{ action: 'add', resourceType, resourceId }];
-    grantMutation.mutate({ userId: selectedUser.id, ops });
+    if (!selectedUser || bypassScope || busy || !draftReady) return;
+    updateDraftResource(resourceType, (ids) => {
+      const next = new Set(ids);
+      if (next.has(resourceId)) {
+        next.delete(resourceId);
+      } else {
+        next.add(resourceId);
+      }
+      return Array.from(next);
+    });
   }
 
   function bulkChange(
@@ -195,33 +244,102 @@ function IamWorkspacePage() {
     resourceIds: string[],
     mode: 'select' | 'clear' | 'invert',
   ) {
-    if (!selectedUser || bypassScope || busy) return;
+    if (!selectedUser || bypassScope || busy || !draftReady) return;
+    updateDraftResource(resourceType, (ids) => {
+      const next = new Set(ids);
+      for (const resourceId of resourceIds) {
+        if (mode === 'select') next.add(resourceId);
+        if (mode === 'clear') next.delete(resourceId);
+        if (mode === 'invert') {
+          if (next.has(resourceId)) next.delete(resourceId);
+          else next.add(resourceId);
+        }
+      }
+      return Array.from(next);
+    });
+  }
+
+  function updateDraftResource(
+    resourceType: ResourceType,
+    updater: (ids: string[]) => string[],
+  ) {
+    setDraftScope((current) => {
+      if (!selectedUser || current?.userId !== selectedUser.id) return current;
+      if (resourceType === 'fb_account') {
+        const previousFbIds = new Set(current.fbAccountIds);
+        const nextFbAccountIds = updater(current.fbAccountIds);
+        const nextFbIds = new Set(nextFbAccountIds);
+        const nextAdIds = new Set(current.adAccountIds);
+
+        for (const account of adAccounts) {
+          const wasSelectedGroup = previousFbIds.has(account.fbAccountId);
+          const isSelectedGroup = nextFbIds.has(account.fbAccountId);
+          if (!wasSelectedGroup && isSelectedGroup) nextAdIds.add(account.id);
+          if (wasSelectedGroup && !isSelectedGroup) nextAdIds.delete(account.id);
+        }
+
+        return {
+          ...current,
+          fbAccountIds: nextFbAccountIds,
+          adAccountIds: Array.from(nextAdIds),
+        };
+      }
+      return { ...current, adAccountIds: updater(current.adAccountIds) };
+    });
+  }
+
+  function buildGrantOps(): GrantChange[] {
+    if (!selectedUser || !draftReady) return [];
     const ops: GrantChange[] = [];
-    for (const resourceId of resourceIds) {
-      const current = grantByKey.get(grantKey(resourceType, resourceId));
-      if (mode === 'select' && !current) {
-        ops.push({ action: 'add', resourceType, resourceId });
-      }
-      if (mode === 'clear' && current) {
-        ops.push({ action: 'remove', grantId: current.id });
-      }
-      if (mode === 'invert') {
-        ops.push(
-          current
-            ? { action: 'remove', grantId: current.id }
-            : { action: 'add', resourceType, resourceId },
-        );
+    for (const resourceId of draftFbIds) {
+      if (!savedFbIds.has(resourceId)) {
+        ops.push({ action: 'add', resourceType: 'fb_account', resourceId });
       }
     }
+    for (const resourceId of draftAdIds) {
+      if (!savedAdIds.has(resourceId)) {
+        ops.push({ action: 'add', resourceType: 'ad_account', resourceId });
+      }
+    }
+    for (const grant of grants) {
+      if (grant.resourceType === 'fb_account' && !draftFbIds.has(grant.resourceId)) {
+        ops.push({ action: 'remove', grantId: grant.id });
+      }
+      if (grant.resourceType === 'ad_account' && !draftAdIds.has(grant.resourceId)) {
+        ops.push({ action: 'remove', grantId: grant.id });
+      }
+    }
+    return ops;
+  }
+
+  function saveDraft() {
+    if (!selectedUser || bypassScope || busy || !hasDraftChanges) return;
+    const ops = buildGrantOps();
     if (ops.length > 0) grantMutation.mutate({ userId: selectedUser.id, ops });
+  }
+
+  function cancelDraft() {
+    if (!selectedUser || !grantsQ.data) return;
+    setDraftScope({
+      userId: selectedUser.id,
+      fbAccountIds: Array.from(savedFbIds),
+      adAccountIds: Array.from(savedAdIds),
+    });
+  }
+
+  function selectUser(userId: string) {
+    if (busy || (hasDraftChanges && selectedUser?.id !== userId)) return;
+    setSelectedUserId(userId);
   }
 
   const error =
     (me.error as Error | null)?.message ??
+    (companiesQ.error as Error | null)?.message ??
     (usersQ.error as Error | null)?.message ??
     (resourcesQ.error as Error | null)?.message ??
     (grantsQ.error as Error | null)?.message ??
-    (grantMutation.error as Error | null)?.message;
+    (grantMutation.error as Error | null)?.message ??
+    (switchCompany.error as Error | null)?.message;
 
   return (
     <div className="space-y-4">
@@ -234,17 +352,46 @@ function IamWorkspacePage() {
           </div>
           <h1 className="mt-1 text-xl font-semibold">IAM 权限工作台</h1>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
           <Building2 className="h-4 w-4 text-muted-foreground" />
           <select
             value={me.data?.companyId ?? ''}
-            disabled
-            className="h-9 min-w-72 rounded-md border border-input bg-muted px-3 text-sm"
+            disabled={!canSwitchCompany || switchCompany.isPending || busy || hasDraftChanges}
+            onChange={(event) => switchCompany.mutate(event.currentTarget.value)}
+            className="h-9 min-w-72 rounded-md border border-input bg-background px-3 text-sm disabled:bg-muted"
           >
-            <option value={me.data?.companyId ?? ''}>
-              当前公司 {me.data?.companyId ?? '加载中'}
-            </option>
+            {(companiesQ.data ?? []).length === 0 && (
+              <option value={me.data?.companyId ?? ''}>
+                当前公司 {me.data?.companyName ?? '加载中'}
+              </option>
+            )}
+            {(companiesQ.data ?? []).map((company) => (
+              <option key={company.id} value={company.id}>
+                {company.name} {company.id === me.data?.companyId ? '（当前）' : ''}
+              </option>
+            ))}
           </select>
+          {!canSwitchCompany && (
+            <span className="text-xs text-muted-foreground">仅超管可切换</span>
+          )}
+          {hasDraftChanges && (
+            <span className="text-xs text-amber-600">{draftChangeCount} 项未保存</span>
+          )}
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={!hasDraftChanges || busy}
+            onClick={cancelDraft}
+          >
+            取消
+          </Button>
+          <Button
+            size="sm"
+            disabled={!hasDraftChanges || bypassScope || busy}
+            onClick={saveDraft}
+          >
+            {grantMutation.isPending ? '保存中...' : '确定'}
+          </Button>
         </div>
       </header>
 
@@ -273,9 +420,10 @@ function IamWorkspacePage() {
               <button
                 key={user.id}
                 type="button"
-                onClick={() => setSelectedUserId(user.id)}
+                disabled={busy || (hasDraftChanges && selectedUser?.id !== user.id)}
+                onClick={() => selectUser(user.id)}
                 className={cn(
-                  'w-full rounded-md border p-3 text-left transition-colors',
+                  'w-full rounded-md border p-3 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60',
                   selectedUser?.id === user.id
                     ? 'border-primary bg-primary/5'
                     : 'bg-background hover:bg-muted/50',
@@ -294,9 +442,20 @@ function IamWorkspacePage() {
                         <span className="text-xs text-muted-foreground">未分配角色</span>
                       )}
                     </div>
-                    <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                       <StatusBadge status={user.status} />
-                      <span>作用域 {user.grantsCount}</span>
+                      <span>
+                        已授权广告账户组{' '}
+                        {selectedUser?.id === user.id && draftReady
+                          ? draftFbIds.size
+                          : user.fbAccountGrantCount}
+                      </span>
+                      <span>
+                        广告账户{' '}
+                        {selectedUser?.id === user.id && draftReady
+                          ? draftAdIds.size
+                          : user.adAccountGrantCount}
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -307,7 +466,7 @@ function IamWorkspacePage() {
 
         <Pane
           title="广告账户组"
-          subtitle={`${grantedFbIds.size} / ${fbAccounts.length} 已授权`}
+          subtitle={`${draftFbIds.size} / ${fbAccounts.length} 已选择`}
           actions={
             <SearchInput
               value={fbSearch}
@@ -349,7 +508,7 @@ function IamWorkspacePage() {
               <Button
                 size="sm"
                 variant="outline"
-                disabled={bypassScope || busy || grantedFbIds.size === 0}
+                disabled={bypassScope || busy || draftFbIds.size === 0}
                 onClick={() =>
                   bulkChange(
                     'fb_account',
@@ -372,7 +531,7 @@ function IamWorkspacePage() {
               <FbAccountRow
                 key={account.id}
                 account={account}
-                checked={grantedFbIds.has(account.id)}
+                checked={draftFbIds.has(account.id)}
                 disabled={bypassScope || busy}
                 onToggle={() => toggleResource('fb_account', account.id)}
               />
@@ -381,8 +540,8 @@ function IamWorkspacePage() {
         </Pane>
 
         <Pane
-          title="广告账户作用域"
-          subtitle={`${grantedAdIds.size} / ${adAccounts.length} 已授权`}
+          title="广告账户"
+          subtitle={`${draftAdIds.size} / ${adAccounts.length} 已选择`}
           actions={
             <SearchInput
               value={adSearch}
@@ -395,7 +554,7 @@ function IamWorkspacePage() {
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="text-xs text-muted-foreground">
                 当前显示 {filteredAdAccounts.length} 个
-                {grantedFbIds.size > 0 ? `，受 ${grantedFbIds.size} 个广告账户组过滤` : ''}
+                {draftFbIds.size > 0 ? `，受 ${draftFbIds.size} 个广告账户组过滤` : ''}
               </div>
               <div className="flex gap-2">
                 <Button
@@ -429,7 +588,7 @@ function IamWorkspacePage() {
                 <Button
                   size="sm"
                   variant="outline"
-                  disabled={bypassScope || busy || grantedAdIds.size === 0}
+                  disabled={bypassScope || busy || draftAdIds.size === 0}
                   onClick={() =>
                     bulkChange(
                       'ad_account',
@@ -454,7 +613,7 @@ function IamWorkspacePage() {
                 key={account.id}
                 account={account}
                 fbName={fbNameById.get(account.fbAccountId) ?? '未知广告账户组'}
-                checked={grantedAdIds.has(account.id)}
+                checked={draftAdIds.has(account.id)}
                 disabled={bypassScope || busy}
                 onToggle={() => toggleResource('ad_account', account.id)}
               />
@@ -654,6 +813,13 @@ function EmptyState({ text }: { text: string }) {
   );
 }
 
-function grantKey(resourceType: ResourceType, resourceId: string) {
-  return `${resourceType}:${resourceId}`;
+function countSetDiff(left: Set<string>, right: Set<string>): number {
+  let count = 0;
+  for (const value of left) {
+    if (!right.has(value)) count += 1;
+  }
+  for (const value of right) {
+    if (!left.has(value)) count += 1;
+  }
+  return count;
 }

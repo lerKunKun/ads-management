@@ -31,6 +31,14 @@ export const app = new Elysia()
   .onError(({ code, error, request, set }) => {
     const requestId = ensureRequestId(request, set);
     if (error instanceof HttpError) {
+      console.warn('[api:http-error]', {
+        requestId,
+        method: request.method,
+        path: new URL(request.url).pathname,
+        status: error.status,
+        code: error.bizCode,
+        message: error.message,
+      });
       set.status = error.status;
       return { code: error.bizCode, msg: error.message, data: null, requestId };
     }

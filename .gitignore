@@ -18,6 +18,7 @@ bun.lockb
 # logs
 *.log
 logs/
+.deploy-local/
 
 # IDE
 .vscode/

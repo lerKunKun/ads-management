@@ -16,6 +16,7 @@ import {
   Table,
   TableBody,
   TableCell,
+  TableFooter,
   TableHead,
   TableHeader,
   TableRow,
@@ -54,6 +55,9 @@ export interface EntityListViewProps<T extends EntityRow> {
 type TerminalTaskStatus = 'success' | 'failed' | 'partial' | 'cancelled';
 type TaskStatus = 'pending' | 'running' | TerminalTaskStatus;
 type RowPatch = Partial<Pick<EntityRow, 'status' | 'dailyBudget' | 'lifetimeBudget'>>;
+type SortMetric = 'spend' | 'orders' | 'cpa' | 'cpc' | 'addToCart' | 'initiateCheckout' | 'cpm';
+type SortDirection = 'asc' | 'desc';
+type SortState = { metric: SortMetric; direction: SortDirection };
 type BatchState = {
   action: string;
   params: Record<string, unknown>;
@@ -68,8 +72,31 @@ interface ProgressSnap {
   status: TaskStatus;
 }
 
+interface InsightSummaryTotal {
+  rows: number;
+  hasInsights: boolean;
+  spend: number;
+  impressions: number;
+  clicks: number;
+  orders: number;
+  cpa: number;
+  cpc: number;
+  addToCart: number;
+  initiateCheckout: number;
+  cpm: number;
+}
+
 const TASK_TERMINAL: TerminalTaskStatus[] = ['success', 'failed', 'partial', 'cancelled'];
 const PRESETS: DatePreset[] = ['today', 'yesterday', 'last_7d', 'last_30d', 'maximum'];
+const METRIC_COLUMNS: Array<{ metric: SortMetric; label: string }> = [
+  { metric: 'spend', label: '花费' },
+  { metric: 'orders', label: '订单' },
+  { metric: 'cpa', label: 'CPA' },
+  { metric: 'cpc', label: 'CPC' },
+  { metric: 'addToCart', label: '加购' },
+  { metric: 'initiateCheckout', label: '结账' },
+  { metric: 'cpm', label: 'CPM' },
+];
 
 function isTerminalTaskStatus(status: string): status is TerminalTaskStatus {
   return (TASK_TERMINAL as readonly string[]).includes(status);
@@ -101,6 +128,8 @@ export function EntityListView<T extends EntityRow>({
   const [pendingBatch, setPendingBatch] = useState<BatchState | null>(null);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [sort, setSort] = useState<SortState | null>(null);
+  const [activeFirst, setActiveFirst] = useState(true);
 
   const keySignature = JSON.stringify(invalidateKey);
   useEffect(() => {
@@ -108,21 +137,37 @@ export function EntityListView<T extends EntityRow>({
     setSelected(new Set());
   }, [keySignature]);
 
-  const filteredRows = useMemo(
-    () =>
-      rows
-        .filter(
-          (row) =>
-            matchText(row.name, search) &&
-            (!statusFilter || row.status === statusFilter),
-        )
-        .map((row) => applyPatch(row, rowPatches.get(row.id))),
-    [rows, rowPatches, search, statusFilter],
+  const patchedRows = useMemo(
+    () => rows.map((row) => applyPatch(row, rowPatches.get(row.id))),
+    [rows, rowPatches],
   );
 
-  const pager = usePagination(filteredRows);
+  const filteredRows = useMemo(
+    () =>
+      patchedRows.filter(
+        (row) =>
+          matchText(row.name, search) &&
+          (!statusFilter || row.status === statusFilter),
+      ),
+    [patchedRows, search, statusFilter],
+  );
+
+  const sortedRows = useMemo(
+    () => sortRows(filteredRows, insights, sort, activeFirst),
+    [activeFirst, filteredRows, insights, sort],
+  );
+
+  const pager = usePagination(sortedRows);
   const allIds = useMemo(() => pager.pageItems.map((row) => row.id), [pager.pageItems]);
   const allSelected = allIds.length > 0 && allIds.every((id) => selected.has(id));
+  const summaryRows = useMemo(() => {
+    if (selected.size === 0) return sortedRows;
+    return patchedRows.filter((row) => selected.has(row.id));
+  }, [patchedRows, selected, sortedRows]);
+  const summary = useMemo(
+    () => summarizeInsights(summaryRows, insights),
+    [insights, summaryRows],
+  );
 
   function patchRows(ids: string[], patch: RowPatch) {
     setRowPatches((current) => {
@@ -155,6 +200,14 @@ export function EntityListView<T extends EntityRow>({
     });
   }
 
+  function toggleSort(metric: SortMetric) {
+    setSort((current) => {
+      if (current?.metric !== metric) return { metric, direction: 'desc' };
+      return { metric, direction: current.direction === 'desc' ? 'asc' : 'desc' };
+    });
+    pager.setPage(1);
+  }
+
   const setStatus = useMutation({
     mutationFn: ({ id, status }: { id: string; status: 'ACTIVE' | 'PAUSED' | 'ARCHIVED' }) =>
       api.setStatus(layer, id, adAccountId, status),
@@ -169,11 +222,6 @@ export function EntityListView<T extends EntityRow>({
     onSuccess: (_data, variables) => {
       patchRows([variables.id], { dailyBudget: variables.dailyBudget });
     },
-  });
-
-  const copyMut = useMutation({
-    mutationFn: ({ id, params }: { id: string; params: CopyParams }) =>
-      api.copyEntity(layer, id, adAccountId, params),
   });
 
   const deleteMut = useMutation({
@@ -240,13 +288,6 @@ export function EntityListView<T extends EntityRow>({
 
   function doCopy(params: CopyParams) {
     if (!copyOpen) return;
-    if (copyOpen.ids.length === 1) {
-      copyMut.mutate(
-        { id: copyOpen.ids[0]!, params },
-        { onSuccess: () => setCopyOpen(null) },
-      );
-      return;
-    }
     runBatch(`${layer}:copy`, params as unknown as Record<string, unknown>, copyOpen.ids);
     setCopyOpen(null);
   }
@@ -271,6 +312,18 @@ export function EntityListView<T extends EntityRow>({
           )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <label className="flex h-9 items-center gap-2 rounded-md border border-input bg-background px-2 text-sm">
+            <Switch
+              size="sm"
+              checked={activeFirst}
+              onCheckedChange={(next) => {
+                setActiveFirst(next);
+                pager.setPage(1);
+              }}
+              aria-label="active-first"
+            />
+            <span>启用优先</span>
+          </label>
           <select
             className="h-9 rounded-md border border-input bg-background px-2 text-sm"
             value={datePreset}
@@ -358,35 +411,44 @@ export function EntityListView<T extends EntityRow>({
         }}
       />
 
-      {(error || setStatus.error || setBudgetMut.error || copyMut.error || deleteMut.error || batch.error || trackedTask.error) && (
+      {(error || setStatus.error || setBudgetMut.error || deleteMut.error || batch.error || trackedTask.error) && (
         <p className="text-sm text-destructive">
           {(error as Error)?.message ||
             (setStatus.error as Error)?.message ||
             (setBudgetMut.error as Error)?.message ||
-            (copyMut.error as Error)?.message ||
             (deleteMut.error as Error)?.message ||
             (batch.error as Error)?.message ||
             (trackedTask.error as Error)?.message}
         </p>
       )}
 
-      <div className="overflow-x-auto rounded-md border">
+      <div className="rounded-md border">
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="w-8">
-                <input type="checkbox" checked={allSelected} onChange={toggleAll} />
+              <TableHead className="w-12 px-2 text-center">
+                <label className="flex min-h-10 cursor-pointer items-center justify-center">
+                  <input
+                    type="checkbox"
+                    className="h-5 w-5 cursor-pointer accent-primary"
+                    checked={allSelected}
+                    onChange={toggleAll}
+                    aria-label={`选择全部${layerLabel}`}
+                  />
+                </label>
               </TableHead>
               <TableHead className="w-12" />
               <TableHead>名称</TableHead>
               {enableBudget && <TableHead>日预算</TableHead>}
-              <TableHead className="text-right">花费</TableHead>
-              <TableHead className="text-right">订单</TableHead>
-              <TableHead className="text-right">CPA</TableHead>
-              <TableHead className="text-right">CPC</TableHead>
-              <TableHead className="text-right">加购</TableHead>
-              <TableHead className="text-right">结账</TableHead>
-              <TableHead className="text-right">CPM</TableHead>
+              {METRIC_COLUMNS.map((column) => (
+                <SortableMetricHead
+                  key={column.metric}
+                  metric={column.metric}
+                  label={column.label}
+                  sort={sort}
+                  onSort={toggleSort}
+                />
+              ))}
               <TableHead className="text-right">操作</TableHead>
             </TableRow>
           </TableHeader>
@@ -407,8 +469,16 @@ export function EntityListView<T extends EntityRow>({
               const drill = drillTo?.(row);
               return (
                 <TableRow key={row.id} className={isSelected ? 'bg-muted/30' : ''}>
-                  <TableCell>
-                    <input type="checkbox" checked={isSelected} onChange={() => toggle(row.id)} />
+                  <TableCell className="w-12 px-2 text-center">
+                    <label className="flex min-h-10 cursor-pointer items-center justify-center">
+                      <input
+                        type="checkbox"
+                        className="h-5 w-5 cursor-pointer accent-primary"
+                        checked={isSelected}
+                        onChange={() => toggle(row.id)}
+                        aria-label={`选择${row.name}`}
+                      />
+                    </label>
                   </TableCell>
                   <TableCell>
                     <Switch
@@ -482,7 +552,7 @@ export function EntityListView<T extends EntityRow>({
                     <Button
                       size="sm"
                       variant="outline"
-                      disabled={archived || copyMut.isPending}
+                      disabled={archived || batch.isPending}
                       onClick={() => singleCopyClicked(row)}
                     >
                       复制
@@ -503,11 +573,19 @@ export function EntityListView<T extends EntityRow>({
               );
             })}
           </TableBody>
+          <TableFooter>
+            <SummaryRow
+              mode={selected.size > 0 ? 'selected' : 'all'}
+              summary={summary}
+              currency={currency ?? null}
+              enableBudget={enableBudget}
+            />
+          </TableFooter>
         </Table>
         <Pagination
           page={pager.page}
           pageCount={pager.pageCount}
-          total={filteredRows.length}
+          total={sortedRows.length}
           onPageChange={pager.setPage}
         />
       </div>
@@ -548,7 +626,7 @@ export function EntityListView<T extends EntityRow>({
         {...(copyOpen?.hint ? { hint: copyOpen.hint } : {})}
         onCancel={() => setCopyOpen(null)}
         onSubmit={doCopy}
-        submitting={copyMut.isPending || batch.isPending}
+        submitting={batch.isPending}
       />
 
       <TaskProgress
@@ -684,8 +762,181 @@ function EmptyTableRow({ colSpan, text }: { colSpan: number; text: string }) {
   );
 }
 
+function SortableMetricHead({
+  metric,
+  label,
+  sort,
+  onSort,
+}: {
+  metric: SortMetric;
+  label: string;
+  sort: SortState | null;
+  onSort: (metric: SortMetric) => void;
+}) {
+  const active = sort?.metric === metric;
+  return (
+    <TableHead className="text-right">
+      <button
+        type="button"
+        className="inline-flex items-center gap-1 text-right hover:text-primary"
+        onClick={() => onSort(metric)}
+      >
+        <span>{label}</span>
+        <span className="w-3 text-xs text-muted-foreground">
+          {active ? (sort.direction === 'asc' ? '↑' : '↓') : '↕'}
+        </span>
+      </button>
+    </TableHead>
+  );
+}
+
+const SUMMARY_CELL_CLASS = 'sticky bottom-0 z-20 bg-[#73BEFF]/50';
+
+function SummaryRow({
+  mode,
+  summary,
+  currency,
+  enableBudget,
+}: {
+  mode: 'selected' | 'all';
+  summary: InsightSummaryTotal;
+  currency: string | null;
+  enableBudget?: boolean;
+}) {
+  const label = mode === 'selected' ? `已选 ${summary.rows} 项` : `全部 ${summary.rows} 项`;
+  return (
+    <TableRow className="border-t hover:bg-[#73BEFF]/50">
+      <TableCell className={`${SUMMARY_CELL_CLASS} w-12 px-2`} />
+      <TableCell className={`${SUMMARY_CELL_CLASS} w-12`} />
+      <TableCell className={`${SUMMARY_CELL_CLASS} font-semibold`}>
+        汇总（{label}）
+      </TableCell>
+      {enableBudget && <TableCell className={SUMMARY_CELL_CLASS} />}
+      <TableCell className={`${SUMMARY_CELL_CLASS} text-right tabular-nums`}>
+        {fmtSummaryMoney(summary.spend, currency, summary.hasInsights)}
+      </TableCell>
+      <TableCell className={`${SUMMARY_CELL_CLASS} text-right tabular-nums`}>
+        {fmtSummaryNumber(summary.orders, summary.hasInsights)}
+      </TableCell>
+      <TableCell className={`${SUMMARY_CELL_CLASS} text-right tabular-nums`}>
+        {fmtSummaryMoney(summary.cpa, currency, summary.hasInsights && summary.orders > 0)}
+      </TableCell>
+      <TableCell className={`${SUMMARY_CELL_CLASS} text-right tabular-nums`}>
+        {fmtSummaryDecimal(summary.cpc, summary.hasInsights && summary.clicks > 0)}
+      </TableCell>
+      <TableCell className={`${SUMMARY_CELL_CLASS} text-right tabular-nums`}>
+        {fmtSummaryNumber(summary.addToCart, summary.hasInsights)}
+      </TableCell>
+      <TableCell className={`${SUMMARY_CELL_CLASS} text-right tabular-nums`}>
+        {fmtSummaryNumber(summary.initiateCheckout, summary.hasInsights)}
+      </TableCell>
+      <TableCell className={`${SUMMARY_CELL_CLASS} text-right tabular-nums`}>
+        {fmtSummaryDecimal(summary.cpm, summary.hasInsights && summary.impressions > 0)}
+      </TableCell>
+      <TableCell className={`${SUMMARY_CELL_CLASS} text-right`} />
+    </TableRow>
+  );
+}
+
 function applyPatch<T extends EntityRow>(row: T, patch: RowPatch | undefined): T {
   return patch ? ({ ...row, ...patch } as T) : row;
+}
+
+function sortRows<T extends EntityRow>(
+  rows: T[],
+  insights: Record<string, InsightsSummary> | undefined,
+  sort: SortState | null,
+  activeFirst: boolean,
+): T[] {
+  return rows
+    .map((row, index) => ({ row, index }))
+    .sort((a, b) => {
+      if (activeFirst) {
+        const activeDiff = activeRank(a.row.status) - activeRank(b.row.status);
+        if (activeDiff !== 0) return activeDiff;
+      }
+      if (sort) {
+        const diff = compareMetric(a.row, b.row, insights, sort.metric, sort.direction);
+        if (diff !== 0) return diff;
+      }
+      return a.index - b.index;
+    })
+    .map((item) => item.row);
+}
+
+function activeRank(status: EntityRow['status']): number {
+  if (status === 'ACTIVE') return 0;
+  if (status === 'PAUSED') return 1;
+  return 2;
+}
+
+function compareMetric(
+  a: EntityRow,
+  b: EntityRow,
+  insights: Record<string, InsightsSummary> | undefined,
+  metric: SortMetric,
+  direction: SortDirection,
+): number {
+  const ai = insights?.[a.id];
+  const bi = insights?.[b.id];
+  if (!ai && !bi) return 0;
+  if (!ai) return 1;
+  if (!bi) return -1;
+  const diff = metricValue(ai, metric) - metricValue(bi, metric);
+  return direction === 'asc' ? diff : -diff;
+}
+
+function metricValue(insight: InsightsSummary, metric: SortMetric): number {
+  return insight[metric];
+}
+
+function summarizeInsights<T extends EntityRow>(
+  rows: T[],
+  insights: Record<string, InsightsSummary> | undefined,
+): InsightSummaryTotal {
+  const total: InsightSummaryTotal = {
+    rows: rows.length,
+    hasInsights: false,
+    spend: 0,
+    impressions: 0,
+    clicks: 0,
+    orders: 0,
+    cpa: 0,
+    cpc: 0,
+    addToCart: 0,
+    initiateCheckout: 0,
+    cpm: 0,
+  };
+  for (const row of rows) {
+    const insight = insights?.[row.id];
+    if (!insight) continue;
+    total.hasInsights = true;
+    total.spend += insight.spend;
+    total.impressions += insight.impressions;
+    total.clicks += insight.clicks;
+    total.orders += insight.orders;
+    total.addToCart += insight.addToCart;
+    total.initiateCheckout += insight.initiateCheckout;
+  }
+  total.cpa = total.orders > 0 ? total.spend / total.orders : 0;
+  total.cpc = total.clicks > 0 ? total.spend / total.clicks : 0;
+  total.cpm = total.impressions > 0 ? (total.spend / total.impressions) * 1000 : 0;
+  return total;
+}
+
+function fmtSummaryMoney(value: number, currency: string | null, show: boolean): string {
+  if (!show) return '-';
+  return `${value.toFixed(2)}${currency ? ` ${currency}` : ''}`;
+}
+
+function fmtSummaryNumber(value: number, show: boolean): string {
+  if (!show) return '-';
+  return String(Math.round(value));
+}
+
+function fmtSummaryDecimal(value: number, show: boolean): string {
+  if (!show) return '-';
+  return value.toFixed(2);
 }
 
 function applyBatchPatch(

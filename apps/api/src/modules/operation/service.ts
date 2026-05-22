@@ -16,6 +16,7 @@ import {
   type DatePreset,
   type MetaObjectOwnership,
 } from '../../lib/meta-client';
+import { FAKE_MODE, fakeMeta } from '../../lib/fake-meta-state';
 import { writeAudit } from '../iam/auth-service';
 import { resolveAdAccount, markTokenInvalid } from '../account/token-service';
 import { checkScope } from '../../middleware/auth';
@@ -29,6 +30,7 @@ import {
   readFreshAds,
   readFreshAdSets,
   readFreshCampaigns,
+  readLocalObjectOwnership,
   upsertAdSetSnapshots,
   upsertAdSnapshots,
   upsertCampaignSnapshots,
@@ -46,26 +48,52 @@ function assertScope(principal: AuthPrincipal, adAccountId: string) {
 async function assertTargetOwnership(
   principal: AuthPrincipal,
   ctx: { token: string; metaActId: string; fbAccountId: string },
+  adAccountId: string,
   targetType: 'campaign' | 'adset' | 'ad',
   targetId: string,
   parents: { campaignId?: string; adsetId?: string } = {},
 ): Promise<MetaObjectOwnership> {
+  if (FAKE_MODE) {
+    const owner = await readLocalObjectOwnership({
+      companyId: principal.companyId,
+      adAccountId,
+      targetType,
+      targetId,
+    });
+    if (!owner) throw NotFound(`${targetType} not found in local snapshot`);
+    return validateOwnership(
+      { ...owner, actId: ctx.metaActId },
+      ctx.metaActId,
+      targetType,
+      parents,
+    );
+  }
+
   try {
     const owner = await meta.getObjectOwnership(ctx.token, targetType, targetId);
-    if (owner.actId !== ctx.metaActId) {
-      throw Forbidden(`${targetType} not in ad_account`);
-    }
-    if (parents.campaignId && owner.campaignId !== parents.campaignId) {
-      throw Forbidden(`${targetType} not in campaign`);
-    }
-    if (parents.adsetId && owner.adsetId !== parents.adsetId) {
-      throw Forbidden(`${targetType} not in adset`);
-    }
-    return owner;
+    return validateOwnership(owner, ctx.metaActId, targetType, parents);
   } catch (err) {
     await handleMetaError(err, principal.companyId, ctx.fbAccountId);
     throw err;
   }
+}
+
+function validateOwnership(
+  owner: MetaObjectOwnership,
+  metaActId: string,
+  targetType: 'campaign' | 'adset' | 'ad',
+  parents: { campaignId?: string; adsetId?: string },
+): MetaObjectOwnership {
+  if (owner.actId !== metaActId) {
+    throw Forbidden(`${targetType} not in ad_account`);
+  }
+  if (parents.campaignId && owner.campaignId !== parents.campaignId) {
+    throw Forbidden(`${targetType} not in campaign`);
+  }
+  if (parents.adsetId && owner.adsetId !== parents.adsetId) {
+    throw Forbidden(`${targetType} not in adset`);
+  }
+  return owner;
 }
 
 // =================== Campaign list / 单操作 ===================
@@ -93,17 +121,19 @@ export async function setCampaignStatus(
 ): Promise<void> {
   assertScope(principal, args.adAccountId);
   const ctx = await resolveAdAccount(principal.companyId, args.adAccountId);
-  const owner = await assertTargetOwnership(principal, ctx, 'campaign', args.campaignId);
-  try {
-    await metaProvider.setStatus(ctx.token, {
-      adAccountId: ctx.metaActId,
-      targetId: args.campaignId,
-      targetType: 'campaign',
-      status: args.status,
-    });
-  } catch (err) {
-    await handleMetaError(err, principal.companyId, ctx.fbAccountId);
-    throw err;
+  const owner = await assertTargetOwnership(principal, ctx, args.adAccountId, 'campaign', args.campaignId);
+  if (!FAKE_MODE) {
+    try {
+      await metaProvider.setStatus(ctx.token, {
+        adAccountId: ctx.metaActId,
+        targetId: args.campaignId,
+        targetType: 'campaign',
+        status: args.status,
+      });
+    } catch (err) {
+      await handleMetaError(err, principal.companyId, ctx.fbAccountId);
+      throw err;
+    }
   }
   await writeLocalBestEffort('campaign:status', () => markLocalStatus({
     companyId: principal.companyId,
@@ -141,18 +171,20 @@ export async function setCampaignBudget(
     throw new HttpError(422, 422, 'dailyBudget 与 lifetimeBudget 二选一');
   }
   const ctx = await resolveAdAccount(principal.companyId, args.adAccountId);
-  const owner = await assertTargetOwnership(principal, ctx, 'campaign', args.campaignId);
-  try {
-    await metaProvider.setBudget(ctx.token, {
-      adAccountId: ctx.metaActId,
-      targetId: args.campaignId,
-      targetType: 'campaign',
-      ...(args.dailyBudget !== undefined ? { dailyBudget: args.dailyBudget } : {}),
-      ...(args.lifetimeBudget !== undefined ? { lifetimeBudget: args.lifetimeBudget } : {}),
-    });
-  } catch (err) {
-    await handleMetaError(err, principal.companyId, ctx.fbAccountId);
-    throw err;
+  const owner = await assertTargetOwnership(principal, ctx, args.adAccountId, 'campaign', args.campaignId);
+  if (!FAKE_MODE) {
+    try {
+      await metaProvider.setBudget(ctx.token, {
+        adAccountId: ctx.metaActId,
+        targetId: args.campaignId,
+        targetType: 'campaign',
+        ...(args.dailyBudget !== undefined ? { dailyBudget: args.dailyBudget } : {}),
+        ...(args.lifetimeBudget !== undefined ? { lifetimeBudget: args.lifetimeBudget } : {}),
+      });
+    } catch (err) {
+      await handleMetaError(err, principal.companyId, ctx.fbAccountId);
+      throw err;
+    }
   }
   await writeLocalBestEffort('campaign:budget', () => markLocalBudget({
     companyId: principal.companyId,
@@ -188,7 +220,7 @@ export async function listAdSets(
   const cached = await readFreshAdSets(principal.companyId, adAccountId, campaignId);
   if (cached) return cached;
   const ctx = await resolveAdAccount(principal.companyId, adAccountId);
-  await assertTargetOwnership(principal, ctx, 'campaign', campaignId);
+  await assertTargetOwnership(principal, ctx, adAccountId, 'campaign', campaignId);
   try {
     const rows = await meta.listAdSets(ctx.token, campaignId);
     await upsertAdSetSnapshots(principal.companyId, adAccountId, campaignId, rows);
@@ -205,17 +237,19 @@ export async function setAdSetStatus(
 ): Promise<void> {
   assertScope(principal, args.adAccountId);
   const ctx = await resolveAdAccount(principal.companyId, args.adAccountId);
-  const owner = await assertTargetOwnership(principal, ctx, 'adset', args.adsetId);
-  try {
-    await metaProvider.setStatus(ctx.token, {
-      adAccountId: ctx.metaActId,
-      targetId: args.adsetId,
-      targetType: 'adset',
-      status: args.status,
-    });
-  } catch (err) {
-    await handleMetaError(err, principal.companyId, ctx.fbAccountId);
-    throw err;
+  const owner = await assertTargetOwnership(principal, ctx, args.adAccountId, 'adset', args.adsetId);
+  if (!FAKE_MODE) {
+    try {
+      await metaProvider.setStatus(ctx.token, {
+        adAccountId: ctx.metaActId,
+        targetId: args.adsetId,
+        targetType: 'adset',
+        status: args.status,
+      });
+    } catch (err) {
+      await handleMetaError(err, principal.companyId, ctx.fbAccountId);
+      throw err;
+    }
   }
   await writeLocalBestEffort('adset:status', () => markLocalStatus({
     companyId: principal.companyId,
@@ -253,18 +287,20 @@ export async function setAdSetBudget(
     throw new HttpError(422, 422, 'dailyBudget 与 lifetimeBudget 二选一');
   }
   const ctx = await resolveAdAccount(principal.companyId, args.adAccountId);
-  const owner = await assertTargetOwnership(principal, ctx, 'adset', args.adsetId);
-  try {
-    await metaProvider.setBudget(ctx.token, {
-      adAccountId: ctx.metaActId,
-      targetId: args.adsetId,
-      targetType: 'adset',
-      ...(args.dailyBudget !== undefined ? { dailyBudget: args.dailyBudget } : {}),
-      ...(args.lifetimeBudget !== undefined ? { lifetimeBudget: args.lifetimeBudget } : {}),
-    });
-  } catch (err) {
-    await handleMetaError(err, principal.companyId, ctx.fbAccountId);
-    throw err;
+  const owner = await assertTargetOwnership(principal, ctx, args.adAccountId, 'adset', args.adsetId);
+  if (!FAKE_MODE) {
+    try {
+      await metaProvider.setBudget(ctx.token, {
+        adAccountId: ctx.metaActId,
+        targetId: args.adsetId,
+        targetType: 'adset',
+        ...(args.dailyBudget !== undefined ? { dailyBudget: args.dailyBudget } : {}),
+        ...(args.lifetimeBudget !== undefined ? { lifetimeBudget: args.lifetimeBudget } : {}),
+      });
+    } catch (err) {
+      await handleMetaError(err, principal.companyId, ctx.fbAccountId);
+      throw err;
+    }
   }
   await writeLocalBestEffort('adset:budget', () => markLocalBudget({
     companyId: principal.companyId,
@@ -299,7 +335,7 @@ export async function listAds(
   const cached = await readFreshAds(principal.companyId, adAccountId, adsetId);
   if (cached) return cached;
   const ctx = await resolveAdAccount(principal.companyId, adAccountId);
-  await assertTargetOwnership(principal, ctx, 'adset', adsetId);
+  await assertTargetOwnership(principal, ctx, adAccountId, 'adset', adsetId);
   try {
     const rows = await meta.listAds(ctx.token, adsetId);
     await upsertAdSnapshots(principal.companyId, adAccountId, adsetId, rows);
@@ -316,17 +352,19 @@ export async function setAdStatus(
 ): Promise<void> {
   assertScope(principal, args.adAccountId);
   const ctx = await resolveAdAccount(principal.companyId, args.adAccountId);
-  const owner = await assertTargetOwnership(principal, ctx, 'ad', args.adId);
-  try {
-    await metaProvider.setStatus(ctx.token, {
-      adAccountId: ctx.metaActId,
-      targetId: args.adId,
-      targetType: 'ad',
-      status: args.status,
-    });
-  } catch (err) {
-    await handleMetaError(err, principal.companyId, ctx.fbAccountId);
-    throw err;
+  const owner = await assertTargetOwnership(principal, ctx, args.adAccountId, 'ad', args.adId);
+  if (!FAKE_MODE) {
+    try {
+      await metaProvider.setStatus(ctx.token, {
+        adAccountId: ctx.metaActId,
+        targetId: args.adId,
+        targetType: 'ad',
+        status: args.status,
+      });
+    } catch (err) {
+      await handleMetaError(err, principal.companyId, ctx.fbAccountId);
+      throw err;
+    }
   }
   await writeLocalBestEffort('ad:status', () => markLocalStatus({
     companyId: principal.companyId,
@@ -369,7 +407,7 @@ export async function copyEntity(
   assertScope(principal, args.adAccountId);
   const count = Math.max(1, args.count ?? 1);
   const ctx = await resolveAdAccount(principal.companyId, args.adAccountId);
-  const owner = await assertTargetOwnership(principal, ctx, args.targetType, args.sourceId);
+  const owner = await assertTargetOwnership(principal, ctx, args.adAccountId, args.targetType, args.sourceId);
   const out: string[] = [];
   for (let i = 0; i < count; i++) {
     const renameForThis: RenameOptions | undefined = args.renameOptions
@@ -386,7 +424,9 @@ export async function copyEntity(
       ...(renameForThis ? { renameOptions: renameForThis } : {}),
     };
     try {
-      const r = await metaProvider.copy(ctx.token, input);
+      const r = FAKE_MODE
+        ? { newId: localCopyId(args.targetType, args.sourceId, i) }
+        : await metaProvider.copy(ctx.token, input);
       out.push(r.newId);
       await writeLocalBestEffort(`${args.targetType}:copy`, () => upsertLocalCopyPlaceholder({
         companyId: principal.companyId,
@@ -395,6 +435,7 @@ export async function copyEntity(
         sourceId: args.sourceId,
         newId: r.newId,
         owner,
+        ...(renameForThis ? { renameOptions: renameForThis } : {}),
       }));
     } catch (err) {
       await handleMetaError(err, principal.companyId, ctx.fbAccountId);
@@ -427,6 +468,11 @@ function withIndexedSuffix(opts: RenameOptions, idx: number | undefined): Rename
   return out;
 }
 
+function localCopyId(targetType: 'campaign' | 'adset' | 'ad', sourceId: string, index: number): string {
+  const safeSource = sourceId.replace(/[^a-zA-Z0-9_]/g, '_').slice(-48);
+  return `local_${targetType}_copy_${safeSource}_${Date.now()}_${index + 1}`;
+}
+
 export async function deleteEntity(
   principal: AuthPrincipal,
   args: {
@@ -439,17 +485,19 @@ export async function deleteEntity(
 ): Promise<void> {
   assertScope(principal, args.adAccountId);
   const ctx = await resolveAdAccount(principal.companyId, args.adAccountId);
-  const owner = await assertTargetOwnership(principal, ctx, args.targetType, args.targetId);
-  try {
-    await metaProvider.remove(ctx.token, {
-      adAccountId: ctx.metaActId,
-      targetId: args.targetId,
-      targetType: args.targetType,
-      hard: args.hard === true,
-    });
-  } catch (err) {
-    await handleMetaError(err, principal.companyId, ctx.fbAccountId);
-    throw err;
+  const owner = await assertTargetOwnership(principal, ctx, args.adAccountId, args.targetType, args.targetId);
+  if (!FAKE_MODE) {
+    try {
+      await metaProvider.remove(ctx.token, {
+        adAccountId: ctx.metaActId,
+        targetId: args.targetId,
+        targetType: args.targetType,
+        hard: args.hard === true,
+      });
+    } catch (err) {
+      await handleMetaError(err, principal.companyId, ctx.fbAccountId);
+      throw err;
+    }
   }
   await writeLocalBestEffort(`${args.targetType}:delete`, () => markLocalDeleted({
     companyId: principal.companyId,
@@ -477,6 +525,8 @@ export async function getInsightsByLevel(
   datePreset: DatePreset,
 ): Promise<Record<string, InsightsSummary>> {
   assertScope(principal, adAccountId);
+  const localMock = await resolveLocalMockAdAccount(principal.companyId, adAccountId);
+  if (localMock) return fakeMeta.getInsightsByChild(localMock, level, datePreset);
   const ctx = await resolveAdAccount(principal.companyId, adAccountId);
   try {
     return await meta.getInsightsByChild(ctx.token, ctx.metaActId, level, datePreset);
@@ -484,6 +534,28 @@ export async function getInsightsByLevel(
     await handleMetaError(err, principal.companyId, ctx.fbAccountId);
     throw err;
   }
+}
+
+async function resolveLocalMockAdAccount(
+  companyId: string,
+  adAccountId: string,
+): Promise<string | null> {
+  if (FAKE_MODE) return null;
+  return db.transaction(async (tx) => {
+    await tx.execute(dsql`SELECT set_config('app.current_company_id', ${companyId}, true)`);
+    const rows = await tx
+      .select({ metaActId: schema.adAccounts.metaActId })
+      .from(schema.adAccounts)
+      .where(
+        and(
+          eq(schema.adAccounts.id, adAccountId),
+          eq(schema.adAccounts.companyId, companyId),
+        ),
+      )
+      .limit(1);
+    const metaActId = rows[0]?.metaActId;
+    return metaActId?.startsWith('act_mock_') ? metaActId : null;
+  });
 }
 
 // =================== 工具 ===================
@@ -505,6 +577,10 @@ async function handleMetaError(
 }
 
 async function writeLocalBestEffort(label: string, fn: () => Promise<void>): Promise<void> {
+  if (FAKE_MODE) {
+    await fn();
+    return;
+  }
   try {
     await fn();
   } catch (err) {
@@ -520,6 +596,8 @@ export async function getAdAccountSummary(
   metaActId: string;
   name: string;
   currency: string | null;
+  timezoneName: string | null;
+  businessCountryCode: string | null;
   status: string;
   fbAccountId: string;
   fbAccountName: string;
@@ -533,6 +611,8 @@ export async function getAdAccountSummary(
         metaActId: schema.adAccounts.metaActId,
         name: schema.adAccounts.name,
         currency: schema.adAccounts.currency,
+        timezoneName: schema.adAccounts.timezoneName,
+        businessCountryCode: schema.adAccounts.businessCountryCode,
         status: schema.adAccounts.status,
         fbAccountId: schema.adAccounts.fbAccountId,
         fbAccountName: schema.fbAccounts.name,

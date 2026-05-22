@@ -8,6 +8,7 @@ import type {
   MetaAdSet,
   MetaCampaign,
   MetaObjectOwnership,
+  RenameOptions,
 } from '../../lib/meta-client';
 
 type ObjectType = 'campaign' | 'adset' | 'ad';
@@ -16,13 +17,19 @@ type SyncObjectType = ObjectType;
 const CACHE_TTL_MS = Number.isFinite(env.adObjectCacheTtlMs)
   ? env.adObjectCacheTtlMs
   : 30_000;
+const LOCAL_SNAPSHOT_FALLBACK =
+  process.env['META_FAKE'] === '1' || env.nodeEnv !== 'production';
 
 export async function readFreshCampaigns(
   companyId: string,
   adAccountId: string,
 ): Promise<MetaCampaign[] | null> {
-  if (!(await hasFreshSync(companyId, adAccountId, 'campaign', ''))) return null;
-  return listLocalCampaigns(companyId, adAccountId);
+  const fresh = await hasFreshSync(companyId, adAccountId, 'campaign', '');
+  if (fresh || LOCAL_SNAPSHOT_FALLBACK) {
+    const rows = await listLocalCampaigns(companyId, adAccountId);
+    if (rows.length > 0 || fresh) return rows;
+  }
+  return null;
 }
 
 export async function readFreshAdSets(
@@ -30,8 +37,12 @@ export async function readFreshAdSets(
   adAccountId: string,
   campaignId: string,
 ): Promise<MetaAdSet[] | null> {
-  if (!(await hasFreshSync(companyId, adAccountId, 'adset', campaignId))) return null;
-  return listLocalAdSets(companyId, adAccountId, campaignId);
+  const fresh = await hasFreshSync(companyId, adAccountId, 'adset', campaignId);
+  if (fresh || LOCAL_SNAPSHOT_FALLBACK) {
+    const rows = await listLocalAdSets(companyId, adAccountId, campaignId);
+    if (rows.length > 0 || fresh) return rows;
+  }
+  return null;
 }
 
 export async function readFreshAds(
@@ -39,8 +50,12 @@ export async function readFreshAds(
   adAccountId: string,
   adsetId: string,
 ): Promise<MetaAd[] | null> {
-  if (!(await hasFreshSync(companyId, adAccountId, 'ad', adsetId))) return null;
-  return listLocalAds(companyId, adAccountId, adsetId);
+  const fresh = await hasFreshSync(companyId, adAccountId, 'ad', adsetId);
+  if (fresh || LOCAL_SNAPSHOT_FALLBACK) {
+    const rows = await listLocalAds(companyId, adAccountId, adsetId);
+    if (rows.length > 0 || fresh) return rows;
+  }
+  return null;
 }
 
 export async function upsertCampaignSnapshots(
@@ -205,6 +220,64 @@ export async function upsertAdSnapshots(
         });
     }
     await markSyncSuccessTx(tx, companyId, adAccountId, 'ad', adsetId, now);
+  });
+}
+
+export async function readLocalObjectOwnership(args: {
+  companyId: string;
+  adAccountId: string;
+  targetType: ObjectType;
+  targetId: string;
+}): Promise<MetaObjectOwnership | null> {
+  return db.transaction(async (tx) => {
+    await setTenant(tx, args.companyId);
+    if (args.targetType === 'campaign') {
+      const rows = await tx
+        .select({ id: schema.adCampaigns.metaId })
+        .from(schema.adCampaigns)
+        .where(
+          and(
+            eq(schema.adCampaigns.companyId, args.companyId),
+            eq(schema.adCampaigns.adAccountId, args.adAccountId),
+            eq(schema.adCampaigns.metaId, args.targetId),
+          ),
+        )
+        .limit(1);
+      return rows[0] ? {} : null;
+    }
+    if (args.targetType === 'adset') {
+      const rows = await tx
+        .select({ campaignId: schema.adSetObjects.campaignMetaId })
+        .from(schema.adSetObjects)
+        .where(
+          and(
+            eq(schema.adSetObjects.companyId, args.companyId),
+            eq(schema.adSetObjects.adAccountId, args.adAccountId),
+            eq(schema.adSetObjects.metaId, args.targetId),
+          ),
+        )
+        .limit(1);
+      return rows[0] ? { campaignId: rows[0].campaignId } : null;
+    }
+    const rows = await tx
+      .select({
+        campaignId: schema.adObjects.campaignMetaId,
+        adsetId: schema.adObjects.adsetMetaId,
+      })
+      .from(schema.adObjects)
+      .where(
+        and(
+          eq(schema.adObjects.companyId, args.companyId),
+          eq(schema.adObjects.adAccountId, args.adAccountId),
+          eq(schema.adObjects.metaId, args.targetId),
+        ),
+      )
+      .limit(1);
+    if (!rows[0]) return null;
+    return {
+      ...(rows[0].campaignId ? { campaignId: rows[0].campaignId } : {}),
+      adsetId: rows[0].adsetId,
+    };
   });
 }
 
@@ -411,7 +484,10 @@ export async function upsertLocalCopyPlaceholder(args: {
   sourceId: string;
   newId: string;
   owner?: MetaObjectOwnership;
+  renameOptions?: RenameOptions;
 }): Promise<void> {
+  const cloned = await cloneLocalObject(args);
+  if (cloned) return;
   await markLocalStatus({
     companyId: args.companyId,
     adAccountId: args.adAccountId,
@@ -420,6 +496,176 @@ export async function upsertLocalCopyPlaceholder(args: {
     status: 'PAUSED',
     owner: args.owner,
   });
+}
+
+async function cloneLocalObject(args: {
+  companyId: string;
+  adAccountId: string;
+  targetType: ObjectType;
+  sourceId: string;
+  newId: string;
+  owner?: MetaObjectOwnership;
+  renameOptions?: RenameOptions;
+}): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    await setTenant(tx, args.companyId);
+    const now = new Date();
+    if (args.targetType === 'campaign') {
+      const rows = await tx
+        .select()
+        .from(schema.adCampaigns)
+        .where(
+          and(
+            eq(schema.adCampaigns.companyId, args.companyId),
+            eq(schema.adCampaigns.adAccountId, args.adAccountId),
+            eq(schema.adCampaigns.metaId, args.sourceId),
+          ),
+        )
+        .limit(1);
+      const row = rows[0];
+      if (!row) return false;
+      await tx
+        .insert(schema.adCampaigns)
+        .values({
+          companyId: args.companyId,
+          adAccountId: args.adAccountId,
+          metaId: args.newId,
+          name: applyLocalRename(row.name, args.renameOptions),
+          status: 'PAUSED',
+          effectiveStatus: 'PAUSED',
+          objective: row.objective,
+          dailyBudget: row.dailyBudget,
+          lifetimeBudget: row.lifetimeBudget,
+          startTime: row.startTime,
+          stopTime: row.stopTime,
+          metaCreatedTime: row.metaCreatedTime,
+          metaUpdatedTime: now,
+          lastSyncedAt: now,
+          syncHash: null,
+          updatedAt: now,
+        })
+        .onConflictDoUpdate({
+          target: [schema.adCampaigns.companyId, schema.adCampaigns.metaId],
+          set: {
+            name: dsql`excluded.name`,
+            status: dsql`excluded.status`,
+            effectiveStatus: dsql`excluded.effective_status`,
+            dailyBudget: dsql`excluded.daily_budget`,
+            lifetimeBudget: dsql`excluded.lifetime_budget`,
+            metaUpdatedTime: now,
+            lastSyncedAt: now,
+            updatedAt: now,
+          },
+        });
+      return true;
+    }
+
+    if (args.targetType === 'adset') {
+      const rows = await tx
+        .select()
+        .from(schema.adSetObjects)
+        .where(
+          and(
+            eq(schema.adSetObjects.companyId, args.companyId),
+            eq(schema.adSetObjects.adAccountId, args.adAccountId),
+            eq(schema.adSetObjects.metaId, args.sourceId),
+          ),
+        )
+        .limit(1);
+      const row = rows[0];
+      if (!row) return false;
+      await tx
+        .insert(schema.adSetObjects)
+        .values({
+          companyId: args.companyId,
+          adAccountId: args.adAccountId,
+          campaignMetaId: row.campaignMetaId,
+          metaId: args.newId,
+          name: applyLocalRename(row.name, args.renameOptions),
+          status: 'PAUSED',
+          effectiveStatus: 'PAUSED',
+          dailyBudget: row.dailyBudget,
+          lifetimeBudget: row.lifetimeBudget,
+          optimizationGoal: row.optimizationGoal,
+          billingEvent: row.billingEvent,
+          bidAmount: row.bidAmount,
+          startTime: row.startTime,
+          endTime: row.endTime,
+          metaUpdatedTime: now,
+          lastSyncedAt: now,
+          syncHash: null,
+          updatedAt: now,
+        })
+        .onConflictDoUpdate({
+          target: [schema.adSetObjects.companyId, schema.adSetObjects.metaId],
+          set: {
+            campaignMetaId: dsql`excluded.campaign_meta_id`,
+            name: dsql`excluded.name`,
+            status: dsql`excluded.status`,
+            effectiveStatus: dsql`excluded.effective_status`,
+            dailyBudget: dsql`excluded.daily_budget`,
+            lifetimeBudget: dsql`excluded.lifetime_budget`,
+            metaUpdatedTime: now,
+            lastSyncedAt: now,
+            updatedAt: now,
+          },
+        });
+      return true;
+    }
+
+    const rows = await tx
+      .select()
+      .from(schema.adObjects)
+      .where(
+        and(
+          eq(schema.adObjects.companyId, args.companyId),
+          eq(schema.adObjects.adAccountId, args.adAccountId),
+          eq(schema.adObjects.metaId, args.sourceId),
+        ),
+      )
+      .limit(1);
+    const row = rows[0];
+    if (!row) return false;
+    await tx
+      .insert(schema.adObjects)
+      .values({
+        companyId: args.companyId,
+        adAccountId: args.adAccountId,
+        campaignMetaId: row.campaignMetaId,
+        adsetMetaId: row.adsetMetaId,
+        metaId: args.newId,
+        name: applyLocalRename(row.name, args.renameOptions),
+        status: 'PAUSED',
+        effectiveStatus: 'PAUSED',
+        creativeId: row.creativeId,
+        metaUpdatedTime: now,
+        lastSyncedAt: now,
+        syncHash: null,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: [schema.adObjects.companyId, schema.adObjects.metaId],
+        set: {
+          campaignMetaId: dsql`excluded.campaign_meta_id`,
+          adsetMetaId: dsql`excluded.adset_meta_id`,
+          name: dsql`excluded.name`,
+          status: dsql`excluded.status`,
+          effectiveStatus: dsql`excluded.effective_status`,
+          metaUpdatedTime: now,
+          lastSyncedAt: now,
+          updatedAt: now,
+        },
+      });
+    return true;
+  });
+}
+
+function applyLocalRename(name: string, opts: RenameOptions | undefined): string {
+  if (!opts) return `Copy of ${name}`;
+  if (opts.rename_strategy === 'NO_RENAME') return name;
+  const prefix = opts.rename_prefix ?? '';
+  const suffix = opts.rename_suffix ?? '';
+  return prefix || suffix ? `${prefix}${name}${suffix}` : `Copy of ${name}`;
 }
 
 async function listLocalCampaigns(

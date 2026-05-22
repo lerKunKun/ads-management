@@ -9,18 +9,22 @@
 import { and, eq, inArray, sql as dsql } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
 import { db, schema } from '../../lib/db';
-import { publishOperation, type OperationMessage } from '../../lib/rabbitmq-topology';
+import {
+  RabbitMqPublishError,
+  publishOperation,
+  type OperationCopyBatchItem,
+  type OperationMessage,
+} from '../../lib/rabbitmq-topology';
 import { bumpProgress, initProgress } from '../../lib/progress';
 import { checkScope } from '../../middleware/auth';
 import { HttpError } from '../../lib/http-error';
-import { meta } from '../../lib/meta-client';
 import { FAKE_MODE } from '../../lib/fake-meta-state';
-import { metaProvider } from '../../providers/meta';
 import { writeAudit } from '../iam/auth-service';
 import {
   markLocalBudget,
   markLocalDeleted,
   markLocalStatus,
+  readLocalObjectOwnership,
   upsertLocalCopyPlaceholder,
 } from '../ad-object/local-store';
 import type { AuthPrincipal } from '../iam/auth-service';
@@ -242,9 +246,10 @@ export async function batchEnqueue(
       .where(eq(schema.operationTaskItems.taskId, taskId));
   });
 
+  const messages: OperationMessage[] = [];
   for (const it of items) {
     const ad = adMap.get(it.adAccountId)!;
-    const msg: OperationMessage = {
+    messages.push({
       taskId,
       itemId: it.id,
       companyId: principal.companyId,
@@ -257,11 +262,21 @@ export async function batchEnqueue(
       params: paramsByIdempotency.get(it.idempotencyKey) ?? params,
       idempotencyKey: it.idempotencyKey,
       attempt: 1,
-    };
+    });
+  }
+
+  for (const msg of FAKE_MODE ? messages : publishMessages(messages, action)) {
     if (FAKE_MODE) {
       await executeFakeBatchItem(msg);
     } else {
-      await publishOperation(msg);
+      try {
+        await publishOperation(msg);
+      } catch (err) {
+        if (err instanceof RabbitMqPublishError) {
+          throw new HttpError(503, 1006, 'queue service unavailable, please retry');
+        }
+        throw err;
+      }
     }
   }
 
@@ -281,10 +296,45 @@ export async function batchEnqueue(
   return { taskId, total: targets.length };
 }
 
+function publishMessages(messages: OperationMessage[], action: BatchAction): OperationMessage[] {
+  if (!action.endsWith(':copy')) return messages;
+
+  const groups = new Map<string, OperationMessage[]>();
+  for (const message of messages) {
+    const key = `${message.fbAccountId}:${message.adAccountId}:${message.metaActId}:${message.action}`;
+    const bucket = groups.get(key);
+    if (bucket) bucket.push(message);
+    else groups.set(key, [message]);
+  }
+
+  const out: OperationMessage[] = [];
+  const chunkSize = 50;
+  for (const group of groups.values()) {
+    for (let i = 0; i < group.length; i += chunkSize) {
+      const chunk = group.slice(i, i + chunkSize);
+      const first = chunk[0];
+      if (!first) continue;
+      if (chunk.length === 1) {
+        out.push(first);
+        continue;
+      }
+      const copyBatch: OperationCopyBatchItem[] = chunk.map((item) => ({
+        itemId: item.itemId,
+        targetType: item.targetType,
+        targetId: item.targetId,
+        params: item.params,
+        idempotencyKey: item.idempotencyKey,
+      }));
+      out.push({ ...first, copyBatch });
+    }
+  }
+  return out;
+}
+
 async function executeFakeBatchItem(msg: OperationMessage): Promise<void> {
   try {
     const result = await executeFakeProvider(msg);
-    await writeLocalFakeBestEffort(msg, result);
+    await writeLocalFakeStateOrThrow(msg, result);
     await markFakeItemSuccess(msg, result);
     await bumpProgress(msg.taskId, { success: 1 });
   } catch (err) {
@@ -294,6 +344,28 @@ async function executeFakeBatchItem(msg: OperationMessage): Promise<void> {
   }
 }
 
+async function requireLocalOwner(msg: OperationMessage) {
+  const owner = await readLocalObjectOwnership({
+    companyId: msg.companyId,
+    adAccountId: msg.adAccountId,
+    targetType: msg.targetType,
+    targetId: msg.targetId,
+  });
+  if (!owner) {
+    throw new HttpError(404, 404, `${msg.targetType} not found in local snapshot`);
+  }
+  return { ...owner, actId: msg.metaActId };
+}
+
+function localBatchCopyId(
+  targetType: 'campaign' | 'adset' | 'ad',
+  sourceId: string,
+  copyIndex: number,
+): string {
+  const safeSource = sourceId.replace(/[^a-zA-Z0-9_]/g, '_').slice(-48);
+  return `local_${targetType}_copy_${safeSource}_${Date.now()}_${copyIndex}`;
+}
+
 async function executeFakeProvider(
   msg: OperationMessage,
 ): Promise<Record<string, unknown> | undefined> {
@@ -301,22 +373,13 @@ async function executeFakeProvider(
     'campaign' | 'adset' | 'ad',
     'status' | 'budget' | 'copy' | 'delete',
   ];
-  const owner = await meta.getObjectOwnership('', msg.targetType, msg.targetId);
-  if (owner.actId && owner.actId !== msg.metaActId) {
-    throw new HttpError(403, 403, `${msg.targetType} not in ad_account`);
-  }
+  await requireLocalOwner(msg);
 
   if (op === 'status') {
     const status = msg.params['status'];
     if (status !== 'ACTIVE' && status !== 'PAUSED' && status !== 'ARCHIVED') {
       throw new HttpError(422, 422, 'status 必须为 ACTIVE/PAUSED/ARCHIVED');
     }
-    await metaProvider.setStatus('', {
-      adAccountId: msg.metaActId,
-      targetId: msg.targetId,
-      targetType: layer,
-      status,
-    });
     return undefined;
   }
 
@@ -324,50 +387,21 @@ async function executeFakeProvider(
     if (layer === 'ad') throw new HttpError(422, 422, 'ad 层无 budget 操作');
     const daily = msg.params['dailyBudget'];
     const lifetime = msg.params['lifetimeBudget'];
-    await metaProvider.setBudget('', {
-      adAccountId: msg.metaActId,
-      targetId: msg.targetId,
-      targetType: layer,
-      ...(typeof daily === 'number' ? { dailyBudget: daily } : {}),
-      ...(typeof lifetime === 'number' ? { lifetimeBudget: lifetime } : {}),
-    });
+    if (typeof daily !== 'number' && typeof lifetime !== 'number') {
+      throw new HttpError(422, 422, '至少传 dailyBudget 或 lifetimeBudget');
+    }
     return undefined;
   }
 
   if (op === 'copy') {
-    const deepCopy = msg.params['deepCopy'];
-    const startTime = msg.params['startTime'];
-    const statusOption = msg.params['statusOption'];
     const copyIndex = msg.params['_copyIndex'];
-    const rawRenameOptions = msg.params['renameOptions'] as Record<string, string> | undefined;
-    const renameOptions =
-      typeof copyIndex === 'number' && copyIndex > 0
-        ? {
-            ...(rawRenameOptions ?? {}),
-            rename_suffix: `${rawRenameOptions?.['rename_suffix'] ?? ''}-${String(copyIndex).padStart(2, '0')}`,
-          }
-        : rawRenameOptions;
-    const result = await metaProvider.copy('', {
-      adAccountId: msg.metaActId,
-      sourceId: msg.targetId,
-      targetType: layer,
-      ...(typeof deepCopy === 'boolean' ? { deepCopy } : {}),
-      ...(typeof startTime === 'string' ? { startTime } : {}),
-      ...(typeof statusOption === 'string'
-        ? { statusOption: statusOption as 'ACTIVE' | 'PAUSED' | 'INHERITED_FROM_SOURCE' }
-        : {}),
-      ...(renameOptions ? { renameOptions } : {}),
-    });
-    return { newId: result.newId, layer };
+    return {
+      newId: localBatchCopyId(layer, msg.targetId, typeof copyIndex === 'number' ? copyIndex : 1),
+      layer,
+    };
   }
 
   if (op === 'delete') {
-    await metaProvider.remove('', {
-      adAccountId: msg.metaActId,
-      targetId: msg.targetId,
-      targetType: layer,
-      hard: msg.params['hard'] === true,
-    });
     return undefined;
   }
 
@@ -382,7 +416,7 @@ async function writeLocalFakeState(
     'campaign' | 'adset' | 'ad',
     'status' | 'budget' | 'copy' | 'delete',
   ];
-  const owner = await meta.getObjectOwnership('', msg.targetType, msg.targetId);
+  const owner = await requireLocalOwner(msg);
 
   if (op === 'status') {
     const status = msg.params['status'];
@@ -441,15 +475,11 @@ async function writeLocalFakeState(
   }
 }
 
-async function writeLocalFakeBestEffort(
+async function writeLocalFakeStateOrThrow(
   msg: OperationMessage,
   result?: Record<string, unknown>,
 ): Promise<void> {
-  try {
-    await writeLocalFakeState(msg, result);
-  } catch (err) {
-    console.error(`[local-ad-object] fake ${msg.action} write failed`, err);
-  }
+  await writeLocalFakeState(msg, result);
 }
 
 async function markFakeItemSuccess(

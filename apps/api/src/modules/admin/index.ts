@@ -19,6 +19,14 @@ import {
   syncDueAdAccounts,
   type SyncDepth,
 } from '../ad-object/sync-service';
+import {
+  createCompany,
+  createCompanyUser,
+  listCompanies,
+  listCompanyUsers,
+  updateCompany,
+  updateCompanyUser,
+} from './company-service';
 import { authGuard, requirePermission } from '../../middleware/auth';
 import type { AuthPrincipal } from '../iam/auth-service';
 import { writeAudit } from '../iam/auth-service';
@@ -79,6 +87,127 @@ async function filterByCompany(
 export const admin = new Elysia({ name: 'admin' }).group('', (g) =>
   g
     .use(authGuard)
+    .get(
+      '/_admin/companies',
+      async ({ principal }) => ({
+        code: 0,
+        msg: 'ok',
+        data: await listCompanies(principal),
+      }),
+      { beforeHandle: requirePermission('iam:manage') },
+    )
+    .post(
+      '/_admin/companies',
+      async ({ principal, body, request }) => {
+        const data = await createCompany(principal, body.name);
+        await writeAudit({
+          companyId: principal.companyId,
+          userId: principal.userId,
+          action: 'admin:company:create',
+          resource: `company:${data.id}`,
+          detail: { name: body.name },
+          ...(request.headers.get('x-forwarded-for')
+            ? { ip: request.headers.get('x-forwarded-for')!.split(',')[0]!.trim() }
+            : {}),
+        });
+        return { code: 0, msg: 'ok', data };
+      },
+      {
+        body: t.Object({ name: t.String({ minLength: 1, maxLength: 120 }) }),
+        beforeHandle: requirePermission('iam:manage'),
+      },
+    )
+    .patch(
+      '/_admin/companies/:id',
+      async ({ principal, params, body, request }) => {
+        await updateCompany(principal, params.id, body);
+        await writeAudit({
+          companyId: principal.companyId,
+          userId: principal.userId,
+          action: 'admin:company:update',
+          resource: `company:${params.id}`,
+          detail: body,
+          ...(request.headers.get('x-forwarded-for')
+            ? { ip: request.headers.get('x-forwarded-for')!.split(',')[0]!.trim() }
+            : {}),
+        });
+        return { code: 0, msg: 'ok', data: null };
+      },
+      {
+        params: t.Object({ id: t.String({ format: 'uuid' }) }),
+        body: t.Object({
+          name: t.Optional(t.String({ minLength: 1, maxLength: 120 })),
+          status: t.Optional(t.Union([t.Literal('active'), t.Literal('disabled')])),
+        }),
+        beforeHandle: requirePermission('iam:manage'),
+      },
+    )
+    .get(
+      '/_admin/companies/:id/users',
+      async ({ principal, params }) => ({
+        code: 0,
+        msg: 'ok',
+        data: await listCompanyUsers(principal, params.id),
+      }),
+      {
+        params: t.Object({ id: t.String({ format: 'uuid' }) }),
+        beforeHandle: requirePermission('iam:manage'),
+      },
+    )
+    .post(
+      '/_admin/companies/:id/users',
+      async ({ principal, params, body, request }) => {
+        const data = await createCompanyUser(principal, params.id, body);
+        await writeAudit({
+          companyId: params.id,
+          userId: principal.userId,
+          action: 'admin:company:user:create',
+          resource: `user:${data.id}`,
+          detail: { email: body.email, roleCode: body.roleCode },
+          ...(request.headers.get('x-forwarded-for')
+            ? { ip: request.headers.get('x-forwarded-for')!.split(',')[0]!.trim() }
+            : {}),
+        });
+        return { code: 0, msg: 'ok', data };
+      },
+      {
+        params: t.Object({ id: t.String({ format: 'uuid' }) }),
+        body: t.Object({
+          email: t.String({ format: 'email' }),
+          password: t.String({ minLength: 6, maxLength: 128 }),
+          roleCode: t.String({ minLength: 1 }),
+        }),
+        beforeHandle: requirePermission('iam:manage'),
+      },
+    )
+    .patch(
+      '/_admin/companies/:id/users/:userId',
+      async ({ principal, params, body, request }) => {
+        await updateCompanyUser(principal, params.id, params.userId, body);
+        await writeAudit({
+          companyId: params.id,
+          userId: principal.userId,
+          action: 'admin:company:user:update',
+          resource: `user:${params.userId}`,
+          detail: body,
+          ...(request.headers.get('x-forwarded-for')
+            ? { ip: request.headers.get('x-forwarded-for')!.split(',')[0]!.trim() }
+            : {}),
+        });
+        return { code: 0, msg: 'ok', data: null };
+      },
+      {
+        params: t.Object({
+          id: t.String({ format: 'uuid' }),
+          userId: t.String({ format: 'uuid' }),
+        }),
+        body: t.Object({
+          roleCode: t.Optional(t.String({ minLength: 1 })),
+          status: t.Optional(t.Union([t.Literal('active'), t.Literal('disabled')])),
+        }),
+        beforeHandle: requirePermission('iam:manage'),
+      },
+    )
     .get(
       '/_admin/breakers',
       async ({ principal }) => {

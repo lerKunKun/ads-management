@@ -36,6 +36,8 @@ function AdAccountsPage() {
   const [fbAccountId, setFbAccountId] = useState('');
   const [status, setStatus] = useState('');
   const [currency, setCurrency] = useState('');
+  const [timezone, setTimezone] = useState('');
+  const [country, setCountry] = useState('');
 
   const fbById = useMemo(
     () => new Map((fbQ.data ?? []).map((account) => [account.id, account])),
@@ -63,6 +65,32 @@ function AdAccountsPage() {
     ];
   }, [adsQ.data]);
 
+  const timezoneOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const account of adsQ.data ?? []) {
+      if (account.timezoneName) set.add(account.timezoneName);
+    }
+    return [
+      { value: '', label: '全部' },
+      ...Array.from(set)
+        .sort()
+        .map((value) => ({ value, label: value })),
+    ];
+  }, [adsQ.data]);
+
+  const countryOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const account of adsQ.data ?? []) {
+      if (account.businessCountryCode) set.add(account.businessCountryCode);
+    }
+    return [
+      { value: '', label: '全部' },
+      ...Array.from(set)
+        .sort()
+        .map((value) => ({ value, label: countryLabel(value) })),
+    ];
+  }, [adsQ.data]);
+
   const filtered = useMemo(() => {
     const accounts = adsQ.data ?? [];
     return accounts.filter(
@@ -70,9 +98,11 @@ function AdAccountsPage() {
         (matchText(account.name, search) || matchText(account.metaActId, search)) &&
         (!fbAccountId || account.fbAccountId === fbAccountId) &&
         (!status || account.status === status) &&
-        (!currency || account.currency === currency),
+        (!currency || account.currency === currency) &&
+        (!timezone || account.timezoneName === timezone) &&
+        (!country || account.businessCountryCode === country),
     );
-  }, [adsQ.data, currency, fbAccountId, search, status]);
+  }, [adsQ.data, country, currency, fbAccountId, search, status, timezone]);
   const pager = usePagination(filtered);
 
   return (
@@ -134,6 +164,20 @@ function AdAccountsPage() {
             onChange: setCurrency,
             options: currencyOptions,
           },
+          {
+            key: 'timezone',
+            label: '时区',
+            value: timezone,
+            onChange: setTimezone,
+            options: timezoneOptions,
+          },
+          {
+            key: 'country',
+            label: '投放国家',
+            value: country,
+            onChange: setCountry,
+            options: countryOptions,
+          },
         ]}
         total={adsQ.data?.length ?? 0}
         filtered={filtered.length}
@@ -142,6 +186,8 @@ function AdAccountsPage() {
           setFbAccountId('');
           setStatus('');
           setCurrency('');
+          setTimezone('');
+          setCountry('');
         }}
       />
 
@@ -153,6 +199,8 @@ function AdAccountsPage() {
               <TableHead>Meta 账户 ID</TableHead>
               <TableHead>广告账户组</TableHead>
               <TableHead>币种</TableHead>
+              <TableHead>时区</TableHead>
+              <TableHead>投放国家</TableHead>
               <TableHead>状态</TableHead>
               <TableHead>最后同步</TableHead>
             </TableRow>
@@ -160,7 +208,7 @@ function AdAccountsPage() {
           <TableBody>
             {adsQ.isLoading && <EmptyRow text="加载中..." />}
             {!adsQ.isLoading && (adsQ.data?.length ?? 0) === 0 && (
-              <EmptyRow text="当前没有可见广告账户，请联系管理员分配广告账户作用域。" />
+              <EmptyRow text="当前没有可见广告账户，请联系管理员分配广告账户。" />
             )}
             {!adsQ.isLoading && (adsQ.data?.length ?? 0) > 0 && filtered.length === 0 && (
               <EmptyRow text="无匹配项" />
@@ -193,6 +241,8 @@ function AdAccountsPage() {
                     )}
                   </TableCell>
                   <TableCell>{account.currency ?? '-'}</TableCell>
+                  <TableCell>{account.timezoneName ?? '-'}</TableCell>
+                  <TableCell>{countryLabel(account.businessCountryCode)}</TableCell>
                   <TableCell className={statusClass(account.status)}>
                     {adAccountStatusLabel(account.status)}
                   </TableCell>
@@ -218,7 +268,7 @@ function AdAccountsPage() {
 function EmptyRow({ text }: { text: string }) {
   return (
     <TableRow>
-      <TableCell colSpan={6} className="text-muted-foreground">
+      <TableCell colSpan={8} className="text-muted-foreground">
         {text}
       </TableCell>
     </TableRow>
@@ -229,4 +279,9 @@ function statusClass(status: string): string {
   if (status === 'active') return 'text-emerald-600';
   if (status === 'pending') return 'text-amber-600';
   return 'text-rose-600';
+}
+
+function countryLabel(code: string | null | undefined): string {
+  if (!code) return '-';
+  return code.toUpperCase();
 }

@@ -1,6 +1,6 @@
 /**
  * authGuard: 解析 Bearer JWT, 加载有效权限/作用域，注入到 ctx.principal。
- * Redis 缓存 perm:{userId} TTL 5min；授权变更主动失效（grants 写入时 DEL）。
+ * Redis 缓存 perm:{userId}:{companyId} TTL 5min；授权变更主动失效（grants 写入时 DEL）。
  */
 import Elysia from 'elysia';
 import { verify } from '../lib/jwt';
@@ -10,23 +10,39 @@ import { loadPrincipal, type AuthPrincipal } from '../modules/iam/auth-service';
 
 const PERM_TTL = 300; // 5 min
 
-async function getPrincipal(userId: string): Promise<AuthPrincipal | null> {
-  const key = `perm:${userId}`;
+async function getPrincipal(
+  userId: string,
+  companyId: string,
+): Promise<AuthPrincipal | null> {
+  const key = `perm:${userId}:${companyId}`;
   const cached = await redis.get(key);
   if (cached) {
     try {
-      return JSON.parse(cached) as AuthPrincipal;
+      const principal = JSON.parse(cached) as AuthPrincipal;
+      if (principal.companyName) return principal;
     } catch {
       /* fallthrough */
     }
   }
-  const p = await loadPrincipal(userId);
+  const p = await loadPrincipal(userId, companyId);
   if (p) await redis.set(key, JSON.stringify(p), 'EX', PERM_TTL);
   return p;
 }
 
 export function invalidatePrincipal(userId: string) {
-  return redis.del(`perm:${userId}`);
+  const stream = redis.scanStream({ match: `perm:${userId}:*`, count: 50 });
+  const keys: string[] = [];
+  return new Promise<number>((resolve, reject) => {
+    stream.on('data', (chunk: string[]) => keys.push(...chunk));
+    stream.on('end', async () => {
+      if (keys.length === 0) {
+        resolve(0);
+        return;
+      }
+      resolve(await redis.del(...keys));
+    });
+    stream.on('error', reject);
+  });
 }
 
 export const authGuard = new Elysia({ name: 'auth-guard' }).derive(
@@ -44,7 +60,7 @@ export const authGuard = new Elysia({ name: 'auth-guard' }).derive(
     if (!tok) throw Unauthorized('missing bearer token');
     const payload = verify(tok);
     if (!payload) throw Unauthorized('invalid or expired token');
-    const principal = await getPrincipal(payload.sub);
+    const principal = await getPrincipal(payload.sub, payload.cid);
     if (!principal || principal.companyId !== payload.cid) {
       throw Unauthorized('principal not found');
     }

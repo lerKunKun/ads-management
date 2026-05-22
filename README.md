@@ -44,8 +44,8 @@
 - 操作后列表不强制刷新，保留当前分页、滚动位置和筛选上下文
 
 管理端入口:
-- `/admin/company`: 当前公司资产、用户、账户组、广告账户和任务概览
-- `/admin/iam`: 用户 / 广告账户组 / 广告账户三栏联动授权
+- `/admin/company`: 公司新增、改名、人员分配、公司资产概览，并可跳转 IAM 做权限管理
+- `/admin/iam`: 用户 / 广告账户组 / 广告账户三栏联动授权；PlatformAdmin 可切换公司，其他角色不可切换
 - `/admin/users`: 用户目录、角色和启停
 - `/admin/operations`: 熔断、Token 健康、广告对象同步、后台任务
 - `/admin/audit`: 全局审计日志
@@ -64,13 +64,14 @@ docker compose up -d
 ### 2. 数据库初始化
 ```powershell
 # 迁移 schema + RLS 策略 + 建 ads_app 角色
-bun --cwd packages/db run migrate
+bun --cwd packages/db migrate
 
 # 种子: 1 个 Demo Co. 公司 + 4 个角色 + admin@demo.local/admin123
-bun --cwd packages/db run seed
+# admin@demo.local 同时拥有 PlatformAdmin + CompanyAdmin，方便本地演示跨公司管理
+bun --cwd packages/db seed
 
 # (mock 模式可选)演示用假广告账户组 + 8 个广告账户
-$env:MOCK_AD_ACCOUNT_COUNT='8'; bun --cwd packages/db run src/seed-mock-fb.ts
+$env:MOCK_AD_ACCOUNT_COUNT='8'; bun --cwd packages/db src/seed-mock-fb.ts
 ```
 
 ### 3. 启动三个进程
@@ -106,9 +107,11 @@ cd apps/web
 bun run vite --port 5173
 ```
 
-浏览器打开 **http://localhost:5173**,登录 `admin@demo.local` / `admin123`(CompanyAdmin)。
+浏览器打开 **http://localhost:5173**,登录 `admin@demo.local` / `admin123`(PlatformAdmin + CompanyAdmin)。
 
 ## 真实接入步骤(去掉 mock)
+
+线上测试配置、第三方资料清单和 mock 清理说明见 [docs/online-meta-test-config.md](./docs/online-meta-test-config.md)。
 
 ### 配置 CRM 凭证(必须)
 ```powershell
@@ -146,7 +149,9 @@ $env:FEISHU_WEBHOOK_URL='https://open.feishu.cn/open-apis/bot/v2/hook/xxx'
 
 权限码 `resource:action`:`ad_account:read` / `campaign:status` / `campaign:budget` / `campaign:copy` / `campaign:delete` / `iam:manage` / `fb_account:bind`。
 
-管理后台 `/admin/iam` 给员工分配广告账户组 / 广告账户作用域。修改后 5 分钟 Redis 权限缓存自动失效(写入立即 invalidate)。
+管理后台 `/admin/iam` 给员工分配广告账户组 / 广告账户。修改后 5 分钟 Redis 权限缓存自动失效(写入立即 invalidate)。
+
+`admin@demo.local` 默认拥有 PlatformAdmin，可在 `/admin/iam` 顶部切换公司；非 PlatformAdmin 只能管理自己所属公司。公司新增、改名和人员分配在 `/admin/company` 完成。
 
 ## 异步流水线(M3)
 
@@ -201,7 +206,7 @@ Worker(16 个分片 consumer)
 bun --cwd apps/api      run typecheck
 bun --cwd apps/worker   run typecheck
 bun --cwd apps/web      run typecheck
-bun --cwd packages/db   run typecheck
+bun --cwd packages/db   typecheck
 bun --cwd packages/shared run typecheck
 
 # 重置 mock 环境

@@ -15,7 +15,7 @@
  *     - 瞬时 → attempts++ + retry
  *     - 达 max → dead + item.status='dead'
  */
-import { and, eq, sql as dsql } from 'drizzle-orm';
+import { eq, inArray, sql as dsql } from 'drizzle-orm';
 import { db, schema } from '../../api/src/lib/db';
 import { decryptToken } from '../../api/src/lib/crypto';
 import { redis } from '../../api/src/lib/redis';
@@ -24,8 +24,14 @@ import { BreakerKey, isOpen, openFor } from '../../api/src/lib/breaker';
 import { acquireOpLock } from '../../api/src/lib/op-lock';
 import { bumpProgress, setRunning } from '../../api/src/lib/progress';
 import { metaProvider } from '../../api/src/providers/meta';
-import { meta, MetaApiError, type MetaObjectOwnership } from '../../api/src/lib/meta-client';
+import {
+  meta,
+  MetaApiError,
+  type AsyncCopyInput,
+  type MetaObjectOwnership,
+} from '../../api/src/lib/meta-client';
 import { HttpError } from '../../api/src/lib/http-error';
+import { env } from '../../api/src/env';
 import {
   markLocalBudget,
   markLocalDeleted,
@@ -36,6 +42,7 @@ import {
   RMQ,
   publishRetry,
   publishDead,
+  type OperationCopyBatchItem,
   type OperationMessage,
 } from '../../api/src/lib/rabbitmq-topology';
 import { isFake, runFake } from './fake-meta';
@@ -44,6 +51,85 @@ export type Outcome =
   | { kind: 'ack' }
   | { kind: 'retry'; reason: string; bumpAttempt?: boolean }
   | { kind: 'dead'; reason: string };
+
+interface AsyncCopyState {
+  kind: 'meta_async_copy';
+  requestSetId: string;
+  submittedAt: number;
+  polls: number;
+  requests: AsyncCopyStateRequest[];
+}
+
+interface AsyncCopyStateRequest {
+  itemId: string;
+  requestName: string;
+  targetType: 'campaign' | 'adset' | 'ad';
+}
+
+interface BatchHandledResult extends Record<string, unknown> {
+  __batchHandled: true;
+}
+
+class AsyncCopyPending extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AsyncCopyPending';
+  }
+}
+
+function isCopyAction(msg: OperationMessage): boolean {
+  return msg.action.endsWith(':copy');
+}
+
+function copyItemsForMessage(msg: OperationMessage): OperationCopyBatchItem[] {
+  if (msg.copyBatch?.length) return msg.copyBatch;
+  return [
+    {
+      itemId: msg.itemId,
+      targetType: msg.targetType,
+      targetId: msg.targetId,
+      params: msg.params,
+      idempotencyKey: msg.idempotencyKey,
+    },
+  ];
+}
+
+function messageForCopyItem(
+  msg: OperationMessage,
+  item: OperationCopyBatchItem,
+): OperationMessage {
+  const { copyBatch: _copyBatch, ...base } = msg;
+  void _copyBatch;
+  return {
+    ...base,
+    itemId: item.itemId,
+    targetType: item.targetType,
+    targetId: item.targetId,
+    params: item.params,
+    idempotencyKey: item.idempotencyKey,
+  };
+}
+
+function isTerminalStatus(status: string | null | undefined): boolean {
+  return status === 'success' || status === 'failed' || status === 'dead';
+}
+
+function isBatchHandled(result: Record<string, unknown> | undefined): result is BatchHandledResult {
+  return result?.['__batchHandled'] === true;
+}
+
+async function acquireTargetLocks(targetIds: string[]): Promise<Array<{ release(): Promise<void> }> | null> {
+  const locks: Array<{ release(): Promise<void> }> = [];
+  for (const targetId of Array.from(new Set(targetIds))) {
+    const lock = await acquireOpLock(targetId, 30);
+    if (!lock) {
+      await Promise.allSettled(locks.map((item) => item.release()));
+      return null;
+    }
+    locks.push(lock);
+  }
+  return locks;
+}
 
 export async function handle(msg: OperationMessage): Promise<Outcome> {
   // 1. 熔断
@@ -59,8 +145,9 @@ export async function handle(msg: OperationMessage): Promise<Outcome> {
   }
 
   // 2. 操作锁
-  const lock = await acquireOpLock(msg.targetId, 30);
-  if (!lock) {
+  const lockItems = msg.copyBatch?.length ? msg.copyBatch : [{ targetId: msg.targetId }];
+  const locks = await acquireTargetLocks(lockItems.map((item) => item.targetId));
+  if (!locks) {
     return { kind: 'retry', reason: 'another op on same target', bumpAttempt: false };
   }
 
@@ -76,7 +163,7 @@ export async function handle(msg: OperationMessage): Promise<Outcome> {
       return r[0];
     });
     if (!cur) return { kind: 'ack' };
-    if (cur.status === 'success' || cur.status === 'dead') {
+    if (cur.status === 'success' || cur.status === 'failed' || cur.status === 'dead') {
       return { kind: 'ack' };
     }
 
@@ -138,12 +225,24 @@ export async function handle(msg: OperationMessage): Promise<Outcome> {
           const layer = msg.action.split(':')[0];
           result = { newId: `fake_copy_of_${msg.targetId}`, layer };
         }
+      } else if (msg.copyBatch && msg.copyBatch.length > 1) {
+        result = await executeAsyncCopyBatchProvider(
+          msg,
+          token,
+          copyItemsForMessage(msg),
+          copyItemsForMessage(msg),
+        );
       } else {
         result = await executeProvider(msg, token);
       }
     } catch (err) {
-      return await handleErr(msg, err);
+      if (err instanceof AsyncCopyPending) {
+        return { kind: 'retry', reason: err.message, bumpAttempt: false };
+      }
+      return await handleErr(msg, err, msg.copyBatch);
     }
+
+    if (isBatchHandled(result)) return { kind: 'ack' };
 
     await writeLocalBestEffort(msg, token, result);
 
@@ -152,7 +251,7 @@ export async function handle(msg: OperationMessage): Promise<Outcome> {
     await bumpProgress(msg.taskId, { success: 1 });
     return { kind: 'ack' };
   } finally {
-    await lock.release();
+    await Promise.allSettled(locks.map((lock) => lock.release()));
   }
 }
 
@@ -195,7 +294,11 @@ async function executeProvider(
   if (op === 'copy') {
     const deepCopy = msg.params['deepCopy'];
     const startTime = msg.params['startTime'];
+    const endTime = msg.params['endTime'];
     const statusOption = msg.params['statusOption'];
+    const targetAdAccountId = msg.params['targetAdAccountId'];
+    const targetCampaignId = msg.params['targetCampaignId'];
+    const targetAdSetId = msg.params['targetAdSetId'];
     const renameOptionsRaw = msg.params['renameOptions'] as
       | Record<string, string>
       | undefined;
@@ -209,18 +312,22 @@ async function executeProvider(
         rename_suffix: `${baseSuffix}-${String(copyIndex).padStart(2, '0')}`,
       };
     }
-    const r = await metaProvider.copy(token, {
-      adAccountId: msg.metaActId,
+    const input: AsyncCopyInput = {
       sourceId: msg.targetId,
       targetType: layer,
       ...(typeof deepCopy === 'boolean' ? { deepCopy } : {}),
       ...(typeof startTime === 'string' ? { startTime } : {}),
+      ...(typeof endTime === 'string' ? { endTime } : {}),
       ...(typeof statusOption === 'string'
         ? { statusOption: statusOption as 'ACTIVE' | 'PAUSED' | 'INHERITED_FROM_SOURCE' }
         : {}),
+      ...(typeof targetAdAccountId === 'string' ? { targetAdAccountId } : {}),
+      ...(typeof targetCampaignId === 'string' ? { targetCampaignId } : {}),
+      ...(typeof targetAdSetId === 'string' ? { targetAdSetId } : {}),
       ...(renameOptions ? { renameOptions } : {}),
-    });
-    return { newId: r.newId, layer };
+      requestName: `${msg.taskId}_${msg.itemId}`,
+    };
+    return await executeAsyncCopyProvider(msg, token, input);
   }
 
   if (op === 'delete') {
@@ -235,6 +342,430 @@ async function executeProvider(
   }
 
   throw new Error(`unknown action: ${msg.action}`);
+}
+
+function asyncCopyRequestName(itemId: string): string {
+  return `copy_${itemId.replace(/-/g, '')}`;
+}
+
+function buildAsyncCopyInput(msg: OperationMessage, requestName?: string): AsyncCopyInput {
+  const [layer] = msg.action.split(':') as ['campaign' | 'adset' | 'ad', string];
+  const deepCopy = msg.params['deepCopy'];
+  const startTime = msg.params['startTime'];
+  const endTime = msg.params['endTime'];
+  const statusOption = msg.params['statusOption'];
+  const targetAdAccountId = msg.params['targetAdAccountId'];
+  const targetCampaignId = msg.params['targetCampaignId'];
+  const targetAdSetId = msg.params['targetAdSetId'];
+  const renameOptionsRaw = msg.params['renameOptions'] as Record<string, string> | undefined;
+  const copyIndex = msg.params['_copyIndex'];
+  let renameOptions = renameOptionsRaw;
+  if (typeof copyIndex === 'number' && copyIndex > 0) {
+    const baseSuffix = renameOptionsRaw?.['rename_suffix'] ?? '';
+    renameOptions = {
+      ...(renameOptionsRaw ?? {}),
+      rename_suffix: `${baseSuffix}-${String(copyIndex).padStart(2, '0')}`,
+    };
+  }
+  return {
+    sourceId: msg.targetId,
+    targetType: layer,
+    ...(typeof deepCopy === 'boolean' ? { deepCopy } : {}),
+    ...(typeof startTime === 'string' ? { startTime } : {}),
+    ...(typeof endTime === 'string' ? { endTime } : {}),
+    ...(typeof statusOption === 'string'
+      ? { statusOption: statusOption as 'ACTIVE' | 'PAUSED' | 'INHERITED_FROM_SOURCE' }
+      : {}),
+    ...(typeof targetAdAccountId === 'string' ? { targetAdAccountId } : {}),
+    ...(typeof targetCampaignId === 'string' ? { targetCampaignId } : {}),
+    ...(typeof targetAdSetId === 'string' ? { targetAdSetId } : {}),
+    ...(renameOptions ? { renameOptions } : {}),
+    ...(requestName ? { requestName } : {}),
+  };
+}
+
+async function executeAsyncCopyProvider(
+  msg: OperationMessage,
+  token: string,
+  input: AsyncCopyInput,
+): Promise<Record<string, unknown>> {
+  const existing = await readAsyncCopyState(msg.itemId);
+  let state = existing;
+  if (!state) {
+    try {
+      state = await submitAsyncCopy(msg, token, input);
+    } catch (err) {
+      if (isAdbatchTooFewError(err)) {
+        return await executeSyncCopyFallback(msg, token, input);
+      }
+      throw err;
+    }
+  }
+
+  if (Date.now() - state.submittedAt > env.metaAsyncCopyTimeoutMs) {
+    await clearAsyncCopyState(msg.itemId);
+    throw new HttpError(
+      409,
+      409,
+      `Meta async copy timeout: request_set=${state.requestSetId}`,
+    );
+  }
+
+  const requestName = state.requests[0]?.requestName ?? input.requestName ?? 'copy';
+  const result = await meta.pollAsyncCopy(
+    token,
+    state.requestSetId,
+    input.targetType,
+    requestName,
+  );
+  if (result.status === 'pending') {
+    await saveAsyncCopyState(msg, { ...state, polls: state.polls + 1 });
+    throw new AsyncCopyPending(`meta async copy pending: request_set=${state.requestSetId}`);
+  }
+
+  await clearAsyncCopyState(msg.itemId);
+  if (result.status === 'failed') {
+    throw new HttpError(
+      409,
+      409,
+      result.error ?? `Meta async copy failed: request_set=${state.requestSetId}`,
+    );
+  }
+  if (!result.newId) {
+    throw new MetaApiError(
+      500,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      `Meta async copy completed without copied id: request_set=${state.requestSetId}`,
+    );
+  }
+  return {
+    newId: result.newId,
+    layer: input.targetType,
+    asyncRequestSetId: state.requestSetId,
+  };
+}
+
+function isAdbatchTooFewError(err: unknown): boolean {
+  return (
+    err instanceof MetaApiError &&
+    err.metaCode === 194 &&
+    err.message.toLowerCase().includes('adbatch') &&
+    err.message.toLowerCase().includes('too few')
+  );
+}
+
+function isAsyncRelativeUrlInvalid(err: unknown): boolean {
+  return (
+    err instanceof MetaApiError &&
+    err.message.toLowerCase().includes('relative_url')
+  );
+}
+
+async function executeSyncCopyFallback(
+  msg: OperationMessage,
+  token: string,
+  input: AsyncCopyInput,
+): Promise<Record<string, unknown>> {
+  console.warn(
+    `[meta-async-copy] single request rejected by async batch; falling back to sync copy task=${msg.taskId} item=${msg.itemId}`,
+  );
+  const result = await metaProvider.copy(token, {
+    adAccountId: msg.metaActId,
+    sourceId: input.sourceId,
+    targetType: input.targetType,
+    ...(input.targetAdAccountId ? { targetAdAccountId: input.targetAdAccountId } : {}),
+    ...(input.targetCampaignId ? { targetCampaignId: input.targetCampaignId } : {}),
+    ...(input.targetAdSetId ? { targetAdSetId: input.targetAdSetId } : {}),
+    ...(input.deepCopy !== undefined ? { deepCopy: input.deepCopy } : {}),
+    ...(input.startTime ? { startTime: input.startTime } : {}),
+    ...(input.endTime ? { endTime: input.endTime } : {}),
+    ...(input.statusOption ? { statusOption: input.statusOption } : {}),
+    ...(input.renameOptions ? { renameOptions: input.renameOptions } : {}),
+  });
+  return {
+    newId: result.newId,
+    layer: input.targetType,
+    fallback: 'sync_copy',
+  };
+}
+
+async function executeAsyncCopyBatchProvider(
+  msg: OperationMessage,
+  token: string,
+  copyItems: OperationCopyBatchItem[],
+  activeItems: OperationCopyBatchItem[],
+): Promise<BatchHandledResult> {
+  for (const item of activeItems) {
+    await assertMessageTargetOwnership(messageForCopyItem(msg, item), token);
+  }
+
+  const itemIds = activeItems.map((item) => item.itemId);
+  const existing = await readAsyncCopyStateForItems(itemIds);
+  let state = existing;
+  if (!state) {
+    try {
+      state = await submitAsyncCopyBatch(msg, token, activeItems);
+    } catch (err) {
+      if (isAsyncRelativeUrlInvalid(err)) {
+        return await executeGraphBatchCopyProvider(msg, token, activeItems);
+      }
+      throw err;
+    }
+  }
+
+  if (Date.now() - state.submittedAt > env.metaAsyncCopyTimeoutMs) {
+    await clearAsyncCopyStateForItems(itemIds);
+    throw new HttpError(
+      409,
+      409,
+      `Meta async copy timeout: request_set=${state.requestSetId}`,
+    );
+  }
+
+  const poll = await meta.pollAsyncCopyBatch(
+    token,
+    state.requestSetId,
+    state.requests.map((request) => ({
+      requestName: request.requestName,
+      targetType: request.targetType,
+    })),
+  );
+  if (Object.values(poll).some((result) => result.status === 'pending')) {
+    await saveAsyncCopyStateForItems(msg, itemIds, { ...state, polls: state.polls + 1 });
+    throw new AsyncCopyPending(`meta async copy pending: request_set=${state.requestSetId}`);
+  }
+
+  await clearAsyncCopyStateForItems(itemIds);
+  const itemById = new Map(copyItems.map((item) => [item.itemId, item]));
+  const activeIds = new Set(itemIds);
+  for (const request of state.requests) {
+    if (!activeIds.has(request.itemId)) continue;
+    const item = itemById.get(request.itemId);
+    if (!item) continue;
+    const itemMsg = messageForCopyItem(msg, item);
+    const result = poll[request.requestName];
+    if (result?.status === 'success' && result.newId) {
+      const payload = {
+        newId: result.newId,
+        layer: request.targetType,
+        asyncRequestSetId: state.requestSetId,
+      };
+      await writeLocalBestEffort(itemMsg, token, payload);
+      await markSuccess(itemMsg, payload);
+      await bumpProgress(itemMsg.taskId, { success: 1 });
+    } else {
+      await failItem(
+        itemMsg,
+        result?.error ?? `Meta async copy failed: request_set=${state.requestSetId}`,
+      );
+      await bumpProgress(itemMsg.taskId, { failed: 1 });
+    }
+  }
+  return { __batchHandled: true };
+}
+
+async function executeGraphBatchCopyProvider(
+  msg: OperationMessage,
+  token: string,
+  activeItems: OperationCopyBatchItem[],
+): Promise<BatchHandledResult> {
+  console.warn(
+    `[meta-copy-batch] async request set rejected relative_url; falling back to Graph batch task=${msg.taskId} count=${activeItems.length}`,
+  );
+  const chunkSize = 3;
+  for (let offset = 0; offset < activeItems.length; offset += chunkSize) {
+    const chunk = activeItems.slice(offset, offset + chunkSize);
+    const inputs = chunk.map((item) => {
+      const itemMsg = messageForCopyItem(msg, item);
+      return buildAsyncCopyInput(itemMsg, asyncCopyRequestName(item.itemId));
+    });
+    const results = await meta.copyBatch(token, inputs);
+    for (const [index, item] of chunk.entries()) {
+      const input = inputs[index]!;
+      const requestName = input.requestName ?? asyncCopyRequestName(item.itemId);
+      const itemMsg = messageForCopyItem(msg, item);
+      const result = results[requestName];
+      if (result?.status === 'success' && result.newId) {
+        const payload = {
+          newId: result.newId,
+          layer: input.targetType,
+          fallback: 'graph_batch_copy',
+        };
+        await writeLocalBestEffort(itemMsg, token, payload);
+        await markSuccess(itemMsg, payload);
+        await bumpProgress(itemMsg.taskId, { success: 1 });
+      } else {
+        await failItem(itemMsg, result?.error ?? 'Meta Graph batch copy failed');
+        await bumpProgress(itemMsg.taskId, { failed: 1 });
+      }
+    }
+  }
+  return { __batchHandled: true };
+}
+
+async function submitAsyncCopy(
+  msg: OperationMessage,
+  token: string,
+  input: AsyncCopyInput,
+): Promise<AsyncCopyState> {
+  const submitted = await meta.submitAsyncCopy(token, msg.metaActId, input);
+  const state: AsyncCopyState = {
+    kind: 'meta_async_copy',
+    requestSetId: submitted.requestSetId,
+    submittedAt: Date.now(),
+    polls: 0,
+    requests: [
+      {
+        itemId: msg.itemId,
+        requestName: input.requestName ?? 'copy',
+        targetType: input.targetType,
+      },
+    ],
+  };
+  await saveAsyncCopyState(msg, state);
+  return state;
+}
+
+async function submitAsyncCopyBatch(
+  msg: OperationMessage,
+  token: string,
+  items: OperationCopyBatchItem[],
+): Promise<AsyncCopyState> {
+  const inputs = items.map((item) => {
+    const itemMsg = messageForCopyItem(msg, item);
+    return buildAsyncCopyInput(itemMsg, asyncCopyRequestName(item.itemId));
+  });
+  const submitted = await meta.submitAsyncCopyBatch(token, msg.metaActId, inputs);
+  const state: AsyncCopyState = {
+    kind: 'meta_async_copy',
+    requestSetId: submitted.requestSetId,
+    submittedAt: Date.now(),
+    polls: 0,
+    requests: items.map((item, index) => ({
+      itemId: item.itemId,
+      requestName: inputs[index]?.requestName ?? asyncCopyRequestName(item.itemId),
+      targetType: item.targetType,
+    })),
+  };
+  await saveAsyncCopyStateForItems(msg, items.map((item) => item.itemId), state);
+  return state;
+}
+
+function asyncCopyStateKey(itemId: string): string {
+  return `operation:item:${itemId}:meta_async_copy`;
+}
+
+function parseAsyncCopyState(raw: string | null | undefined): AsyncCopyState | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<AsyncCopyState>;
+    if (
+      parsed.kind === 'meta_async_copy' &&
+      typeof parsed.requestSetId === 'string' &&
+      typeof parsed.submittedAt === 'number'
+    ) {
+      const requests = Array.isArray(parsed.requests)
+        ? parsed.requests
+          .filter((request): request is AsyncCopyStateRequest => (
+            !!request &&
+            typeof request === 'object' &&
+            typeof (request as AsyncCopyStateRequest).itemId === 'string' &&
+            typeof (request as AsyncCopyStateRequest).requestName === 'string' &&
+            (
+              (request as AsyncCopyStateRequest).targetType === 'campaign' ||
+              (request as AsyncCopyStateRequest).targetType === 'adset' ||
+              (request as AsyncCopyStateRequest).targetType === 'ad'
+            )
+          ))
+        : [];
+      return {
+        kind: 'meta_async_copy',
+        requestSetId: parsed.requestSetId,
+        submittedAt: parsed.submittedAt,
+        polls: typeof parsed.polls === 'number' ? parsed.polls : 0,
+        requests,
+      };
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+async function readAsyncCopyState(itemId: string): Promise<AsyncCopyState | null> {
+  const cached = parseAsyncCopyState(await redis.get(asyncCopyStateKey(itemId)));
+  if (cached) return cached;
+  const row = await db.transaction(async (tx) => {
+    await tx.execute(dsql`SELECT set_config('app.bypass_rls', '1', true)`);
+    const r = await tx
+      .select({ error: schema.operationTaskItems.error })
+      .from(schema.operationTaskItems)
+      .where(eq(schema.operationTaskItems.id, itemId))
+      .limit(1);
+    return r[0];
+  });
+  return parseAsyncCopyState(row?.error);
+}
+
+async function readAsyncCopyStateForItems(itemIds: string[]): Promise<AsyncCopyState | null> {
+  for (const itemId of itemIds) {
+    const cached = parseAsyncCopyState(await redis.get(asyncCopyStateKey(itemId)));
+    if (cached) return cached;
+  }
+  const rows = await db.transaction(async (tx) => {
+    await tx.execute(dsql`SELECT set_config('app.bypass_rls', '1', true)`);
+    return tx
+      .select({
+        id: schema.operationTaskItems.id,
+        error: schema.operationTaskItems.error,
+      })
+      .from(schema.operationTaskItems)
+      .where(inArray(schema.operationTaskItems.id, itemIds));
+  });
+  for (const row of rows) {
+    const parsed = parseAsyncCopyState(row.error);
+    if (parsed) return parsed;
+  }
+  return null;
+}
+
+async function saveAsyncCopyState(
+  msg: OperationMessage,
+  state: AsyncCopyState,
+): Promise<void> {
+  await saveAsyncCopyStateForItems(msg, [msg.itemId], state);
+}
+
+async function saveAsyncCopyStateForItems(
+  msg: OperationMessage,
+  itemIds: string[],
+  state: AsyncCopyState,
+): Promise<void> {
+  const value = JSON.stringify(state);
+  await Promise.all(itemIds.map((itemId) => redis.set(asyncCopyStateKey(itemId), value, 'EX', 60 * 60 * 24)));
+  await db.transaction(async (tx) => {
+    await tx.execute(dsql`SELECT set_config('app.bypass_rls', '1', true)`);
+    await tx
+      .update(schema.operationTaskItems)
+      .set({
+        status: 'running',
+        attempts: msg.attempt,
+        error: value,
+      })
+      .where(inArray(schema.operationTaskItems.id, itemIds));
+  });
+}
+
+async function clearAsyncCopyState(itemId: string): Promise<void> {
+  await redis.del(asyncCopyStateKey(itemId));
+}
+
+async function clearAsyncCopyStateForItems(itemIds: string[]): Promise<void> {
+  if (itemIds.length === 0) return;
+  await redis.del(...itemIds.map((itemId) => asyncCopyStateKey(itemId)));
 }
 
 async function assertMessageTargetOwnership(
@@ -341,11 +872,14 @@ async function resolveMessageOwner(
   return meta.getObjectOwnership(token, msg.targetType, msg.targetId);
 }
 
-async function handleErr(msg: OperationMessage, err: unknown): Promise<Outcome> {
+async function handleErr(
+  msg: OperationMessage,
+  err: unknown,
+  batchItems?: OperationCopyBatchItem[],
+): Promise<Outcome> {
   const message = err instanceof Error ? err.message : String(err);
   if (err instanceof HttpError && err.status < 500 && err.status !== 429) {
-    await failItem(msg, message);
-    await bumpProgress(msg.taskId, { failed: 1 });
+    await failMessages(msg, batchItems, message);
     return { kind: 'dead', reason: message };
   }
   if (err instanceof MetaApiError) {
@@ -360,24 +894,49 @@ async function handleErr(msg: OperationMessage, err: unknown): Promise<Outcome> 
       });
       await redis.del(`token:${msg.fbAccountId}`);
       await openFor(BreakerKey.fbAccount(msg.fbAccountId), 0, 'token_invalid');
-      await failItem(msg, `token invalid: ${message}`);
-      await bumpProgress(msg.taskId, { failed: 1 });
+      await failMessages(msg, batchItems, `token invalid: ${message}`);
       return { kind: 'dead', reason: 'token invalid' };
     }
     if (err.isRateLimited) {
       await openFor(BreakerKey.adAccount(msg.metaActId), 60, 'meta rate limited');
+      return { kind: 'retry', reason: 'meta rate limited', bumpAttempt: false };
       // 限流命中时让该账户挂 60s breaker；本消息走短 retry（attempt 不增）
       return { kind: 'retry', reason: 'meta rate limited', bumpAttempt: false };
     }
   }
   // 瞬时错误 → attempts++
   if (msg.attempt >= RMQ.maxAttempts) {
-    await failItem(msg, message);
-    await bumpProgress(msg.taskId, { failed: 1 });
+    await failMessages(msg, batchItems, message);
     return { kind: 'dead', reason: message };
   }
-  await incAttempts(msg);
+  await incAttemptsForMessages(msg, batchItems);
   return { kind: 'retry', reason: message };
+}
+
+async function failMessages(
+  msg: OperationMessage,
+  batchItems: OperationCopyBatchItem[] | undefined,
+  message: string,
+): Promise<void> {
+  const messages = batchItems?.length
+    ? batchItems.map((item) => messageForCopyItem(msg, item))
+    : [msg];
+  for (const itemMsg of messages) {
+    await failItem(itemMsg, message);
+    await bumpProgress(itemMsg.taskId, { failed: 1 });
+  }
+}
+
+async function incAttemptsForMessages(
+  msg: OperationMessage,
+  batchItems?: OperationCopyBatchItem[],
+): Promise<void> {
+  const messages = batchItems?.length
+    ? batchItems.map((item) => messageForCopyItem(msg, item))
+    : [msg];
+  for (const itemMsg of messages) {
+    await incAttempts(itemMsg);
+  }
 }
 
 async function markSuccess(

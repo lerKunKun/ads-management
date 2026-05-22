@@ -1,6 +1,6 @@
 import { Elysia, t } from 'elysia';
 import { sign } from '../../lib/jwt';
-import { authenticate, writeAudit } from './auth-service';
+import { authenticate, loadPrincipal, writeAudit } from './auth-service';
 import { authGuard, requirePermission } from '../../middleware/auth';
 import * as users from './user-service';
 
@@ -39,6 +39,7 @@ export const iam = new Elysia({ name: 'iam', prefix: '/iam' })
             id: p.userId,
             email: p.email,
             companyId: p.companyId,
+            companyName: p.companyName,
             roles: p.roles,
             permissions: p.permissions,
           },
@@ -62,11 +63,54 @@ export const iam = new Elysia({ name: 'iam', prefix: '/iam' })
           id: principal.userId,
           email: principal.email,
           companyId: principal.companyId,
+          companyName: principal.companyName,
           roles: principal.roles,
           permissions: principal.permissions,
           scope: principal.scope,
         },
       }))
+      .post(
+        '/switch-company',
+        async ({ principal, body, request, set }) => {
+          if (!principal.roles.includes('PlatformAdmin')) {
+            set.status = 403;
+            return { code: 403, msg: 'only PlatformAdmin can switch company', data: null };
+          }
+          const switched = await loadPrincipal(principal.userId, body.companyId);
+          if (!switched || !switched.roles.includes('PlatformAdmin')) {
+            set.status = 404;
+            return { code: 404, msg: 'company not found or unavailable', data: null };
+          }
+          const token = sign({ sub: switched.userId, cid: switched.companyId });
+          await writeAudit({
+            companyId: switched.companyId,
+            userId: switched.userId,
+            action: 'iam:company:switch',
+            resource: `company:${switched.companyId}`,
+            detail: { fromCompanyId: principal.companyId },
+            ...(ipOf(request) ? { ip: ipOf(request)! } : {}),
+          });
+          return {
+            code: 0,
+            msg: 'ok',
+            data: {
+              token,
+              user: {
+                id: switched.userId,
+                email: switched.email,
+                companyId: switched.companyId,
+                companyName: switched.companyName,
+                roles: switched.roles,
+                permissions: switched.permissions,
+              },
+            },
+          };
+        },
+        {
+          body: t.Object({ companyId: t.String({ format: 'uuid' }) }),
+          beforeHandle: requirePermission('iam:manage'),
+        },
+      )
       // ===== 用户管理(iam:manage) =====
       .get(
         '/users',

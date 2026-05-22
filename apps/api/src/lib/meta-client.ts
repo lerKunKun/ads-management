@@ -55,6 +55,8 @@ interface MetaAdAccount {
   account_id?: string;
   name?: string;
   currency?: string;
+  timezone_name?: string;
+  business_country_code?: string;
   account_status?: number;
 }
 
@@ -216,37 +218,68 @@ const EMPTY_INSIGHTS: InsightsSummary = {
   initiateCheckout: 0,
 };
 
-// 订单/加购/结账匹配的 action_type 前缀
-const ORDER_ACTIONS = [
-  'purchase',
-  'omni_purchase',
-  'offsite_conversion.fb_pixel_purchase',
-  'onsite_web_purchase',
-  'app_custom_event.fb_mobile_purchase',
-];
-const ADD_TO_CART_ACTIONS = [
-  'add_to_cart',
-  'omni_add_to_cart',
-  'offsite_conversion.fb_pixel_add_to_cart',
-];
-const CHECKOUT_ACTIONS = [
-  'initiate_checkout',
-  'omni_initiated_checkout',
-  'offsite_conversion.fb_pixel_initiate_checkout',
+const ORDER_ACTION_GROUPS = [
+  ['omni_purchase'],
+  ['purchase'],
+  [
+    'offsite_conversion.fb_pixel_purchase',
+    'onsite_conversion.purchase',
+    'onsite_web_purchase',
+    'onsite_web_app_purchase',
+    'app_custom_event.fb_mobile_purchase',
+    'web_in_store_purchase',
+    'offline_conversion.purchase',
+  ],
 ];
 
-function sumActions(actions: MetaActionRow[] | undefined, keys: string[]): number {
+const ADD_TO_CART_ACTION_GROUPS = [
+  ['omni_add_to_cart'],
+  ['add_to_cart'],
+  [
+    'offsite_conversion.fb_pixel_add_to_cart',
+    'onsite_conversion.add_to_cart',
+    'onsite_web_add_to_cart',
+    'onsite_web_app_add_to_cart',
+    'app_custom_event.fb_mobile_add_to_cart',
+    'web_in_store_add_to_cart',
+  ],
+];
+
+const CHECKOUT_ACTION_GROUPS = [
+  ['omni_initiated_checkout'],
+  ['initiate_checkout'],
+  [
+    'offsite_conversion.fb_pixel_initiate_checkout',
+    'onsite_conversion.initiate_checkout',
+    'onsite_web_initiate_checkout',
+    'onsite_web_app_initiate_checkout',
+    'app_custom_event.fb_mobile_initiated_checkout',
+    'web_in_store_initiate_checkout',
+  ],
+];
+
+function actionMetric(
+  actions: MetaActionRow[] | undefined,
+  groups: string[][],
+): number {
   if (!actions) return 0;
-  let s = 0;
-  for (const a of actions) {
-    if (keys.includes(a.action_type)) s += Number(a.value) || 0;
+  const byType = new Map<string, number>();
+  for (const action of actions) {
+    byType.set(
+      action.action_type,
+      (byType.get(action.action_type) ?? 0) + (Number(action.value) || 0),
+    );
   }
-  return s;
+  for (const group of groups) {
+    const value = group.reduce((sum, key) => sum + (byType.get(key) ?? 0), 0);
+    if (value > 0) return value;
+  }
+  return 0;
 }
 
 function toInsightsSummary(row: MetaInsightsRaw): InsightsSummary {
   const spend = Number(row.spend ?? 0);
-  const orders = sumActions(row.actions, ORDER_ACTIONS);
+  const orders = actionMetric(row.actions, ORDER_ACTION_GROUPS);
   return {
     spend,
     impressions: Number(row.impressions ?? 0),
@@ -256,8 +289,8 @@ function toInsightsSummary(row: MetaInsightsRaw): InsightsSummary {
     ctr: Number(row.ctr ?? 0),
     orders,
     cpa: orders > 0 ? spend / orders : 0,
-    addToCart: sumActions(row.actions, ADD_TO_CART_ACTIONS),
-    initiateCheckout: sumActions(row.actions, CHECKOUT_ACTIONS),
+    addToCart: actionMetric(row.actions, ADD_TO_CART_ACTION_GROUPS),
+    initiateCheckout: actionMetric(row.actions, CHECKOUT_ACTION_GROUPS),
   };
 }
 
@@ -311,6 +344,44 @@ async function graph<T>(
   return JSON.parse(text) as T;
 }
 
+async function graphRoot<T>(
+  token: string,
+  init: {
+    method?: 'POST';
+    form?: Record<string, string>;
+  },
+): Promise<T> {
+  const url = new URL(env.metaGraphBase);
+  url.searchParams.set('access_token', token);
+  const method = init.method ?? 'POST';
+  const headers: Record<string, string> = {};
+  let body: string | undefined;
+  if (init.form) {
+    body = new URLSearchParams(init.form).toString();
+    headers['content-type'] = 'application/x-www-form-urlencoded';
+  }
+  const res = await fetch(url, { method, headers, body });
+  const text = await res.text();
+  if (!res.ok) {
+    let err: MetaErrorEnvelope['error'] | undefined;
+    try {
+      err = (JSON.parse(text) as MetaErrorEnvelope).error;
+    } catch {
+      /* */
+    }
+    const friendly = err?.error_user_msg ?? err?.message;
+    throw new MetaApiError(
+      res.status,
+      err?.code,
+      err?.error_subcode,
+      err?.type,
+      err?.fbtrace_id,
+      friendly ?? `Meta root HTTP ${res.status}: ${text.slice(0, 200)}`,
+    );
+  }
+  return JSON.parse(text) as T;
+}
+
 function n(v: string | number | undefined): number | undefined {
   if (v === undefined || v === null || v === '') return undefined;
   const x = Number(v);
@@ -346,6 +417,78 @@ export interface CopyOptions {
   renameOptions?: RenameOptions;
 }
 
+export interface AsyncCopyInput extends CopyOptions {
+  targetType: 'campaign' | 'adset' | 'ad';
+  sourceId: string;
+  targetAdAccountId?: string;
+  targetCampaignId?: string;
+  targetAdSetId?: string;
+  requestName?: string;
+}
+
+export interface AsyncCopyRequestRef {
+  requestName: string;
+  targetType: AsyncCopyInput['targetType'];
+}
+
+export interface AsyncCopySubmitResult {
+  requestSetId: string;
+}
+
+export interface AsyncCopyPollResult {
+  status: 'pending' | 'success' | 'failed';
+  newId?: string;
+  error?: string;
+}
+
+interface MetaAsyncBatchRequest {
+  relative_url: string;
+  body: string;
+  name: string;
+}
+
+interface MetaAsyncBatchCreateResponse {
+  id?: string;
+  async_request_set?: string | { id?: string };
+  async_request_set_id?: string;
+  async_batch_request_set_id?: string;
+  request_set_id?: string;
+}
+
+interface MetaAsyncRequestSetRaw {
+  id: string;
+  name?: string;
+  is_completed?: boolean;
+  success_count?: number;
+  error_count?: number;
+  canceled_count?: number;
+  in_progress_count?: number;
+  total_count?: number;
+}
+
+interface MetaAsyncRequestRaw {
+  id: string;
+  name?: string;
+  status?: string;
+  result?: unknown;
+  error?: unknown;
+  input?: unknown;
+  type?: string;
+}
+
+interface MetaBatchRequest {
+  method: 'POST';
+  relative_url: string;
+  body: string;
+  name: string;
+}
+
+interface MetaBatchResponseEntry {
+  code?: number;
+  body?: unknown;
+  headers?: unknown;
+}
+
 function copyForm(opts: CopyOptions): Record<string, string> {
   const f: Record<string, string> = {};
   if (opts.deepCopy !== undefined) f['deep_copy'] = String(opts.deepCopy);
@@ -356,6 +499,224 @@ function copyForm(opts: CopyOptions): Record<string, string> {
     f['rename_options'] = JSON.stringify(opts.renameOptions);
   }
   return f;
+}
+
+function asyncCopyForm(input: AsyncCopyInput): Record<string, string> {
+  const f =
+    input.targetType === 'ad'
+      ? {
+        ...(input.statusOption ? { status_option: input.statusOption } : {}),
+        ...(input.renameOptions && Object.keys(input.renameOptions).length
+          ? { rename_options: JSON.stringify(input.renameOptions) }
+          : {}),
+      }
+      : copyForm(input);
+  if (input.targetType === 'campaign' && input.targetAdAccountId) {
+    f['target_ad_account_id'] = input.targetAdAccountId;
+  }
+  if (input.targetType === 'adset' && input.targetCampaignId) {
+    f['campaign_id'] = input.targetCampaignId;
+  }
+  if (input.targetType === 'ad' && input.targetAdSetId) {
+    f['adset_id'] = input.targetAdSetId;
+  }
+  return f;
+}
+
+function asyncCopyRequest(input: AsyncCopyInput): MetaAsyncBatchRequest {
+  const body = new URLSearchParams(asyncCopyForm(input)).toString();
+  return {
+    relative_url: `${input.sourceId}/copies`,
+    body,
+    name: input.requestName ?? 'copy',
+  };
+}
+
+function asyncCopyRequests(input: AsyncCopyInput): MetaAsyncBatchRequest[] {
+  return [asyncCopyRequest(input)];
+}
+
+function graphBatchCopyRequest(input: AsyncCopyInput): MetaBatchRequest {
+  return {
+    method: 'POST',
+    relative_url: `${env.metaApiVersion}/${input.sourceId}/copies`,
+    body: new URLSearchParams(asyncCopyForm(input)).toString(),
+    name: input.requestName ?? 'copy',
+  };
+}
+
+function parseAsyncRequestSetId(r: MetaAsyncBatchCreateResponse): string | undefined {
+  if (typeof r.id === 'string' && r.id) return r.id;
+  if (typeof r.async_request_set === 'string' && r.async_request_set) return r.async_request_set;
+  if (typeof r.async_request_set === 'object' && r.async_request_set?.id) {
+    return r.async_request_set.id;
+  }
+  return r.async_request_set_id ?? r.async_batch_request_set_id ?? r.request_set_id;
+}
+
+function normalizeAsyncStatus(status: string | undefined): string {
+  return (status ?? '').toUpperCase();
+}
+
+function parseMaybeJson(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+function extractBodyCandidates(value: unknown): unknown[] {
+  const parsed = parseMaybeJson(value);
+  if (!parsed || typeof parsed !== 'object') return [parsed];
+  const record = parsed as Record<string, unknown>;
+  return [
+    parsed,
+    parseMaybeJson(record['body']),
+    parseMaybeJson(record['response']),
+    parseMaybeJson(record['result']),
+  ].filter((item) => item !== undefined && item !== null);
+}
+
+function copiedIdFromPayload(value: unknown, targetType: AsyncCopyInput['targetType']): string | undefined {
+  for (const item of extractBodyCandidates(value)) {
+    if (!item || typeof item !== 'object') continue;
+    const body = item as Record<string, unknown>;
+    const adObjectIds = Array.isArray(body['ad_object_ids']) ? body['ad_object_ids'] : undefined;
+    const candidate =
+      targetType === 'campaign'
+        ? body['copied_campaign_id']
+        : targetType === 'adset'
+          ? body['copied_adset_id']
+          : body['copied_ad_id'];
+    if (typeof candidate === 'string' && candidate) return candidate;
+    const copiedFromObjectList = copiedIdFromAdObjectList(adObjectIds, targetType);
+    if (copiedFromObjectList) return copiedFromObjectList;
+    if (typeof body['id'] === 'string' && body['id']) return body['id'];
+  }
+  return undefined;
+}
+
+function copiedIdFromAdObjectList(
+  adObjectIds: unknown[] | undefined,
+  targetType: AsyncCopyInput['targetType'],
+): string | undefined {
+  if (!adObjectIds) return undefined;
+  const preferredType =
+    targetType === 'campaign' ? 'campaign' : targetType === 'adset' ? 'ad_set' : 'ad';
+  for (const item of adObjectIds) {
+    if (typeof item === 'string' && item) return item;
+    if (!item || typeof item !== 'object') continue;
+    const record = item as Record<string, unknown>;
+    if (record['ad_object_type'] !== preferredType) continue;
+    const copiedId = record['copied_id'];
+    if (typeof copiedId === 'string' && copiedId) return copiedId;
+  }
+  for (const item of adObjectIds) {
+    if (!item || typeof item !== 'object') continue;
+    const copiedId = (item as Record<string, unknown>)['copied_id'];
+    if (typeof copiedId === 'string' && copiedId) return copiedId;
+  }
+  return undefined;
+}
+
+function asyncRequestText(request: MetaAsyncRequestRaw): string {
+  return [
+    request.name,
+    request.type,
+    typeof request.input === 'string' ? request.input : JSON.stringify(request.input ?? ''),
+  ].join(' ');
+}
+
+function pickCopyAsyncRequest(
+  requests: MetaAsyncRequestRaw[],
+  requestName?: string,
+  index?: number,
+): MetaAsyncRequestRaw | undefined {
+  if (requestName) {
+    return (
+      requests.find((request) => request.name === requestName) ??
+      (index !== undefined ? requests[index] : undefined)
+    );
+  }
+  return (
+    requests.find((request) => request.name === 'copy') ??
+    requests.find((request) => asyncRequestText(request).includes('/copies')) ??
+    requests[0]
+  );
+}
+
+function errorText(value: unknown): string | undefined {
+  const parsed = parseMaybeJson(value);
+  if (!parsed) return undefined;
+  if (typeof parsed === 'string') return parsed;
+  if (typeof parsed !== 'object') return String(parsed);
+  const record = parsed as Record<string, unknown>;
+  const nested = parseMaybeJson(record['error']);
+  if (nested && nested !== parsed) return errorText(nested);
+  const message = record['message'] ?? record['error_user_msg'] ?? record['body'];
+  return typeof message === 'string' ? message : JSON.stringify(record).slice(0, 500);
+}
+
+function asyncCopyResultFromRequest(
+  request: MetaAsyncRequestRaw | undefined,
+  requestSetId: string,
+  targetType: AsyncCopyInput['targetType'],
+  hasSetError: boolean,
+): AsyncCopyPollResult {
+  if (!request) {
+    if (hasSetError) {
+      return { status: 'failed', error: `Meta async copy ${requestSetId} failed` };
+    }
+    return { status: 'pending' };
+  }
+
+  const reqStatus = normalizeAsyncStatus(request.status);
+  if (
+    reqStatus.startsWith('ERROR') ||
+    reqStatus.includes('CANCELED') ||
+    request.error
+  ) {
+    return {
+      status: 'failed',
+      error: errorText(request.error ?? request.result) ?? `Meta async request ${request.id} failed`,
+    };
+  }
+
+  const newId = copiedIdFromPayload(request.result, targetType);
+  if (newId) return { status: 'success', newId };
+
+  if (hasSetError || reqStatus === 'SUCCESS') {
+    return {
+      status: 'failed',
+      error: errorText(request.result) ?? `Meta async copy ${requestSetId} completed without copied id`,
+    };
+  }
+  return { status: 'pending' };
+}
+
+function batchCopyResultFromEntry(
+  entry: MetaBatchResponseEntry | undefined,
+  requestName: string,
+  targetType: AsyncCopyInput['targetType'],
+): AsyncCopyPollResult {
+  if (!entry) {
+    return { status: 'failed', error: `Meta batch copy ${requestName} missing response` };
+  }
+  const code = entry.code ?? 0;
+  if (code < 200 || code >= 300) {
+    return {
+      status: 'failed',
+      error: errorText(entry.body) ?? `Meta batch copy ${requestName} HTTP ${code}`,
+    };
+  }
+  const newId = copiedIdFromPayload(entry.body, targetType);
+  if (newId) return { status: 'success', newId };
+  return {
+    status: 'failed',
+    error: errorText(entry.body) ?? `Meta batch copy ${requestName} completed without copied id`,
+  };
 }
 
 // ===== 主对象 =====
@@ -370,20 +731,43 @@ export const meta = {
       metaActId: string;
       name: string;
       currency?: string;
+      timezoneName?: string;
+      businessCountryCode?: string;
       status: 'active' | 'disabled' | 'closed' | 'pending';
     }>
   > {
-    if (FAKE_MODE) return [];
+    if (FAKE_MODE) {
+      const countries = ['US', 'GB', 'DE', 'JP', 'SG', 'AU'];
+      const timezones = [
+        'America/Los_Angeles',
+        'Europe/London',
+        'Europe/Berlin',
+        'Asia/Tokyo',
+        'Asia/Singapore',
+        'Australia/Sydney',
+      ];
+      const currencies = ['USD', 'GBP', 'EUR', 'JPY', 'SGD', 'AUD'];
+      return Array.from({ length: 6 }, (_, index) => ({
+        metaActId: `act_mock_${index}`,
+        name: `Mock Ad Account ${index}`,
+        currency: currencies[index % currencies.length],
+        timezoneName: timezones[index % timezones.length],
+        businessCountryCode: countries[index % countries.length],
+        status: 'active' as const,
+      }));
+    }
     const out: Array<{
       metaActId: string;
       name: string;
       currency?: string;
+      timezoneName?: string;
+      businessCountryCode?: string;
       status: 'active' | 'disabled' | 'closed' | 'pending';
     }> = [];
     let after: string | undefined;
     do {
       const q: Record<string, string> = {
-        fields: 'id,account_id,name,currency,account_status',
+        fields: 'id,account_id,name,currency,timezone_name,business_country_code,account_status',
         limit: '100',
       };
       if (after) q['after'] = after;
@@ -393,6 +777,8 @@ export const meta = {
           metaActId: a.id,
           name: a.name ?? a.id,
           ...(a.currency ? { currency: a.currency } : {}),
+          ...(a.timezone_name ? { timezoneName: a.timezone_name } : {}),
+          ...(a.business_country_code ? { businessCountryCode: a.business_country_code } : {}),
           status: ACCT_STATUS_MAP[a.account_status ?? 1] ?? 'disabled',
         });
       }
@@ -422,6 +808,150 @@ export const meta = {
       ...(raw.campaign_id ? { campaignId: raw.campaign_id } : {}),
       ...(raw.adset_id ? { adsetId: raw.adset_id } : {}),
     };
+  },
+
+  async submitAsyncCopy(
+    token: string,
+    metaActId: string,
+    input: AsyncCopyInput,
+  ): Promise<AsyncCopySubmitResult> {
+    return this.submitAsyncCopyBatch(token, metaActId, [input]);
+  },
+
+  async submitAsyncCopyBatch(
+    token: string,
+    metaActId: string,
+    inputs: AsyncCopyInput[],
+  ): Promise<AsyncCopySubmitResult> {
+    if (FAKE_MODE) {
+      throw new Error('submitAsyncCopyBatch is not used in fake mode');
+    }
+    if (inputs.length === 0) {
+      throw new MetaApiError(
+        500,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        'async copy: no requests to submit',
+      );
+    }
+    const requests = inputs.map((item) => asyncCopyRequest(item));
+    console.info(
+      `[meta-async-copy] submit account=${metaActId} requests=${requests.length} names=${requests
+        .map((request) => request.name)
+        .join(',')}`,
+    );
+    const r = await graph<MetaAsyncBatchCreateResponse>(
+      `/${metaActId}/async_batch_requests`,
+      token,
+      {
+        method: 'POST',
+        form: {
+          name: inputs.length === 1
+            ? inputs[0]!.requestName ?? `copy_${inputs[0]!.targetType}_${inputs[0]!.sourceId}`
+            : `copy_batch_${Date.now()}`,
+          adbatch: JSON.stringify(requests),
+        },
+      },
+    );
+    const requestSetId = parseAsyncRequestSetId(r);
+    if (!requestSetId) {
+      throw new MetaApiError(
+        500,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        `async copy: missing request set id from ${JSON.stringify(r).slice(0, 300)}`,
+      );
+    }
+    return { requestSetId };
+  },
+
+  async pollAsyncCopy(
+    token: string,
+    requestSetId: string,
+    targetType: AsyncCopyInput['targetType'],
+    requestName?: string,
+  ): Promise<AsyncCopyPollResult> {
+    const result = await this.pollAsyncCopyBatch(token, requestSetId, [
+      { requestName: requestName ?? 'copy', targetType },
+    ]);
+    return result[requestName ?? 'copy'] ?? { status: 'pending' };
+  },
+
+  async pollAsyncCopyBatch(
+    token: string,
+    requestSetId: string,
+    requestsToPoll: AsyncCopyRequestRef[],
+  ): Promise<Record<string, AsyncCopyPollResult>> {
+    if (FAKE_MODE) {
+      throw new Error('pollAsyncCopyBatch is not used in fake mode');
+    }
+    const set = await graph<MetaAsyncRequestSetRaw>(`/${requestSetId}`, token, {
+      query: {
+        fields: 'id,name,is_completed,success_count,error_count,canceled_count,in_progress_count,total_count',
+      },
+    });
+    const hasSetError = (set.error_count ?? 0) > 0 || (set.canceled_count ?? 0) > 0;
+    const counted = (set.success_count ?? 0) + (set.error_count ?? 0) + (set.canceled_count ?? 0);
+    const total = set.total_count ?? 0;
+    const setDone =
+      set.is_completed === true ||
+      (total > 0 && counted >= total && (set.in_progress_count ?? 0) === 0);
+
+    if (!setDone) {
+      return Object.fromEntries(
+        requestsToPoll.map((request) => [request.requestName, { status: 'pending' as const }]),
+      );
+    }
+
+    const reqPage = await graph<MetaPagedEnvelope<MetaAsyncRequestRaw>>(
+      `/${requestSetId}/requests`,
+      token,
+      { query: { fields: 'id,name,status,result,error,input,type', limit: '100' } },
+    );
+    const out: Record<string, AsyncCopyPollResult> = {};
+    for (const [index, expected] of requestsToPoll.entries()) {
+      const request = pickCopyAsyncRequest(reqPage.data, expected.requestName, index);
+      out[expected.requestName] = asyncCopyResultFromRequest(
+        request,
+        requestSetId,
+        expected.targetType,
+        hasSetError,
+      );
+    }
+    return out;
+  },
+
+  async copyBatch(
+    token: string,
+    inputs: AsyncCopyInput[],
+  ): Promise<Record<string, AsyncCopyPollResult>> {
+    if (FAKE_MODE) {
+      throw new Error('copyBatch is not used in fake mode');
+    }
+    if (inputs.length === 0) return {};
+    const requests = inputs.map((item) => graphBatchCopyRequest(item));
+    console.info(
+      `[meta-copy-batch] submit requests=${requests.length} names=${requests
+        .map((request) => request.name)
+        .join(',')}`,
+    );
+    const entries = await graphRoot<MetaBatchResponseEntry[]>(token, {
+      method: 'POST',
+      form: {
+        batch: JSON.stringify(requests),
+        include_headers: 'false',
+      },
+    });
+    const out: Record<string, AsyncCopyPollResult> = {};
+    for (const [index, input] of inputs.entries()) {
+      const requestName = input.requestName ?? 'copy';
+      out[requestName] = batchCopyResultFromEntry(entries[index], requestName, input.targetType);
+    }
+    return out;
   },
 
   // ----- Campaign -----

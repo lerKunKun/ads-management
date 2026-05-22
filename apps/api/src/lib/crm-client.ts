@@ -46,6 +46,11 @@ async function call<T>(
   // 网络/HTTP 层错误 (与业务 code 区分)
   if (!res.ok) {
     const txt = await res.text().catch(() => '');
+    console.warn('[crm:http-error]', {
+      path,
+      status: res.status,
+      body: txt.slice(0, 500),
+    });
     throw new HttpError(
       res.status === 401 || res.status === 403 ? res.status : 502,
       1001,
@@ -61,6 +66,11 @@ async function call<T>(
   }
 
   if (json.code !== 0) {
+    console.warn('[crm:business-error]', {
+      path,
+      code: json.code,
+      message: json.msg,
+    });
     // 业务失败,把 CRM 的 msg 原样透传 (中文)
     throw new HttpError(400, 1001, json.msg ?? `CRM ${path} 业务失败 (code=${json.code})`);
   }

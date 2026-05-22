@@ -22,6 +22,8 @@ export interface UserListItem {
   createdAt: string;
   roles: string[]; // role code
   grantsCount: number;
+  fbAccountGrantCount: number;
+  adAccountGrantCount: number;
 }
 
 export interface RoleOption {
@@ -34,7 +36,14 @@ export interface RoleOption {
 const ROLE_ALLOW = new Set(['CompanyAdmin', 'Operator', 'Viewer']);
 
 async function bumpPermCache(userId: string): Promise<void> {
-  await redis.del(`perm:${userId}`);
+  const stream = redis.scanStream({ match: `perm:${userId}:*`, count: 50 });
+  const keys: string[] = [];
+  await new Promise<void>((resolve, reject) => {
+    stream.on('data', (chunk: string[]) => keys.push(...chunk));
+    stream.on('end', () => resolve());
+    stream.on('error', reject);
+  });
+  if (keys.length > 0) await redis.del(...keys);
 }
 
 /** 列出本公司用户(含角色 + 作用域计数) */
@@ -55,7 +64,9 @@ export async function listUsers(
           ARRAY_AGG(DISTINCT r.code) FILTER (WHERE r.code IS NOT NULL),
           '{}'::text[]
         ) AS roles,
-        (SELECT COUNT(*)::int FROM user_resource_grants g WHERE g.user_id = u.id) AS grants_count
+        (SELECT COUNT(*)::int FROM user_resource_grants g WHERE g.user_id = u.id) AS grants_count,
+        (SELECT COUNT(*)::int FROM user_resource_grants g WHERE g.user_id = u.id AND g.resource_type = 'fb_account') AS fb_account_grant_count,
+        (SELECT COUNT(*)::int FROM user_resource_grants g WHERE g.user_id = u.id AND g.resource_type = 'ad_account') AS ad_account_grant_count
       FROM users u
       LEFT JOIN user_roles ur ON ur.user_id = u.id
       LEFT JOIN roles r       ON r.id = ur.role_id
@@ -69,6 +80,8 @@ export async function listUsers(
       created_at: Date | string;
       roles: string[];
       grants_count: number;
+      fb_account_grant_count: number;
+      ad_account_grant_count: number;
     }>;
     return rows.map((r) => ({
       id: r.id,
@@ -77,6 +90,8 @@ export async function listUsers(
       createdAt: new Date(r.created_at).toISOString(),
       roles: r.roles ?? [],
       grantsCount: r.grants_count ?? 0,
+      fbAccountGrantCount: r.fb_account_grant_count ?? 0,
+      adAccountGrantCount: r.ad_account_grant_count ?? 0,
     }));
   });
 }
@@ -389,6 +404,8 @@ export async function listResourcesForGrant(
     fbAccountId: string;
     status: string;
     currency: string | null;
+    timezoneName: string | null;
+    businessCountryCode: string | null;
   }>;
 }> {
   return db.transaction(async (tx) => {
@@ -412,6 +429,8 @@ export async function listResourcesForGrant(
           fbAccountId: schema.adAccounts.fbAccountId,
           status: schema.adAccounts.status,
           currency: schema.adAccounts.currency,
+          timezoneName: schema.adAccounts.timezoneName,
+          businessCountryCode: schema.adAccounts.businessCountryCode,
         })
         .from(schema.adAccounts)
         .where(eq(schema.adAccounts.companyId, principal.companyId)),

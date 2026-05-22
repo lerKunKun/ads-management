@@ -59,9 +59,29 @@ export interface Me {
   id: string;
   email: string;
   companyId: string;
+  companyName: string;
   roles: string[];
   permissions: string[];
   scope: { fbAccounts: string[]; adAccounts: string[]; bypass: boolean };
+}
+
+export interface Company {
+  id: string;
+  name: string;
+  status: 'active' | 'disabled';
+  createdAt: string;
+  userCount: number;
+  accountGroupCount: number;
+  adAccountCount: number;
+}
+
+export interface CompanyUser {
+  id: string;
+  email: string;
+  status: 'active' | 'disabled';
+  createdAt: string;
+  roles: string[];
+  grantsCount: number;
 }
 
 export interface FbAccount {
@@ -78,6 +98,8 @@ export interface AdAccount {
   metaActId: string;
   name: string;
   currency: string | null;
+  timezoneName: string | null;
+  businessCountryCode: string | null;
   status: 'active' | 'disabled' | 'closed' | 'pending';
   lastSyncedAt: string | null;
   fbAccountId: string;
@@ -147,6 +169,8 @@ export interface AdAccountSummary {
   metaActId: string;
   name: string;
   currency: string | null;
+  timezoneName: string | null;
+  businessCountryCode: string | null;
   status: string;
   fbAccountId: string;
   fbAccountName: string;
@@ -170,6 +194,11 @@ export const api = {
       body: JSON.stringify({ email, password }),
     }),
   me: () => call<Me>('/iam/me'),
+  switchCompany: (companyId: string) =>
+    call<{ token: string; user: Omit<Me, 'scope'> }>('/iam/switch-company', {
+      method: 'POST',
+      body: JSON.stringify({ companyId }),
+    }),
   fbAccounts: () => call<FbAccount[]>('/fb-accounts'),
   adAccounts: (fbAccountId?: string) =>
     call<AdAccount[]>(
@@ -297,6 +326,8 @@ export const api = {
         createdAt: string;
         roles: string[];
         grantsCount: number;
+        fbAccountGrantCount: number;
+        adAccountGrantCount: number;
       }>
     >('/iam/users'),
   createUser: (email: string, password: string, roleCode: string) =>
@@ -341,10 +372,42 @@ export const api = {
         fbAccountId: string;
         status: string;
         currency: string | null;
+        timezoneName: string | null;
+        businessCountryCode: string | null;
       }>;
     }>('/iam/grant-resources'),
 
   // M4: 管理端点 (权限 iam:manage)
+  listCompanies: () => call<Company[]>('/_admin/companies'),
+  createCompany: (name: string) =>
+    call<{ id: string }>('/_admin/companies', {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    }),
+  updateCompany: (id: string, patch: { name?: string; status?: 'active' | 'disabled' }) =>
+    call<null>(`/_admin/companies/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+  listCompanyUsers: (companyId: string) =>
+    call<CompanyUser[]>(`/_admin/companies/${companyId}/users`),
+  createCompanyUser: (
+    companyId: string,
+    args: { email: string; password: string; roleCode: string },
+  ) =>
+    call<{ id: string }>(`/_admin/companies/${companyId}/users`, {
+      method: 'POST',
+      body: JSON.stringify(args),
+    }),
+  updateCompanyUser: (
+    companyId: string,
+    userId: string,
+    patch: { roleCode?: string; status?: 'active' | 'disabled' },
+  ) =>
+    call<null>(`/_admin/companies/${companyId}/users/${userId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
   listBreakers: () =>
     call<
       Array<{ key: string; kind: 'adacct' | 'fb'; target: string; reason: string; ttl: number }>

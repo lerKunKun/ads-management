@@ -1,8 +1,8 @@
-import { createFileRoute, redirect, Link } from '@tanstack/react-router';
+import { createFileRoute, redirect, Link, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useState } from 'react';
-import { Plus, ShieldCheck, Users } from 'lucide-react';
-import { api, getToken } from '@/lib/api';
+import { Building2, Plus, ShieldCheck, Users } from 'lucide-react';
+import { api, getToken, setToken, type Me } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogFooter } from '@/components/ui/dialog';
@@ -25,60 +25,132 @@ export const Route = createFileRoute('/admin_/users')({
   component: UsersPage,
 });
 
-type UserRow = Awaited<ReturnType<typeof api.listUsers>>[number];
-type RoleOption = Awaited<ReturnType<typeof api.listRoles>>[number];
+type CompanyRow = Awaited<ReturnType<typeof api.listCompanies>>[number];
+type UserRow = Awaited<ReturnType<typeof api.listCompanyUsers>>[number];
+
+type RoleCode = 'CompanyAdmin' | 'Operator' | 'Viewer';
+
+const ROLE_OPTIONS: Array<{ code: RoleCode; label: string }> = [
+  { code: 'CompanyAdmin', label: '公司管理员' },
+  { code: 'Operator', label: '操作员' },
+  { code: 'Viewer', label: '只读' },
+];
+
+const ROLE_FILTER_OPTIONS = [
+  { value: '', label: '全部' },
+  { value: 'PlatformAdmin', label: '平台超管' },
+  ...ROLE_OPTIONS.map((role) => ({ value: role.code, label: role.label })),
+];
 
 function UsersPage() {
+  const navigate = useNavigate();
   const qc = useQueryClient();
-  const usersQ = useQuery({ queryKey: ['admin', 'users'], queryFn: api.listUsers });
-  const rolesQ = useQuery({ queryKey: ['admin', 'roles'], queryFn: api.listRoles });
+  const me = useQuery<Me>({ queryKey: ['me'], queryFn: api.me });
+  const companiesQ = useQuery({ queryKey: ['admin', 'companies'], queryFn: api.listCompanies });
+  const companies = companiesQ.data ?? [];
+  const isPlatformAdmin = me.data?.roles.includes('PlatformAdmin') ?? false;
+
+  const [selectedCompanyId, setSelectedCompanyId] = useState('');
+  const selectedCompany =
+    companies.find((company) => company.id === selectedCompanyId) ??
+    companies.find((company) => company.id === me.data?.companyId) ??
+    companies[0] ??
+    null;
+
+  const usersQ = useQuery({
+    queryKey: ['admin', 'company-users', selectedCompany?.id ?? 'none'],
+    queryFn: () => api.listCompanyUsers(selectedCompany!.id),
+    enabled: !!selectedCompany,
+  });
 
   const [creating, setCreating] = useState(false);
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
 
+  useEffect(() => {
+    if (!me.data || companies.length === 0) return;
+    if (!selectedCompanyId || !companies.some((company) => company.id === selectedCompanyId)) {
+      const currentCompany = companies.find((company) => company.id === me.data.companyId);
+      setSelectedCompanyId((currentCompany ?? companies[0]!).id);
+    }
+  }, [companies, me.data, selectedCompanyId]);
+
   const create = useMutation({
-    mutationFn: (args: { email: string; password: string; roleCode: string }) =>
-      api.createUser(args.email, args.password, args.roleCode),
+    mutationFn: (args: { email: string; password: string; roleCode: RoleCode }) => {
+      if (!selectedCompany) throw new Error('请选择公司');
+      return api.createCompanyUser(selectedCompany.id, args);
+    },
     onSuccess: () => {
       setCreating(false);
+      qc.invalidateQueries({ queryKey: ['admin', 'companies'] });
+      qc.invalidateQueries({ queryKey: ['admin', 'company-users', selectedCompany?.id ?? 'none'] });
       qc.invalidateQueries({ queryKey: ['admin', 'users'] });
     },
   });
 
   const update = useMutation({
     mutationFn: ({
+      companyId,
       id,
       patch,
     }: {
+      companyId: string;
       id: string;
-      patch: { roleCode?: string; status?: 'active' | 'disabled' };
-    }) => api.updateUser(id, patch),
-    onSuccess: () => {
+      patch: { roleCode?: RoleCode; status?: 'active' | 'disabled' };
+    }) => api.updateCompanyUser(companyId, id, patch),
+    onSuccess: (_data, variables) => {
+      qc.invalidateQueries({ queryKey: ['admin', 'companies'] });
+      qc.invalidateQueries({ queryKey: ['admin', 'company-users', variables.companyId] });
       qc.invalidateQueries({ queryKey: ['admin', 'users'] });
       qc.invalidateQueries({ queryKey: ['me'] });
     },
   });
 
+  const switchCompany = useMutation({
+    mutationFn: (companyId: string) => api.switchCompany(companyId),
+  });
+
   const users = usersQ.data ?? [];
-  const roles = rolesQ.data ?? [];
   const filtered = useMemo(
     () =>
       users.filter(
         (user) =>
-          matchText(user.email, search) &&
+          [user.email, selectedCompany?.name ?? '', user.roles.join(' ')].some((value) =>
+            matchText(value, search),
+          ) &&
           (!roleFilter || user.roles.includes(roleFilter)) &&
           (!statusFilter || user.status === statusFilter),
       ),
-    [roleFilter, search, statusFilter, users],
+    [roleFilter, search, selectedCompany?.name, statusFilter, users],
   );
   const pager = usePagination(filtered);
+
   const error =
+    (me.error as Error | null)?.message ??
+    (companiesQ.error as Error | null)?.message ??
     (usersQ.error as Error | null)?.message ??
-    (rolesQ.error as Error | null)?.message ??
     (create.error as Error | null)?.message ??
-    (update.error as Error | null)?.message;
+    (update.error as Error | null)?.message ??
+    (switchCompany.error as Error | null)?.message;
+
+  async function goIam(userId?: string) {
+    if (!selectedCompany) return;
+    if (isPlatformAdmin && me.data?.companyId !== selectedCompany.id) {
+      const result = await switchCompany.mutateAsync(selectedCompany.id);
+      setToken(result.token);
+      qc.clear();
+    }
+    navigate({ to: '/admin/iam', search: userId ? { userId } : {} });
+  }
+
+  function updateUser(
+    user: UserRow,
+    patch: { roleCode?: RoleCode; status?: 'active' | 'disabled' },
+  ) {
+    if (!selectedCompany) return;
+    update.mutate({ companyId: selectedCompany.id, id: user.id, patch });
+  }
 
   return (
     <div className="space-y-6">
@@ -97,13 +169,16 @@ function UsersPage() {
           <h1 className="mt-1 text-xl font-semibold">用户与角色</h1>
         </div>
         <div className="flex gap-2">
-          <Button asChild variant="outline" size="sm">
-            <Link to="/admin/iam" search={{}}>
-              <ShieldCheck className="mr-2 h-4 w-4" />
-              IAM 权限
-            </Link>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => goIam()}
+            disabled={!selectedCompany || switchCompany.isPending}
+          >
+            <ShieldCheck className="mr-2 h-4 w-4" />
+            IAM权限管理
           </Button>
-          <Button size="sm" onClick={() => setCreating(true)}>
+          <Button size="sm" onClick={() => setCreating(true)} disabled={!selectedCompany}>
             <Plus className="mr-2 h-4 w-4" />
             新建用户
           </Button>
@@ -116,20 +191,38 @@ function UsersPage() {
         </p>
       )}
 
+      <section className="flex flex-wrap items-center gap-3 rounded-md border bg-background p-3">
+        <div className="flex items-center gap-2">
+          <Building2 className="h-4 w-4 text-muted-foreground" />
+          <label className="text-xs text-muted-foreground">公司</label>
+        </div>
+        <select
+          value={selectedCompany?.id ?? ''}
+          disabled={!isPlatformAdmin || companiesQ.isLoading || companies.length <= 1}
+          onChange={(event) => setSelectedCompanyId(event.currentTarget.value)}
+          className="h-9 min-w-72 rounded-md border border-input bg-background px-3 text-sm disabled:bg-muted"
+        >
+          {companies.length === 0 && <option value="">加载中</option>}
+          {companies.map((company) => (
+            <option key={company.id} value={company.id}>
+              {company.name}
+            </option>
+          ))}
+        </select>
+        {!isPlatformAdmin && <span className="text-xs text-muted-foreground">仅超管可切换公司</span>}
+      </section>
+
       <SearchFilterBar
         searchValue={search}
         onSearchChange={setSearch}
-        searchPlaceholder="搜索邮箱"
+        searchPlaceholder="搜索邮箱、公司或角色"
         filters={[
           {
             key: 'role',
             label: '角色',
             value: roleFilter,
             onChange: setRoleFilter,
-            options: [
-              { value: '', label: '全部' },
-              ...roles.map((role) => ({ value: role.code, label: role.code })),
-            ],
+            options: ROLE_FILTER_OPTIONS,
           },
           {
             key: 'status',
@@ -156,43 +249,48 @@ function UsersPage() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>邮箱</TableHead>
+              <TableHead>公司</TableHead>
+              <TableHead>用户</TableHead>
               <TableHead>角色</TableHead>
               <TableHead>状态</TableHead>
-              <TableHead>作用域数</TableHead>
               <TableHead>创建时间</TableHead>
               <TableHead className="text-right">操作</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {usersQ.isLoading && (
+            {(companiesQ.isLoading || usersQ.isLoading) && (
               <TableRow>
                 <TableCell colSpan={6} className="text-muted-foreground">
                   加载中...
                 </TableCell>
               </TableRow>
             )}
-            {!usersQ.isLoading && users.length === 0 && (
+            {!companiesQ.isLoading && !usersQ.isLoading && users.length === 0 && (
               <TableRow>
                 <TableCell colSpan={6} className="text-muted-foreground">
                   暂无用户
                 </TableCell>
               </TableRow>
             )}
-            {!usersQ.isLoading && users.length > 0 && filtered.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={6} className="text-muted-foreground">
-                  无匹配项
-                </TableCell>
-              </TableRow>
-            )}
+            {!companiesQ.isLoading &&
+              !usersQ.isLoading &&
+              users.length > 0 &&
+              filtered.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={6} className="text-muted-foreground">
+                    无匹配项
+                  </TableCell>
+                </TableRow>
+              )}
             {pager.pageItems.map((user) => (
               <UserTableRow
                 key={user.id}
                 user={user}
-                roles={roles}
+                company={selectedCompany}
                 updating={update.isPending}
-                onUpdate={(patch) => update.mutate({ id: user.id, patch })}
+                switching={switchCompany.isPending}
+                onUpdate={(patch) => updateUser(user, patch)}
+                onIam={() => goIam(user.id)}
               />
             ))}
           </TableBody>
@@ -207,7 +305,7 @@ function UsersPage() {
 
       <CreateUserDialog
         open={creating}
-        roles={roles}
+        companyName={selectedCompany?.name ?? ''}
         onCancel={() => setCreating(false)}
         onSubmit={(args) => create.mutate(args)}
         submitting={create.isPending}
@@ -218,55 +316,71 @@ function UsersPage() {
 
 function UserTableRow({
   user,
-  roles,
+  company,
   updating,
+  switching,
   onUpdate,
+  onIam,
 }: {
   user: UserRow;
-  roles: RoleOption[];
+  company: CompanyRow | null;
   updating: boolean;
-  onUpdate: (patch: { roleCode?: string; status?: 'active' | 'disabled' }) => void;
+  switching: boolean;
+  onUpdate: (patch: { roleCode?: RoleCode; status?: 'active' | 'disabled' }) => void;
+  onIam: () => void;
 }) {
+  const companyRole = ROLE_OPTIONS.find((role) => user.roles.includes(role.code))?.code ?? '';
+  const isPlatformAdmin = user.roles.includes('PlatformAdmin');
+
   return (
     <TableRow>
-      <TableCell className="font-medium">{user.email}</TableCell>
       <TableCell>
-        <select
-          className="h-8 rounded-md border border-input bg-background px-2 text-sm"
-          value={user.roles[0] ?? ''}
-          disabled={updating}
-          onChange={(event) => onUpdate({ roleCode: event.target.value })}
-        >
-          {!user.roles.length && <option value="">未分配</option>}
-          {roles.map((role) => (
-            <option key={role.code} value={role.code}>
-              {role.name} ({role.code})
-            </option>
-          ))}
-        </select>
+        <div className="font-medium">{company?.name ?? '-'}</div>
+        {company && <div className="mt-1 font-mono text-xs text-muted-foreground">{company.id.slice(0, 8)}</div>}
+      </TableCell>
+      <TableCell>
+        <div className="font-medium">{user.email}</div>
+        <div className="mt-1 font-mono text-xs text-muted-foreground">{user.id.slice(0, 8)}</div>
+      </TableCell>
+      <TableCell>
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+            value={companyRole}
+            disabled={updating}
+            onChange={(event) => onUpdate({ roleCode: event.target.value as RoleCode })}
+          >
+            {!companyRole && <option value="">未分配</option>}
+            {ROLE_OPTIONS.map((role) => (
+              <option key={role.code} value={role.code}>
+                {role.label}
+              </option>
+            ))}
+          </select>
+          {isPlatformAdmin && (
+            <span className="rounded border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-xs text-primary">
+              平台超管
+            </span>
+          )}
+        </div>
       </TableCell>
       <TableCell>
         <select
           className="h-8 rounded-md border border-input bg-background px-2 text-sm"
           value={user.status}
           disabled={updating}
-          onChange={(event) =>
-            onUpdate({ status: event.target.value as 'active' | 'disabled' })
-          }
+          onChange={(event) => onUpdate({ status: event.target.value as 'active' | 'disabled' })}
         >
           <option value="active">{userStatusLabel('active')}</option>
           <option value="disabled">{userStatusLabel('disabled')}</option>
         </select>
       </TableCell>
-      <TableCell className="text-sm">{user.grantsCount}</TableCell>
       <TableCell className="text-xs text-muted-foreground">
         {new Date(user.createdAt).toLocaleString()}
       </TableCell>
       <TableCell className="text-right">
-        <Button asChild size="sm" variant="outline">
-          <Link to="/admin/iam" search={{ userId: user.id }}>
-            分配作用域
-          </Link>
+        <Button size="sm" variant="outline" disabled={switching} onClick={onIam}>
+          IAM权限管理
         </Button>
       </TableCell>
     </TableRow>
@@ -275,29 +389,35 @@ function UserTableRow({
 
 function CreateUserDialog({
   open,
-  roles,
+  companyName,
   onCancel,
   onSubmit,
   submitting,
 }: {
   open: boolean;
-  roles: RoleOption[];
+  companyName: string;
   onCancel: () => void;
-  onSubmit: (args: { email: string; password: string; roleCode: string }) => void;
+  onSubmit: (args: { email: string; password: string; roleCode: RoleCode }) => void;
   submitting: boolean;
 }) {
-  const defaultRole = roles.find((role) => role.code === 'Operator')?.code ?? roles[0]?.code ?? '';
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [roleCode, setRoleCode] = useState(defaultRole);
+  const [roleCode, setRoleCode] = useState<RoleCode>('Operator');
 
   useEffect(() => {
-    if (!roleCode && defaultRole) setRoleCode(defaultRole);
-  }, [defaultRole, roleCode]);
+    if (!open) return;
+    setEmail('');
+    setPassword('');
+    setRoleCode('Operator');
+  }, [open]);
 
   return (
     <Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && onCancel()} title="新建用户">
       <div className="space-y-3">
+        <div>
+          <label className="text-sm text-muted-foreground">公司</label>
+          <Input value={companyName} disabled />
+        </div>
         <div>
           <label className="text-sm text-muted-foreground">邮箱</label>
           <Input
@@ -321,11 +441,11 @@ function CreateUserDialog({
           <select
             className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
             value={roleCode}
-            onChange={(event) => setRoleCode(event.target.value)}
+            onChange={(event) => setRoleCode(event.target.value as RoleCode)}
           >
-            {roles.map((role) => (
+            {ROLE_OPTIONS.map((role) => (
               <option key={role.code} value={role.code}>
-                {role.name} ({role.code})
+                {role.label}
               </option>
             ))}
           </select>

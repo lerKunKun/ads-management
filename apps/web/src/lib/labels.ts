@@ -18,6 +18,8 @@ const USER_STATUS: Record<string, string> = {
   disabled: '已停用',
 };
 
+const COMPANY_STATUS = USER_STATUS;
+
 const TASK_STATUS: Record<string, string> = {
   pending: '等待中',
   running: '运行中',
@@ -49,6 +51,10 @@ export function adAccountStatusLabel(status: string | null | undefined): string 
 
 export function userStatusLabel(status: string | null | undefined): string {
   return labelFrom(USER_STATUS, status);
+}
+
+export function companyStatusLabel(status: string | null | undefined): string {
+  return labelFrom(COMPANY_STATUS, status);
 }
 
 export function taskStatusLabel(status: string | null | undefined): string {

@@ -1,8 +1,9 @@
-import { createFileRoute, redirect, Link } from '@tanstack/react-router';
+import { createFileRoute, redirect, Link, useNavigate } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { api, getToken, type AdSet, type DatePreset } from '@/lib/api';
 import { EntityListView } from '@/components/EntityListView';
+import { Button } from '@/components/ui/button';
 
 export const Route = createFileRoute('/ad-accounts_/$id_/campaigns_/$cid')({
   beforeLoad: () => {
@@ -13,6 +14,7 @@ export const Route = createFileRoute('/ad-accounts_/$id_/campaigns_/$cid')({
 
 function AdSetsPage() {
   const { id, cid } = Route.useParams();
+  const navigate = useNavigate();
   const [preset, setPreset] = useState<DatePreset>('last_7d');
 
   const summary = useQuery({
@@ -36,16 +38,44 @@ function AdSetsPage() {
 
   return (
     <div className="space-y-4">
-      <div className="text-sm text-muted-foreground">
-        <Link to="/ad-accounts" className="hover:text-foreground">
-          广告账户
-        </Link>
-        {' / '}
-        <Link to="/ad-accounts/$id" params={{ id }} className="hover:text-foreground">
-          {summary.data?.name ?? id}
-        </Link>
-        {' / '}
-        <span className="text-foreground">{campaign?.name ?? cid}</span>
+      <div className="grid gap-3 rounded-md border bg-background p-3 lg:grid-cols-[1fr_auto]">
+        <div className="grid gap-3 md:grid-cols-2">
+          <label className="space-y-1 text-sm">
+            <span className="text-xs text-muted-foreground">广告账户</span>
+            <div className="h-9 truncate rounded-md border bg-muted px-3 py-2 text-sm">
+              {summary.data?.name ?? id}
+            </div>
+          </label>
+          <label className="space-y-1 text-sm">
+            <span className="text-xs text-muted-foreground">当前广告系列</span>
+            <select
+              className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+              value={cid}
+              onChange={(event) =>
+                navigate({
+                  to: '/ad-accounts/$id/campaigns/$cid',
+                  params: { id, cid: event.currentTarget.value },
+                })
+              }
+            >
+              {(campaigns.data ?? []).map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <div className="flex flex-wrap items-end gap-2">
+          <Button asChild size="sm" variant="outline">
+            <Link to="/ad-accounts">广告账户列表</Link>
+          </Button>
+          <Button asChild size="sm" variant="outline">
+            <Link to="/ad-accounts/$id" params={{ id }}>
+              广告系列列表
+            </Link>
+          </Button>
+        </div>
       </div>
 
       <header>

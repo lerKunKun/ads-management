@@ -18,6 +18,7 @@ const adminDb = drizzle(adminSql, { schema });
 export interface AuthPrincipal {
   userId: string;
   companyId: string;
+  companyName: string;
   email: string;
   roles: string[];
   permissions: string[];
@@ -42,7 +43,10 @@ export async function authenticate(
   return loadPrincipal(user.id);
 }
 
-export async function loadPrincipal(userId: string): Promise<AuthPrincipal | null> {
+export async function loadPrincipal(
+  userId: string,
+  targetCompanyId?: string,
+): Promise<AuthPrincipal | null> {
   const userRow = (
     await adminDb
       .select()
@@ -57,10 +61,28 @@ export async function loadPrincipal(userId: string): Promise<AuthPrincipal | nul
     .select({ id: schema.roles.id, code: schema.roles.code, companyId: schema.roles.companyId })
     .from(schema.userRoles)
     .innerJoin(schema.roles, eq(schema.roles.id, schema.userRoles.roleId))
-    .where(eq(schema.userRoles.userId, userId));
+      .where(eq(schema.userRoles.userId, userId));
+
+  const allRoleCodes = roleRows.map((r) => r.code);
+  const isPlatformAdmin = allRoleCodes.includes('PlatformAdmin');
+  const companyId = targetCompanyId ?? userRow.companyId;
+  if (companyId !== userRow.companyId && !isPlatformAdmin) return null;
+
+  const company = (
+    await adminDb
+      .select({ id: schema.companies.id, name: schema.companies.name, status: schema.companies.status })
+      .from(schema.companies)
+      .where(eq(schema.companies.id, companyId))
+      .limit(1)
+  )[0];
+  if (!company || company.status !== 'active') return null;
+
+  const scopedRoleRows = roleRows.filter(
+    (role) => role.companyId === null || role.companyId === companyId,
+  );
 
   // 权限码
-  const roleIds = roleRows.map((r) => r.id);
+  const roleIds = scopedRoleRows.map((r) => r.id);
   let permCodes: string[] = [];
   if (roleIds.length) {
     const perms = await adminDb
@@ -74,7 +96,7 @@ export async function loadPrincipal(userId: string): Promise<AuthPrincipal | nul
     permCodes = Array.from(new Set(perms.map((p) => p.code)));
   }
 
-  const roleCodes = roleRows.map((r) => r.code);
+  const roleCodes = scopedRoleRows.map((r) => r.code);
   const bypass =
     roleCodes.includes('PlatformAdmin') || roleCodes.includes('CompanyAdmin');
 
@@ -92,7 +114,8 @@ export async function loadPrincipal(userId: string): Promise<AuthPrincipal | nul
 
   return {
     userId: userRow.id,
-    companyId: userRow.companyId,
+    companyId,
+    companyName: company.name,
     email: userRow.email,
     roles: roleCodes,
     permissions: permCodes,

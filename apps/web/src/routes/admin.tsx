@@ -61,6 +61,7 @@ const adminMenus: Array<{
 
 function AdminPage() {
   const me = useQuery<Me>({ queryKey: ['me'], queryFn: api.me });
+  const companies = useQuery({ queryKey: ['admin', 'companies'], queryFn: api.listCompanies });
   const users = useQuery({ queryKey: ['admin', 'users'], queryFn: api.listUsers });
   const resources = useQuery({
     queryKey: ['admin', 'grant-resources'],
@@ -78,6 +79,11 @@ function AdminPage() {
   const runningTasks = (tasks.data ?? []).filter((task) =>
     ['pending', 'running'].includes(task.status),
   ).length;
+  const currentCompanyName =
+    companies.data?.find((company) => company.id === me.data?.companyId)?.name ??
+    me.data?.companyName ??
+    me.data?.companyId ??
+    '-';
 
   return (
     <div className="space-y-6">
@@ -91,7 +97,7 @@ function AdminPage() {
         </div>
         {me.data && (
           <div className="rounded-md border px-3 py-2 text-xs text-muted-foreground">
-            当前公司 <b className="font-mono text-foreground">{me.data.companyId}</b>
+            当前公司 <b className="text-foreground">{currentCompanyName}</b>
             <span className="mx-2">/</span>
             当前用户 <b className="text-foreground">{me.data.email}</b>
           </div>
