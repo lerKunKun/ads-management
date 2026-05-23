@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { api, getToken, type Ad, type DatePreset } from '@/lib/api';
 import { EntityListView } from '@/components/EntityListView';
 import { Button } from '@/components/ui/button';
+import { TimezoneClock } from '@/components/TimezoneClock';
 
 export const Route = createFileRoute(
   '/ad-accounts_/$id_/campaigns_/$cid_/adsets_/$asid',
@@ -40,7 +41,6 @@ function AdsPage() {
     queryFn: () => api.insightsByLevel(id, 'ad', preset),
   });
 
-  const campaign = campaigns.data?.find((item) => item.id === cid);
   const adset = adsets.data?.find((item) => item.id === asid);
 
   return (
@@ -106,11 +106,14 @@ function AdsPage() {
         </div>
       </div>
 
-      <header>
-        <h1 className="text-xl font-semibold">{adset?.name ?? '广告组'}</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          优化目标：{adset?.optimizationGoal ?? '-'}
-        </p>
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold">{adset?.name ?? '广告组'}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            优化目标：{adset?.optimizationGoal ?? '-'}
+          </p>
+        </div>
+        <TimezoneClock timezone={summary.data?.timezoneName ?? null} />
       </header>
 
       <EntityListView<Ad>

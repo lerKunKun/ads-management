@@ -34,27 +34,42 @@ export function TaskDetailPanel({
   error: unknown;
 }) {
   const layers = detail?.layerProgress ?? emptyLayerProgress();
+  const completed = detail ? detail.success + detail.failed : 0;
+  const pct = detail?.total ? Math.min(100, Math.round((completed / detail.total) * 100)) : 0;
 
   return (
     <div className="space-y-4">
       <section className="rounded-md border bg-background p-4">
         <div className="font-mono text-xs text-muted-foreground">task: {taskId}</div>
         {detail ? (
-          <div className="mt-3 grid gap-3 md:grid-cols-5">
-            <TaskMetric label="类型" value={detail.type} />
-            <TaskMetric
-              label="状态"
-              value={taskStatusLabel(detail.status)}
-              className={TASK_STATUS_COLOR[detail.status] ?? ''}
-            />
-            <TaskMetric label="总计" value={detail.total} />
-            <TaskMetric label="成功" value={detail.success} className="text-emerald-700" />
-            <TaskMetric
-              label="失败"
-              value={detail.failed}
-              className={detail.failed > 0 ? 'text-rose-700' : ''}
-            />
-          </div>
+          <>
+            <div className="mt-3 grid gap-3 md:grid-cols-5">
+              <TaskMetric label="类型" value={detail.type} />
+              <TaskMetric
+                label="状态"
+                value={taskStatusLabel(detail.status)}
+                className={TASK_STATUS_COLOR[detail.status] ?? ''}
+              />
+              <TaskMetric label="总计" value={detail.total} />
+              <TaskMetric label="成功" value={detail.success} className="text-emerald-700" />
+              <TaskMetric
+                label="失败"
+                value={detail.failed}
+                className={detail.failed > 0 ? 'text-rose-700' : ''}
+              />
+            </div>
+            <div className="mt-4">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+                <span>
+                  已处理 {completed} / {detail.total}，进度 {pct}%
+                </span>
+                <span>最后更新 {formatUpdatedAt(detail.updatedAt)}</span>
+              </div>
+              <div className="mt-2 h-2 overflow-hidden rounded bg-muted">
+                <div className="h-full bg-primary transition-all" style={{ width: `${pct}%` }} />
+              </div>
+            </div>
+          </>
         ) : null}
         {loading && !detail && <p className="mt-3 text-sm text-muted-foreground">加载中...</p>}
         {Boolean(error) && <p className="mt-3 text-sm text-destructive">{(error as Error).message}</p>}
@@ -62,7 +77,7 @@ export function TaskDetailPanel({
 
       <section className="space-y-3">
         {layers.map((layer) => (
-          <TaskLayerProgressRow key={layer.targetType} layer={layer} />
+          <TaskLayerProgressRow key={layer.targetType} taskId={taskId} layer={layer} />
         ))}
       </section>
 
@@ -99,7 +114,13 @@ function TaskMetric({
   );
 }
 
-function TaskLayerProgressRow({ layer }: { layer: TaskLayerProgress }) {
+function TaskLayerProgressRow({
+  taskId,
+  layer,
+}: {
+  taskId: string;
+  layer: TaskLayerProgress;
+}) {
   const done = layer.success + layer.failed;
   const active = layer.running + layer.pending;
   const width = layer.total > 0 ? Math.min(100, Math.round((done / layer.total) * 100)) : 0;
@@ -125,12 +146,14 @@ function TaskLayerProgressRow({ layer }: { layer: TaskLayerProgress }) {
           count={layer.success}
           items={layer.successItems}
           tone="success"
+          pagerKey={`${taskId}:${layer.targetType}:success`}
         />
         <TaskLayerItemDetails
           title="失败详情"
           count={layer.failed}
           items={layer.failedItems}
           tone="danger"
+          pagerKey={`${taskId}:${layer.targetType}:failed`}
         />
       </div>
     </div>
@@ -142,18 +165,20 @@ function TaskLayerItemDetails({
   count,
   items,
   tone,
+  pagerKey,
 }: {
   title: string;
   count: number;
   items: TaskLayerProgressItem[];
   tone: 'success' | 'danger';
+  pagerKey: string;
 }) {
   const toneClass = tone === 'success' ? 'text-emerald-700' : 'text-rose-700';
-  const pager = usePagination(items, 20);
+  const pager = usePagination(items, 20, pagerKey);
   return (
     <div className="rounded-md border bg-muted/20">
       <div className={`border-b px-3 py-2 text-sm font-medium ${count > 0 ? toneClass : 'text-muted-foreground'}`}>
-        {title}：{count} 条
+        {title}: {count} 条
       </div>
       {items.length === 0 ? (
         <div className="px-3 py-3 text-xs text-muted-foreground">暂无明细</div>
@@ -193,6 +218,11 @@ function TaskLayerItemDetails({
 function shortDetail(value: string): string {
   if (value.length <= 260) return value;
   return `${value.slice(0, 260)}...`;
+}
+
+function formatUpdatedAt(value: number): string {
+  if (!Number.isFinite(value)) return '-';
+  return new Date(value).toLocaleString();
 }
 
 function emptyLayerProgress(): TaskLayerProgress[] {

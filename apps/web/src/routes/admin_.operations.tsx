@@ -340,7 +340,7 @@ function TasksSection() {
   const q = useQuery({
     queryKey: ['admin', 'tasks'],
     queryFn: () => api.listTasks(200),
-    refetchInterval: 5000,
+    refetchInterval: 2000,
   });
   const data = q.data ?? [];
   const [search, setSearch] = useState('');
@@ -444,7 +444,7 @@ function TasksSection() {
                 {taskStatusLabel(task.status)}
               </TableCell>
               <TableCell>
-                {task.success}/{task.total}
+                <TaskProgressCell success={task.success} failed={task.failed} total={task.total} />
               </TableCell>
               <TableCell className={task.failed > 0 ? 'text-rose-600' : ''}>{task.failed}</TableCell>
               <TableCell className="text-xs text-muted-foreground">
@@ -462,6 +462,32 @@ function TasksSection() {
         onPageChange={pager.setPage}
       />
     </section>
+  );
+}
+
+function TaskProgressCell({
+  success,
+  failed,
+  total,
+}: {
+  success: number;
+  failed: number;
+  total: number;
+}) {
+  const done = success + failed;
+  const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+  return (
+    <div className="min-w-[140px]">
+      <div className="mb-1 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+        <span>
+          {done}/{total}
+        </span>
+        <span>{pct}%</span>
+      </div>
+      <div className="h-1.5 overflow-hidden rounded bg-muted">
+        <div className="h-full bg-primary transition-all" style={{ width: `${pct}%` }} />
+      </div>
+    </div>
   );
 }
 

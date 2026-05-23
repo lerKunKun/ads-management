@@ -1,7 +1,8 @@
 import { createFileRoute, redirect, Link } from '@tanstack/react-router';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useMemo } from 'react';
 import { ArrowLeft, RefreshCw } from 'lucide-react';
-import { api, getToken } from '@/lib/api';
+import { api, getToken, openTaskStream } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { TaskDetailPanel } from '@/components/TaskDetailPanel';
 
@@ -12,16 +13,59 @@ export const Route = createFileRoute('/admin_/operations_/$taskId')({
   component: OperationTaskDetailPage,
 });
 
+type TaskDetail = Awaited<ReturnType<typeof api.taskStatus>>;
+
+const TERMINAL = new Set(['success', 'failed', 'partial', 'cancelled']);
+
 function OperationTaskDetailPage() {
   const { taskId } = Route.useParams();
+  const qc = useQueryClient();
+  const queryKey = useMemo(() => ['admin', 'task-detail', taskId] as const, [taskId]);
   const q = useQuery({
-    queryKey: ['admin', 'task-detail', taskId],
+    queryKey,
     queryFn: () => api.taskStatus(taskId),
     refetchInterval: (query) => {
       const status = query.state.data?.status;
       return status === 'running' || status === 'pending' ? 2000 : false;
     },
   });
+  const currentStatus = q.data?.status;
+
+  useEffect(() => {
+    if (!taskId) return;
+    if (currentStatus && TERMINAL.has(currentStatus)) return;
+    const stream = openTaskStream(taskId);
+    stream.addEventListener('progress', (event) => {
+      try {
+        const snap = JSON.parse((event as MessageEvent).data) as Pick<
+          TaskDetail,
+          'taskId' | 'total' | 'success' | 'failed' | 'status' | 'updatedAt'
+        >;
+        qc.setQueryData<TaskDetail>(queryKey, (current) =>
+          current
+            ? {
+                ...current,
+                total: snap.total,
+                success: snap.success,
+                failed: snap.failed,
+                status: snap.status,
+                updatedAt: snap.updatedAt,
+              }
+            : current,
+        );
+        if (TERMINAL.has(snap.status)) {
+          stream.close();
+          void qc.invalidateQueries({ queryKey });
+        }
+      } catch {
+        /* ignore malformed progress event */
+      }
+    });
+    stream.onerror = () => {
+      stream.close();
+    };
+    return () => stream.close();
+  }, [currentStatus, qc, queryKey, taskId]);
 
   return (
     <div className="space-y-4">

@@ -24,7 +24,7 @@ import {
 import { CopyDialog, type CopySourceSnapshot } from '@/components/CopyDialog';
 import { Pagination, usePagination } from '@/components/Pagination';
 import { SearchFilterBar, matchText } from '@/components/SearchFilterBar';
-import { metaEntityStatusLabel, taskStatusLabel } from '@/lib/labels';
+import { metaEffectiveStatusLabel, metaEntityStatusLabel, taskStatusLabel } from '@/lib/labels';
 
 export interface EntityRow {
   id: string;
@@ -414,6 +414,7 @@ export function EntityListView<T extends EntityRow>({
               { value: 'ACTIVE', label: metaEntityStatusLabel('ACTIVE') },
               { value: 'PAUSED', label: metaEntityStatusLabel('PAUSED') },
               { value: 'ARCHIVED', label: metaEntityStatusLabel('ARCHIVED') },
+              { value: 'DELETED', label: metaEntityStatusLabel('DELETED') },
             ],
           },
         ]}
@@ -882,7 +883,7 @@ function deliveryState(row: EntityRow): { label: string; className: string } {
   }
   if (row.status === 'ACTIVE' && row.effectiveStatus) {
     return {
-      label: row.effectiveStatus,
+      label: metaEffectiveStatusLabel(row.effectiveStatus),
       className: 'border-blue-200 bg-blue-50 text-blue-700',
     };
   }

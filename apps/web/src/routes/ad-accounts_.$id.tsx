@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { api, getToken, type Campaign, type DatePreset } from '@/lib/api';
 import { EntityListView } from '@/components/EntityListView';
 import { Button } from '@/components/ui/button';
+import { TimezoneClock } from '@/components/TimezoneClock';
 
 export const Route = createFileRoute('/ad-accounts_/$id')({
   beforeLoad: () => {
@@ -50,13 +51,16 @@ function AdAccountCampaignsPage() {
         </div>
       </div>
 
-      <header>
-        <h1 className="text-xl font-semibold">{summary.data?.name ?? '广告账户'}</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          {summary.data?.metaActId ?? '-'} / 币种 {summary.data?.currency ?? '-'} / 时区{' '}
-          {summary.data?.timezoneName ?? '-'} / 投放国家{' '}
-          {countryLabel(summary.data?.businessCountryCode)}
-        </p>
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold">{summary.data?.name ?? '广告账户'}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {summary.data?.metaActId ?? '-'} / 币种 {summary.data?.currency ?? '-'} / 时区{' '}
+            {summary.data?.timezoneName ?? '-'} / 投放国家{' '}
+            {countryLabel(summary.data?.businessCountryCode)}
+          </p>
+        </div>
+        <TimezoneClock timezone={summary.data?.timezoneName ?? null} />
       </header>
 
       <EntityListView<Campaign>

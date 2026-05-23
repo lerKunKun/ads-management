@@ -36,6 +36,23 @@ const META_ENTITY_STATUS: Record<string, string> = {
   DELETED: '已删除',
 };
 
+const META_EFFECTIVE_STATUS: Record<string, string> = {
+  ACTIVE: '投放中',
+  PAUSED: '已暂停',
+  ARCHIVED: '已归档',
+  DELETED: '已删除',
+  IN_PROCESS: '处理中',
+  WITH_ISSUES: '存在问题',
+  PENDING_REVIEW: '审核中',
+  DISAPPROVED: '审核未通过',
+  PREAPPROVED: '预审核通过',
+  PENDING_BILLING_INFO: '等待账单信息',
+  CAMPAIGN_PAUSED: '广告系列已暂停',
+  CAMPAIGN_GROUP_PAUSED: '广告系列已暂停',
+  ADSET_PAUSED: '广告组已暂停',
+  AD_PAUSED: '广告已暂停',
+};
+
 const BREAKER_KIND: Record<string, string> = {
   fb: ACCOUNT_GROUP_LABEL,
   adacct: '广告账户',
@@ -63,6 +80,10 @@ export function taskStatusLabel(status: string | null | undefined): string {
 
 export function metaEntityStatusLabel(status: string | null | undefined): string {
   return labelFrom(META_ENTITY_STATUS, status);
+}
+
+export function metaEffectiveStatusLabel(status: string | null | undefined): string {
+  return labelFrom(META_EFFECTIVE_STATUS, status);
 }
 
 export function breakerKindLabel(kind: string | null | undefined): string {

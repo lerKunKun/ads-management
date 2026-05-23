@@ -1,22 +1,33 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 
 export const PAGE_SIZE = 20;
 
-export function usePagination<T>(items: T[], pageSize = PAGE_SIZE) {
+export function usePagination<T>(items: T[], pageSize = PAGE_SIZE, resetKey?: string | number) {
   const [page, setPage] = useState(1);
   const pageCount = Math.max(1, Math.ceil(items.length / pageSize));
 
   useEffect(() => {
-    if (page > pageCount) setPage(pageCount);
-  }, [page, pageCount]);
+    setPage((current) => Math.min(Math.max(current, 1), pageCount));
+  }, [pageCount]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [resetKey]);
 
   const pageItems = useMemo(() => {
     const start = (page - 1) * pageSize;
     return items.slice(start, start + pageSize);
   }, [items, page, pageSize]);
 
-  return { page, pageCount, pageItems, pageSize, setPage };
+  const goToPage = useCallback(
+    (nextPage: number) => {
+      setPage(Math.min(Math.max(nextPage, 1), pageCount));
+    },
+    [pageCount],
+  );
+
+  return { page, pageCount, pageItems, pageSize, setPage: goToPage };
 }
 
 export function Pagination({

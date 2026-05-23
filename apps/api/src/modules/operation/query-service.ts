@@ -142,7 +142,7 @@ async function readLayerProgress(companyId: string, taskId: string): Promise<Lay
     const itemBucket = itemsByType.get(targetType);
     return {
       targetType,
-      label,
+      label: taskLayerLabel(targetType),
       total: Number(row?.total ?? 0),
       success: Number(row?.success ?? 0),
       failed: Number(row?.failed ?? 0),
@@ -152,6 +152,12 @@ async function readLayerProgress(companyId: string, taskId: string): Promise<Lay
       failedItems: itemBucket?.failedItems ?? [],
     };
   });
+}
+
+function taskLayerLabel(targetType: 'campaign' | 'adset' | 'ad'): string {
+  if (targetType === 'campaign') return '广告系列';
+  if (targetType === 'adset') return '广告组';
+  return '广告';
 }
 
 async function readLayerProgressItems(
