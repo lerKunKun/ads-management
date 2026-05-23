@@ -265,3 +265,59 @@ Token 续期：CRM 无 refresh 端点。定时扫 `token_expires_at < NOW()+7d`�
 ## 当前进度
 
 **M1–M4 已完成**，详见 `PROGRESS.md`。下一阶段参考 PROGRESS.md 中的后续计划。
+
+---
+
+## 关键文件速查
+
+| 关注点 | 位置 |
+|---|---|
+| 全局配置 / 环境变量 | `apps/api/src/env.ts` |
+| RLS 策略 | `packages/db/src/rls.sql` |
+| RBAC 权限/角色常量 | `packages/shared/src/permissions.ts` + `packages/db/src/seed.ts` |
+| Meta API 封装 | `apps/api/src/lib/meta-client.ts` |
+| Provider 抽象接口 | `packages/shared/src/provider.ts` |
+| Meta 实现 | `apps/api/src/providers/meta.ts` |
+| RabbitMQ 拓扑 | `apps/api/src/lib/rabbitmq-topology.ts` |
+| 令牌桶 / 熔断 / 操作锁 | `apps/api/src/lib/rate-limit.ts` / `breaker.ts` / `op-lock.ts` |
+| 任务进度 / SSE | `apps/api/src/lib/progress.ts` / `modules/operation/sse.ts` |
+| Worker 消息处理主循环 | `apps/worker/src/handler.ts` + `index.ts` |
+| 告警 / 通知 | `apps/api/src/lib/notifier.ts` |
+| 定时任务（token 健康扫描） | `apps/api/src/lib/scheduler.ts` |
+| Mock Meta 内存状态 | `apps/api/src/lib/fake-meta-state.ts` |
+| 广告对象本地快照读写 | `apps/api/src/modules/ad-object/local-store.ts` |
+| 广告对象后台同步 | `apps/api/src/modules/ad-object/sync-service.ts` |
+| 前端接口类型 + fetch 客户端 | `apps/web/src/lib/api.ts` |
+| 前端路由树（**自动生成，禁止手动修改**） | `apps/web/src/routeTree.gen.ts` |
+
+---
+
+## 补充环境变量
+
+以下变量未在主表中列出，但在 `apps/api/src/env.ts` 中已定义：
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `API_PORT` | `3001` | API 监听端口 |
+| `JWT_EXPIRES_IN` | `12h` | JWT 有效期 |
+| `META_API_VERSION` | `v21.0` | Meta Graph API 版本（锁定，禁止随意改） |
+| `FB_OAUTH_REDIRECT_URI` | `http://localhost:5173/oauth/fb/callback` | OAuth 回调 URI |
+| `AD_OBJECT_CACHE_TTL_MS` | `30000` | 广告对象本地快照缓存时效（毫秒） |
+| `AD_OBJECT_SYNC_ENABLED` | `0` | 设为 `1` 启用后台定时同步广告对象快照 |
+| `AD_OBJECT_SYNC_INTERVAL_MS` | `300000` | 后台同步间隔（毫秒） |
+| `AD_OBJECT_SYNC_DEPTH` | `campaign` | 同步深度：`campaign` / `adset` / `ad` |
+| `META_ASYNC_COPY_TIMEOUT_MS` | `1800000` | 异步复制轮询超时（毫秒） |
+
+---
+
+## 已知限制 & 坑
+
+- **Mock 状态不持久**：`META_FAKE=1` 下 campaign/adset/ad 状态存进程内 Map，API 重启即重置。
+- **PG RLS 必须有 `SET LOCAL`**：任何直接调 `db.execute()` 不走事务不设 `app.current_company_id` 都拿不到数据；业务层统一用 `withTenant(companyId, tx => ...)` 封装，缺此上下文会静默返回空集。
+- **Worker 跨租户 bypass**：Worker 内查询需 `SET app.bypass_rls = '1'`，仅限 worker 使用，API 模块禁止使用。
+- **`fb_account` 熔断需手动重置**：token 失效后熔断永久生效，管理员通过 `POST /_admin/breakers/reset` 解除，但 token 本身仍是旧的，需引导用户重新走 OAuth re-bind。
+- **令牌桶默认值偏保守**：`ratelimit:adacct` 容量 20、补充 2/s；接真实 token 后根据 Meta 返回的 `X-Ad-Account-Usage` 头调整。
+- **SSE 鉴权走 `?token=` query**：浏览器原生 `EventSource` 不支持自定义 header，`GET /operations/:taskId/stream` 用 query 参数传 token；生产若走同源代理建议改 cookie。
+- **Windows 开发注意**：`bun --hot` 与 amqplib 长连接同用会出现僵尸连接，脚本中一律用 `bun src/index.ts`，不加 `--hot`。
+- **`operation_task_items.error` 列复用**：copy 操作生成的新对象 ID 暂存于 `error` 列（MVP 复用），M5 前需加 `result jsonb` 列并迁移。
+- **前端 `routeTree.gen.ts` 禁止手动修改**：由 `vite` + TanStack Router 插件在启动时自动从 `routes/` 目录生成，手动改会在下次启动时被覆盖。

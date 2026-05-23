@@ -22,6 +22,7 @@ import { Route as AdminCompanyRouteImport } from './routes/admin_.company'
 import { Route as AdminAuditRouteImport } from './routes/admin_.audit'
 import { Route as AdAccountsIdRouteImport } from './routes/ad-accounts_.$id'
 import { Route as OauthFbCallbackRouteImport } from './routes/oauth.fb.callback'
+import { Route as AdminOperationsTaskIdRouteImport } from './routes/admin_.operations_.$taskId'
 import { Route as AdAccountsIdCampaignsCidRouteImport } from './routes/ad-accounts_.$id_.campaigns_.$cid'
 import { Route as AdAccountsIdCampaignsCidAdsetsAsidRouteImport } from './routes/ad-accounts_.$id_.campaigns_.$cid_.adsets_.$asid'
 
@@ -90,6 +91,11 @@ const OauthFbCallbackRoute = OauthFbCallbackRouteImport.update({
   path: '/oauth/fb/callback',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminOperationsTaskIdRoute = AdminOperationsTaskIdRouteImport.update({
+  id: '/admin_/operations_/$taskId',
+  path: '/admin/operations/$taskId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AdAccountsIdCampaignsCidRoute =
   AdAccountsIdCampaignsCidRouteImport.update({
     id: '/ad-accounts_/$id_/campaigns_/$cid',
@@ -116,6 +122,7 @@ export interface FileRoutesByFullPath {
   '/admin/operations': typeof AdminOperationsRoute
   '/admin/users': typeof AdminUsersRoute
   '/fb-accounts/$id': typeof FbAccountsIdRoute
+  '/admin/operations/$taskId': typeof AdminOperationsTaskIdRoute
   '/oauth/fb/callback': typeof OauthFbCallbackRoute
   '/ad-accounts/$id/campaigns/$cid': typeof AdAccountsIdCampaignsCidRoute
   '/ad-accounts/$id/campaigns/$cid/adsets/$asid': typeof AdAccountsIdCampaignsCidAdsetsAsidRoute
@@ -133,6 +140,7 @@ export interface FileRoutesByTo {
   '/admin/operations': typeof AdminOperationsRoute
   '/admin/users': typeof AdminUsersRoute
   '/fb-accounts/$id': typeof FbAccountsIdRoute
+  '/admin/operations/$taskId': typeof AdminOperationsTaskIdRoute
   '/oauth/fb/callback': typeof OauthFbCallbackRoute
   '/ad-accounts/$id/campaigns/$cid': typeof AdAccountsIdCampaignsCidRoute
   '/ad-accounts/$id/campaigns/$cid/adsets/$asid': typeof AdAccountsIdCampaignsCidAdsetsAsidRoute
@@ -151,6 +159,7 @@ export interface FileRoutesById {
   '/admin_/operations': typeof AdminOperationsRoute
   '/admin_/users': typeof AdminUsersRoute
   '/fb-accounts_/$id': typeof FbAccountsIdRoute
+  '/admin_/operations_/$taskId': typeof AdminOperationsTaskIdRoute
   '/oauth/fb/callback': typeof OauthFbCallbackRoute
   '/ad-accounts_/$id_/campaigns_/$cid': typeof AdAccountsIdCampaignsCidRoute
   '/ad-accounts_/$id_/campaigns_/$cid_/adsets_/$asid': typeof AdAccountsIdCampaignsCidAdsetsAsidRoute
@@ -170,6 +179,7 @@ export interface FileRouteTypes {
     | '/admin/operations'
     | '/admin/users'
     | '/fb-accounts/$id'
+    | '/admin/operations/$taskId'
     | '/oauth/fb/callback'
     | '/ad-accounts/$id/campaigns/$cid'
     | '/ad-accounts/$id/campaigns/$cid/adsets/$asid'
@@ -187,6 +197,7 @@ export interface FileRouteTypes {
     | '/admin/operations'
     | '/admin/users'
     | '/fb-accounts/$id'
+    | '/admin/operations/$taskId'
     | '/oauth/fb/callback'
     | '/ad-accounts/$id/campaigns/$cid'
     | '/ad-accounts/$id/campaigns/$cid/adsets/$asid'
@@ -204,6 +215,7 @@ export interface FileRouteTypes {
     | '/admin_/operations'
     | '/admin_/users'
     | '/fb-accounts_/$id'
+    | '/admin_/operations_/$taskId'
     | '/oauth/fb/callback'
     | '/ad-accounts_/$id_/campaigns_/$cid'
     | '/ad-accounts_/$id_/campaigns_/$cid_/adsets_/$asid'
@@ -222,6 +234,7 @@ export interface RootRouteChildren {
   AdminOperationsRoute: typeof AdminOperationsRoute
   AdminUsersRoute: typeof AdminUsersRoute
   FbAccountsIdRoute: typeof FbAccountsIdRoute
+  AdminOperationsTaskIdRoute: typeof AdminOperationsTaskIdRoute
   OauthFbCallbackRoute: typeof OauthFbCallbackRoute
   AdAccountsIdCampaignsCidRoute: typeof AdAccountsIdCampaignsCidRoute
   AdAccountsIdCampaignsCidAdsetsAsidRoute: typeof AdAccountsIdCampaignsCidAdsetsAsidRoute
@@ -320,6 +333,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OauthFbCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin_/operations_/$taskId': {
+      id: '/admin_/operations_/$taskId'
+      path: '/admin/operations/$taskId'
+      fullPath: '/admin/operations/$taskId'
+      preLoaderRoute: typeof AdminOperationsTaskIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/ad-accounts_/$id_/campaigns_/$cid': {
       id: '/ad-accounts_/$id_/campaigns_/$cid'
       path: '/ad-accounts/$id/campaigns/$cid'
@@ -350,6 +370,7 @@ const rootRouteChildren: RootRouteChildren = {
   AdminOperationsRoute: AdminOperationsRoute,
   AdminUsersRoute: AdminUsersRoute,
   FbAccountsIdRoute: FbAccountsIdRoute,
+  AdminOperationsTaskIdRoute: AdminOperationsTaskIdRoute,
   OauthFbCallbackRoute: OauthFbCallbackRoute,
   AdAccountsIdCampaignsCidRoute: AdAccountsIdCampaignsCidRoute,
   AdAccountsIdCampaignsCidAdsetsAsidRoute:

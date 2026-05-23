@@ -394,6 +394,8 @@ export interface CopyArgs {
   deepCopy?: boolean;
   startTime?: string;
   endTime?: string;
+  dailyBudget?: number;
+  lifetimeBudget?: number;
   statusOption?: 'ACTIVE' | 'PAUSED' | 'INHERITED_FROM_SOURCE';
   renameOptions?: RenameOptions;
   ip?: string;
@@ -421,6 +423,8 @@ export async function copyEntity(
       ...(args.deepCopy !== undefined ? { deepCopy: args.deepCopy } : {}),
       ...(args.startTime ? { startTime: args.startTime } : {}),
       ...(args.endTime ? { endTime: args.endTime } : {}),
+      ...(args.dailyBudget !== undefined ? { dailyBudget: args.dailyBudget } : {}),
+      ...(args.lifetimeBudget !== undefined ? { lifetimeBudget: args.lifetimeBudget } : {}),
       ...(args.statusOption ? { statusOption: args.statusOption } : {}),
       ...(renameForThis ? { renameOptions: renameForThis } : {}),
     };
@@ -454,6 +458,8 @@ export async function copyEntity(
       newIds: out,
       ...(args.startTime ? { startTime: args.startTime } : {}),
       ...(args.endTime ? { endTime: args.endTime } : {}),
+      ...(args.dailyBudget !== undefined ? { dailyBudget: args.dailyBudget } : {}),
+      ...(args.lifetimeBudget !== undefined ? { lifetimeBudget: args.lifetimeBudget } : {}),
       ...(args.renameOptions ? { renameOptions: args.renameOptions } : {}),
     },
     ...(args.ip ? { ip: args.ip } : {}),

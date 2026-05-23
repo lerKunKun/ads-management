@@ -1,8 +1,16 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogFooter } from '@/components/ui/dialog';
 import type { CopyParams } from '@/lib/api';
+
+export interface CopySourceSnapshot {
+  id: string;
+  name: string;
+  startTime?: string;
+  dailyBudget?: number;
+  lifetimeBudget?: number;
+}
 
 interface CopyDialogProps {
   open: boolean;
@@ -15,11 +23,13 @@ interface CopyDialogProps {
   onSubmit: (params: CopyParams) => void;
   submitting: boolean;
   adAccountTimezone?: string | null;
+  currency?: string | null;
+  sources?: CopySourceSnapshot[];
 }
 
 /**
  * 复制对话框 - 支持:
- *   排期起始/结束时间(默认继承原对象)
+ *   排期起始时间(默认继承原对象)
  *   复制条数 N(默认 1, 不设上限)
  *   自定义前缀
  *   日期后缀(可选,自动 yyyymmdd)
@@ -35,9 +45,18 @@ export function CopyDialog({
   onSubmit,
   submitting,
   adAccountTimezone,
+  currency,
+  sources = [],
 }: CopyDialogProps) {
+  const defaults = useMemo(
+    () => summarizeSources(sources, layer, adAccountTimezone, currency),
+    [adAccountTimezone, currency, layer, sources],
+  );
   const [startTime, setStartTime] = useState('');
-  const [endTime, setEndTime] = useState('');
+  const [modifySchedule, setModifySchedule] = useState(false);
+  const [modifyBudget, setModifyBudget] = useState(false);
+  const [budgetKind, setBudgetKind] = useState<'dailyBudget' | 'lifetimeBudget'>('dailyBudget');
+  const [budgetValue, setBudgetValue] = useState('');
   const [count, setCount] = useState(1);
   const [prefix, setPrefix] = useState('');
   const [dateSuffix, setDateSuffix] = useState(false);
@@ -48,8 +67,11 @@ export function CopyDialog({
 
   useEffect(() => {
     if (!open) return;
-    setStartTime('');
-    setEndTime('');
+    setStartTime(defaults.startInput);
+    setModifySchedule(false);
+    setModifyBudget(false);
+    setBudgetKind(defaults.budgetKind ?? 'dailyBudget');
+    setBudgetValue(defaults.budgetValue);
     setCount(1);
     setPrefix('');
     setDateSuffix(false);
@@ -57,7 +79,7 @@ export function CopyDialog({
     setTestIdx('');
     setDeepCopy(true);
     setPauseAfter(false);
-  }, [open]);
+  }, [defaults.budgetKind, defaults.budgetValue, defaults.startInput, open]);
 
   function buildSuffix(): string {
     const parts: string[] = [];
@@ -73,27 +95,28 @@ export function CopyDialog({
       return;
     }
     let resolvedStartTime: string | undefined;
-    let resolvedEndTime: string | undefined;
     try {
-      resolvedStartTime = startTime ? localInputToIso(startTime, adAccountTimezone) : undefined;
-      resolvedEndTime = endTime ? localInputToIso(endTime, adAccountTimezone) : undefined;
+      resolvedStartTime = modifySchedule ? localInputToIso(startTime, adAccountTimezone) : undefined;
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err));
       return;
     }
-    if (
-      resolvedStartTime &&
-      resolvedEndTime &&
-      Date.parse(resolvedEndTime) <= Date.parse(resolvedStartTime)
-    ) {
-      alert('结束时间必须晚于起始时间');
-      return;
+    const budgetPatch: Pick<CopyParams, 'dailyBudget' | 'lifetimeBudget'> = {};
+    if (modifyBudget) {
+      const budgetMajor = Number(budgetValue);
+      if (!Number.isFinite(budgetMajor) || budgetMajor <= 0) {
+        alert('预算必须大于 0');
+        return;
+      }
+      const budgetMinor = Math.round(budgetMajor * 100);
+      if (budgetKind === 'dailyBudget') budgetPatch.dailyBudget = budgetMinor;
+      else budgetPatch.lifetimeBudget = budgetMinor;
     }
     const suffix = buildSuffix();
     const params: CopyParams = {
       count,
       ...(resolvedStartTime ? { startTime: resolvedStartTime } : {}),
-      ...(resolvedEndTime ? { endTime: resolvedEndTime } : {}),
+      ...budgetPatch,
       statusOption: pauseAfter ? 'PAUSED' : 'INHERITED_FROM_SOURCE',
       ...(layer !== 'ad' ? { deepCopy } : {}),
       ...((prefix || suffix)
@@ -122,26 +145,71 @@ export function CopyDialog({
       {hint && <p className="text-xs text-muted-foreground mb-2">{hint}</p>}
 
       <div className="space-y-3">
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <label className="text-sm text-muted-foreground">起始时间</label>
+            {layer !== 'ad' && (
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={modifySchedule}
+                  onChange={(e) => {
+                    setModifySchedule(e.target.checked);
+                    if (e.target.checked && !startTime) setStartTime(defaults.startInput);
+                  }}
+                />
+                修改起始时间
+              </label>
+            )}
+          </div>
+          <Input
+            type={modifySchedule ? 'datetime-local' : 'text'}
+            value={modifySchedule ? startTime : defaults.startLabel}
+            disabled={!modifySchedule}
+            onChange={(e) => setStartTime(e.target.value)}
+          />
+          <p className="text-xs text-muted-foreground">
+            默认继承原对象排期；填写时按广告账户时区 {timezoneLabel} 提交。
+          </p>
+        </div>
+
         {layer !== 'ad' && (
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            <div>
-              <label className="text-sm text-muted-foreground">起始时间</label>
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <label className="text-sm text-muted-foreground">预算</label>
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={modifyBudget}
+                  onChange={(e) => {
+                    setModifyBudget(e.target.checked);
+                    if (e.target.checked && !budgetValue) setBudgetValue(defaults.budgetValue);
+                  }}
+                />
+                修改预算
+              </label>
+            </div>
+            <div className="grid grid-cols-[120px_1fr] gap-2">
+              <select
+                className="h-9 rounded-md border border-input bg-background px-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
+                value={budgetKind}
+                disabled={!modifyBudget}
+                onChange={(e) => setBudgetKind(e.target.value as 'dailyBudget' | 'lifetimeBudget')}
+              >
+                <option value="dailyBudget">日预算</option>
+                <option value="lifetimeBudget">总预算</option>
+              </select>
               <Input
-                type="datetime-local"
-                value={startTime}
-                onChange={(e) => setStartTime(e.target.value)}
+                type={modifyBudget ? 'number' : 'text'}
+                min={0}
+                step="0.01"
+                value={modifyBudget ? budgetValue : defaults.budgetLabel}
+                disabled={!modifyBudget}
+                onChange={(e) => setBudgetValue(e.target.value)}
               />
             </div>
-            <div>
-              <label className="text-sm text-muted-foreground">结束时间</label>
-              <Input
-                type="datetime-local"
-                value={endTime}
-                onChange={(e) => setEndTime(e.target.value)}
-              />
-            </div>
-            <p className="text-xs text-muted-foreground md:col-span-2">
-              留空保持原对象排期；填写时按广告账户时区 {timezoneLabel} 提交。
+            <p className="text-xs text-muted-foreground">
+              默认继承原对象预算和其他设置；勾选后对本次复制统一覆盖预算。
             </p>
           </div>
         )}
@@ -249,6 +317,115 @@ export function CopyDialog({
 function formatYMD(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
+}
+
+function summarizeSources(
+  sources: CopySourceSnapshot[],
+  layer: CopyDialogProps['layer'],
+  timeZone: string | null | undefined,
+  currency: string | null | undefined,
+): {
+  startInput: string;
+  startLabel: string;
+  budgetKind?: 'dailyBudget' | 'lifetimeBudget';
+  budgetValue: string;
+  budgetLabel: string;
+} {
+  const startSummary = sameValue(sources.map((source) => source.startTime));
+  const startInput = startSummary.value ? isoToZonedInput(startSummary.value, timeZone) : '';
+  const startLabel = startSummary.mixed
+    ? '多个不同排期，默认分别继承'
+    : startInput || '未设置';
+
+  if (layer === 'ad') {
+    return {
+      startInput,
+      startLabel,
+      budgetValue: '',
+      budgetLabel: '广告无独立预算',
+    };
+  }
+
+  const budgetSummary = sameBudget(sources);
+  if (budgetSummary.mixed) {
+    return {
+      startInput,
+      startLabel,
+      budgetKind: 'dailyBudget',
+      budgetValue: '',
+      budgetLabel: '多个不同预算，默认分别继承',
+    };
+  }
+  if (!budgetSummary.kind || budgetSummary.value === undefined) {
+    return {
+      startInput,
+      startLabel,
+      budgetKind: 'dailyBudget',
+      budgetValue: '',
+      budgetLabel: '未设置',
+    };
+  }
+  const budgetValue = (budgetSummary.value / 100).toFixed(2);
+  return {
+    startInput,
+    startLabel,
+    budgetKind: budgetSummary.kind,
+    budgetValue,
+    budgetLabel: `${budgetValue}${currency ? ` ${currency}` : ''}`,
+  };
+}
+
+function sameValue(values: Array<string | undefined>): { value?: string; mixed: boolean } {
+  const normalized = values.map((value) => value ?? '');
+  const first = normalized[0] ?? '';
+  return {
+    ...(first ? { value: first } : {}),
+    mixed: normalized.some((value) => value !== first),
+  };
+}
+
+function sameBudget(sources: CopySourceSnapshot[]): {
+  kind?: 'dailyBudget' | 'lifetimeBudget';
+  value?: number;
+  mixed: boolean;
+} {
+  const values = sources.map((source) => {
+    if (source.dailyBudget !== undefined) return { kind: 'dailyBudget' as const, value: source.dailyBudget };
+    if (source.lifetimeBudget !== undefined) return { kind: 'lifetimeBudget' as const, value: source.lifetimeBudget };
+    return { kind: undefined, value: undefined };
+  });
+  const first = values[0] ?? { kind: undefined, value: undefined };
+  return {
+    ...(first.kind ? { kind: first.kind } : {}),
+    ...(first.value !== undefined ? { value: first.value } : {}),
+    mixed: values.some((item) => item.kind !== first.kind || item.value !== first.value),
+  };
+}
+
+function isoToZonedInput(value: string, timeZone: string | null | undefined): string {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '';
+  if (!timeZone) return '';
+  let parts: Intl.DateTimeFormatPart[];
+  try {
+    parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(date);
+  } catch {
+    return '';
+  }
+  const values: Partial<Record<Intl.DateTimeFormatPartTypes, string>> = {};
+  for (const part of parts) {
+    if (part.type !== 'literal') values[part.type] = part.value;
+  }
+  if (!values.year || !values.month || !values.day || !values.hour || !values.minute) return '';
+  return `${values.year}-${values.month}-${values.day}T${values.hour}:${values.minute}`;
 }
 
 function localInputToIso(s: string, timeZone: string | null | undefined): string {

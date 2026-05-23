@@ -21,7 +21,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { CopyDialog } from '@/components/CopyDialog';
+import { CopyDialog, type CopySourceSnapshot } from '@/components/CopyDialog';
 import { Pagination, usePagination } from '@/components/Pagination';
 import { SearchFilterBar, matchText } from '@/components/SearchFilterBar';
 import { metaEntityStatusLabel, taskStatusLabel } from '@/lib/labels';
@@ -69,6 +69,7 @@ type BatchState = {
   params: Record<string, unknown>;
   ids: string[];
 };
+type CopyOpenState = { ids: string[]; hint?: string; sources: CopySourceSnapshot[] };
 
 interface ProgressSnap {
   taskId: string;
@@ -129,7 +130,7 @@ export function EntityListView<T extends EntityRow>({
   const [rowPatches, setRowPatches] = useState<Map<string, RowPatch>>(new Map());
   const [budgetEditing, setBudgetEditing] = useState<{ id: string; name: string; daily?: number } | null>(null);
   const [batchBudgetOpen, setBatchBudgetOpen] = useState(false);
-  const [copyOpen, setCopyOpen] = useState<{ ids: string[]; hint?: string } | null>(null);
+  const [copyOpen, setCopyOpen] = useState<CopyOpenState | null>(null);
   const [activeTask, setActiveTask] = useState<string | null>(null);
   const [trackedTaskId, setTrackedTaskId] = useState<string | null>(null);
   const [pendingBatch, setPendingBatch] = useState<BatchState | null>(null);
@@ -285,12 +286,18 @@ export function EntityListView<T extends EntityRow>({
   }
 
   function singleCopyClicked(row: T) {
-    setCopyOpen({ ids: [row.id], hint: `来源：${row.name}` });
+    setCopyOpen({ ids: [row.id], hint: `来源：${row.name}`, sources: [copySourceFromRow(row, layer)] });
   }
 
   function batchCopyClicked() {
     if (selected.size === 0) return;
-    setCopyOpen({ ids: Array.from(selected), hint: `共 ${selected.size} 个来源` });
+    const selectedIds = Array.from(selected);
+    const sourceRows = patchedRows.filter((row) => selected.has(row.id));
+    setCopyOpen({
+      ids: selectedIds,
+      hint: `共 ${selected.size} 个来源`,
+      sources: sourceRows.map((row) => copySourceFromRow(row, layer)),
+    });
   }
 
   function doCopy(params: CopyParams) {
@@ -634,6 +641,8 @@ export function EntityListView<T extends EntityRow>({
         onSubmit={doCopy}
         submitting={batch.isPending}
         adAccountTimezone={adAccountTimezone}
+        currency={currency}
+        sources={copyOpen?.sources ?? []}
       />
 
       <TaskProgress
@@ -880,6 +889,18 @@ function deliveryState(row: EntityRow): { label: string; className: string } {
   return {
     label: metaEntityStatusLabel(row.status),
     className: 'border-muted bg-muted/40 text-muted-foreground',
+  };
+}
+
+function copySourceFromRow(row: EntityRow, layer: 'campaign' | 'adset' | 'ad'): CopySourceSnapshot {
+  const startTime =
+    layer === 'ad' ? row.adsetStartTime ?? row.startTime : row.startTime;
+  return {
+    id: row.id,
+    name: row.name,
+    ...(startTime ? { startTime } : {}),
+    ...(row.dailyBudget !== undefined ? { dailyBudget: row.dailyBudget } : {}),
+    ...(row.lifetimeBudget !== undefined ? { lifetimeBudget: row.lifetimeBudget } : {}),
   };
 }
 

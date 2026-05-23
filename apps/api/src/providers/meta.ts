@@ -49,6 +49,8 @@ export const metaProvider: AdsProvider = {
           ...(input.targetAdAccountId ? { targetAdAccountId: input.targetAdAccountId } : {}),
           ...(input.startTime ? { startTime: input.startTime } : {}),
           ...(input.endTime ? { endTime: input.endTime } : {}),
+          ...(input.dailyBudget !== undefined ? { dailyBudget: input.dailyBudget } : {}),
+          ...(input.lifetimeBudget !== undefined ? { lifetimeBudget: input.lifetimeBudget } : {}),
           ...(input.statusOption ? { statusOption: input.statusOption } : {}),
           ...(input.renameOptions ? { renameOptions: input.renameOptions } : {}),
         });
@@ -60,6 +62,8 @@ export const metaProvider: AdsProvider = {
           ...(input.targetCampaignId ? { targetCampaignId: input.targetCampaignId } : {}),
           ...(input.startTime ? { startTime: input.startTime } : {}),
           ...(input.endTime ? { endTime: input.endTime } : {}),
+          ...(input.dailyBudget !== undefined ? { dailyBudget: input.dailyBudget } : {}),
+          ...(input.lifetimeBudget !== undefined ? { lifetimeBudget: input.lifetimeBudget } : {}),
           ...(input.statusOption ? { statusOption: input.statusOption } : {}),
           ...(input.renameOptions ? { renameOptions: input.renameOptions } : {}),
         });

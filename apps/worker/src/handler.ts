@@ -309,6 +309,8 @@ async function executeProvider(
     const deepCopy = msg.params['deepCopy'];
     const startTime = msg.params['startTime'];
     const endTime = msg.params['endTime'];
+    const dailyBudget = msg.params['dailyBudget'];
+    const lifetimeBudget = msg.params['lifetimeBudget'];
     const statusOption = msg.params['statusOption'];
     const targetAdAccountId = msg.params['targetAdAccountId'];
     const targetCampaignId = msg.params['targetCampaignId'];
@@ -332,6 +334,8 @@ async function executeProvider(
       ...(typeof deepCopy === 'boolean' ? { deepCopy } : {}),
       ...(typeof startTime === 'string' ? { startTime } : {}),
       ...(typeof endTime === 'string' ? { endTime } : {}),
+      ...(typeof dailyBudget === 'number' ? { dailyBudget } : {}),
+      ...(typeof lifetimeBudget === 'number' ? { lifetimeBudget } : {}),
       ...(typeof statusOption === 'string'
         ? { statusOption: statusOption as 'ACTIVE' | 'PAUSED' | 'INHERITED_FROM_SOURCE' }
         : {}),
@@ -367,6 +371,8 @@ function buildAsyncCopyInput(msg: OperationMessage, requestName?: string): Async
   const deepCopy = msg.params['deepCopy'];
   const startTime = msg.params['startTime'];
   const endTime = msg.params['endTime'];
+  const dailyBudget = msg.params['dailyBudget'];
+  const lifetimeBudget = msg.params['lifetimeBudget'];
   const statusOption = msg.params['statusOption'];
   const targetAdAccountId = msg.params['targetAdAccountId'];
   const targetCampaignId = msg.params['targetCampaignId'];
@@ -387,6 +393,8 @@ function buildAsyncCopyInput(msg: OperationMessage, requestName?: string): Async
     ...(typeof deepCopy === 'boolean' ? { deepCopy } : {}),
     ...(typeof startTime === 'string' ? { startTime } : {}),
     ...(typeof endTime === 'string' ? { endTime } : {}),
+    ...(typeof dailyBudget === 'number' ? { dailyBudget } : {}),
+    ...(typeof lifetimeBudget === 'number' ? { lifetimeBudget } : {}),
     ...(typeof statusOption === 'string'
       ? { statusOption: statusOption as 'ACTIVE' | 'PAUSED' | 'INHERITED_FROM_SOURCE' }
       : {}),
@@ -570,6 +578,8 @@ async function executeSyncCopyFallback(
     ...(input.deepCopy !== undefined ? { deepCopy: input.deepCopy } : {}),
     ...(input.startTime ? { startTime: input.startTime } : {}),
     ...(input.endTime ? { endTime: input.endTime } : {}),
+    ...(input.dailyBudget !== undefined ? { dailyBudget: input.dailyBudget } : {}),
+    ...(input.lifetimeBudget !== undefined ? { lifetimeBudget: input.lifetimeBudget } : {}),
     ...(input.statusOption ? { statusOption: input.statusOption } : {}),
     ...(input.renameOptions ? { renameOptions: input.renameOptions } : {}),
   });
@@ -595,6 +605,8 @@ async function executeCustomCopyProvider(
     ...(input.deepCopy !== undefined ? { deepCopy: input.deepCopy } : {}),
     ...(input.startTime ? { startTime: input.startTime } : {}),
     ...(input.endTime ? { endTime: input.endTime } : {}),
+    ...(input.dailyBudget !== undefined ? { dailyBudget: input.dailyBudget } : {}),
+    ...(input.lifetimeBudget !== undefined ? { lifetimeBudget: input.lifetimeBudget } : {}),
     ...(input.statusOption ? { statusOption: input.statusOption } : {}),
     ...(input.renameOptions ? { renameOptions: input.renameOptions } : {}),
   });

@@ -41,6 +41,8 @@ export interface CopyInput {
   deepCopy?: boolean;
   startTime?: string;
   endTime?: string;
+  dailyBudget?: number;
+  lifetimeBudget?: number;
   statusOption?: 'ACTIVE' | 'PAUSED' | 'INHERITED_FROM_SOURCE';
   renameOptions?: RenameOptions;
 }

@@ -113,6 +113,10 @@ interface MetaAdSetRaw {
   campaign_id?: string;
   daily_budget?: string;
   lifetime_budget?: string;
+  daily_min_spend_target?: string;
+  daily_spend_cap?: string;
+  lifetime_min_spend_target?: string;
+  lifetime_spend_cap?: string;
   optimization_goal?: string;
   billing_event?: string;
   bid_strategy?: string;
@@ -425,6 +429,8 @@ export interface CopyOptions {
   deepCopy?: boolean;
   startTime?: string; // ISO
   endTime?: string;   // ISO
+  dailyBudget?: number;
+  lifetimeBudget?: number;
   statusOption?: 'ACTIVE' | 'PAUSED' | 'INHERITED_FROM_SOURCE';
   renameOptions?: RenameOptions;
 }
@@ -520,6 +526,41 @@ function addFormValue(form: Record<string, string>, key: string, value: unknown)
     return;
   }
   form[key] = String(value);
+}
+
+function addBudgetFormValues(
+  form: Record<string, string>,
+  source: { daily_budget?: string; lifetime_budget?: string },
+  opts: CopyOptions,
+  allowOverride: boolean,
+): void {
+  if (opts.dailyBudget !== undefined && opts.lifetimeBudget !== undefined) {
+    throw new MetaApiError(422, 100, undefined, undefined, undefined, 'copy budget: dailyBudget 与 lifetimeBudget 二选一');
+  }
+  if (allowOverride && opts.dailyBudget !== undefined) {
+    addFormValue(form, 'daily_budget', opts.dailyBudget);
+    return;
+  }
+  if (allowOverride && opts.lifetimeBudget !== undefined) {
+    addFormValue(form, 'lifetime_budget', opts.lifetimeBudget);
+    return;
+  }
+  addFormValue(form, 'daily_budget', source.daily_budget);
+  addFormValue(form, 'lifetime_budget', source.lifetime_budget);
+}
+
+function addPositiveFormValue(form: Record<string, string>, key: string, value: unknown): void {
+  if (value === undefined || value === null || value === '') return;
+  const numeric = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return;
+  form[key] = String(value);
+}
+
+function addAdSetSpendLimitFormValues(form: Record<string, string>, source: MetaAdSetRaw): void {
+  addPositiveFormValue(form, 'daily_min_spend_target', source.daily_min_spend_target);
+  addPositiveFormValue(form, 'daily_spend_cap', source.daily_spend_cap);
+  addPositiveFormValue(form, 'lifetime_min_spend_target', source.lifetime_min_spend_target);
+  addPositiveFormValue(form, 'lifetime_spend_cap', source.lifetime_spend_cap);
 }
 
 function applyCopyName(name: string | undefined, opts: RenameOptions | undefined, isTopLevel: boolean): string {
@@ -786,8 +827,7 @@ function copyCampaignCreateForm(source: MetaCampaignRaw, opts: CopyOptions, isTo
   };
   addFormValue(form, 'buying_type', source.buying_type ?? 'AUCTION');
   addFormValue(form, 'bid_strategy', source.bid_strategy);
-  addFormValue(form, 'daily_budget', source.daily_budget);
-  addFormValue(form, 'lifetime_budget', source.lifetime_budget);
+  addBudgetFormValues(form, source, opts, isTopLevel);
   addFormValue(form, 'start_time', opts.startTime ?? source.start_time);
   addFormValue(form, 'stop_time', opts.endTime ?? source.stop_time);
   addFormValue(form, 'special_ad_category_country', source.special_ad_category_country);
@@ -809,8 +849,8 @@ function copyAdSetCreateForm(
   addFormValue(form, 'optimization_goal', source.optimization_goal);
   addFormValue(form, 'bid_strategy', source.bid_strategy);
   addFormValue(form, 'bid_amount', source.bid_amount);
-  addFormValue(form, 'daily_budget', source.daily_budget);
-  addFormValue(form, 'lifetime_budget', source.lifetime_budget);
+  addBudgetFormValues(form, source, opts, isTopLevel);
+  addAdSetSpendLimitFormValues(form, source);
   addFormValue(form, 'targeting', source.targeting);
   addFormValue(form, 'promoted_object', source.promoted_object);
   addFormValue(form, 'attribution_spec', source.attribution_spec);
@@ -852,7 +892,7 @@ async function readAdSetForCopy(token: string, adsetId: string): Promise<MetaAdS
   return graph<MetaAdSetRaw>(`/${adsetId}`, token, {
     query: {
       fields:
-        'id,name,status,campaign_id,daily_budget,lifetime_budget,optimization_goal,billing_event,bid_strategy,bid_amount,targeting,promoted_object,attribution_spec,destination_type,start_time,end_time',
+        'id,name,status,campaign_id,daily_budget,lifetime_budget,daily_min_spend_target,daily_spend_cap,lifetime_min_spend_target,lifetime_spend_cap,optimization_goal,billing_event,bid_strategy,bid_amount,targeting,promoted_object,attribution_spec,destination_type,start_time,end_time',
     },
   });
 }
@@ -871,7 +911,7 @@ async function listAdSetsForCopy(token: string, campaignId: string): Promise<Met
   do {
     const q: Record<string, string> = {
       fields:
-        'id,name,status,campaign_id,daily_budget,lifetime_budget,optimization_goal,billing_event,bid_strategy,bid_amount,targeting,promoted_object,attribution_spec,destination_type,start_time,end_time',
+        'id,name,status,campaign_id,daily_budget,lifetime_budget,daily_min_spend_target,daily_spend_cap,lifetime_min_spend_target,lifetime_spend_cap,optimization_goal,billing_event,bid_strategy,bid_amount,targeting,promoted_object,attribution_spec,destination_type,start_time,end_time',
       limit: '100',
     };
     if (after) q['after'] = after;
