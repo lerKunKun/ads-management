@@ -49,8 +49,6 @@ export async function syncAdAccountObjects(
   args: SyncAdAccountArgs,
 ): Promise<SyncAdAccountResult> {
   const depth = args.depth ?? env.adObjectSyncDepth;
-  const maxCampaigns = args.maxCampaigns ?? env.adObjectSyncMaxCampaigns;
-  const maxAdsets = args.maxAdsets ?? env.adObjectSyncMaxAdsets;
   const ctx = await resolveAdAccount(args.companyId, args.adAccountId);
 
   await ensureSyncCanRun(ctx.fbAccountId, ctx.metaActId);
@@ -66,38 +64,11 @@ export async function syncAdAccountObjects(
 
   if (depth === 'campaign') return result;
 
-  const campaignSlice = campaigns.slice(0, Math.max(0, maxCampaigns));
-  const allAdsets: MetaAdSet[] = [];
-  for (const campaign of campaignSlice) {
-    await ensureSyncCanRun(ctx.fbAccountId, ctx.metaActId);
-    try {
-      const adsets = await withMetaRateLimit(ctx.metaActId, () =>
-        meta.listAdSets(ctx.token, campaign.id),
-      );
-      await upsertAdSetSnapshots(args.companyId, args.adAccountId, campaign.id, adsets);
-      result.adsets += adsets.length;
-      allAdsets.push(...adsets);
-    } catch (err) {
-      await markChildSyncFailed(args.companyId, args.adAccountId, 'adset', campaign.id, err);
-      await handleMetaSyncError(err, args.companyId, ctx.fbAccountId, ctx.metaActId);
-    }
-  }
+  const allAdsets = await syncAccountAdSets(args.companyId, args.adAccountId, ctx);
+  result.adsets = allAdsets.length;
 
   if (depth === 'ad') {
-    const adsetSlice = allAdsets.slice(0, Math.max(0, maxAdsets));
-    for (const adset of adsetSlice) {
-      await ensureSyncCanRun(ctx.fbAccountId, ctx.metaActId);
-      try {
-        const ads = await withMetaRateLimit(ctx.metaActId, () =>
-          meta.listAds(ctx.token, adset.id),
-        );
-        await upsertAdSnapshots(args.companyId, args.adAccountId, adset.id, ads);
-        result.ads += ads.length;
-      } catch (err) {
-        await markChildSyncFailed(args.companyId, args.adAccountId, 'ad', adset.id, err);
-        await handleMetaSyncError(err, args.companyId, ctx.fbAccountId, ctx.metaActId);
-      }
-    }
+    result.ads = await syncAccountAds(args.companyId, args.adAccountId, ctx);
   }
 
   return result;
@@ -162,6 +133,60 @@ async function syncCampaigns(
     await handleMetaSyncError(err, companyId, ctx.fbAccountId, ctx.metaActId);
     throw err;
   }
+}
+
+async function syncAccountAdSets(
+  companyId: string,
+  adAccountId: string,
+  ctx: { token: string; metaActId: string; fbAccountId: string },
+): Promise<MetaAdSet[]> {
+  await ensureSyncCanRun(ctx.fbAccountId, ctx.metaActId);
+  try {
+    const adsets = await withMetaRateLimit(ctx.metaActId, () =>
+      meta.listAdSetsForAccount(ctx.token, ctx.metaActId),
+    );
+    for (const [campaignId, rows] of groupByParent(adsets, (item) => item.campaignId).entries()) {
+      await upsertAdSetSnapshots(companyId, adAccountId, campaignId, rows);
+    }
+    return adsets;
+  } catch (err) {
+    await markChildSyncFailed(companyId, adAccountId, 'adset', '', err);
+    await handleMetaSyncError(err, companyId, ctx.fbAccountId, ctx.metaActId);
+    throw err;
+  }
+}
+
+async function syncAccountAds(
+  companyId: string,
+  adAccountId: string,
+  ctx: { token: string; metaActId: string; fbAccountId: string },
+): Promise<number> {
+  await ensureSyncCanRun(ctx.fbAccountId, ctx.metaActId);
+  try {
+    const ads = await withMetaRateLimit(ctx.metaActId, () =>
+      meta.listAdsForAccount(ctx.token, ctx.metaActId),
+    );
+    for (const [adsetId, rows] of groupByParent(ads, (item) => item.adsetId).entries()) {
+      await upsertAdSnapshots(companyId, adAccountId, adsetId, rows);
+    }
+    return ads.length;
+  } catch (err) {
+    await markChildSyncFailed(companyId, adAccountId, 'ad', '', err);
+    await handleMetaSyncError(err, companyId, ctx.fbAccountId, ctx.metaActId);
+    throw err;
+  }
+}
+
+function groupByParent<T>(rows: T[], parentIdOf: (item: T) => string | undefined): Map<string, T[]> {
+  const groups = new Map<string, T[]>();
+  for (const row of rows) {
+    const parentId = parentIdOf(row);
+    if (!parentId) continue;
+    const group = groups.get(parentId);
+    if (group) group.push(row);
+    else groups.set(parentId, [row]);
+  }
+  return groups;
 }
 
 async function listDueAdAccounts(args: {

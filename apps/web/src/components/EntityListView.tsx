@@ -33,6 +33,11 @@ export interface EntityRow {
   effectiveStatus?: string;
   dailyBudget?: number;
   lifetimeBudget?: number;
+  startTime?: string;
+  stopTime?: string;
+  endTime?: string;
+  adsetStartTime?: string;
+  adsetEndTime?: string;
 }
 
 export interface EntityListViewProps<T extends EntityRow> {
@@ -46,6 +51,7 @@ export interface EntityListViewProps<T extends EntityRow> {
   drillTo?: (row: T) => { to: string; params: Record<string, string> };
   enableBudget?: boolean;
   currency?: string | null;
+  adAccountTimezone?: string | null;
   insights?: Record<string, InsightsSummary>;
   datePreset: DatePreset;
   onDatePresetChange: (p: DatePreset) => void;
@@ -113,6 +119,7 @@ export function EntityListView<T extends EntityRow>({
   drillTo,
   enableBudget = true,
   currency,
+  adAccountTimezone,
   insights,
   datePreset,
   onDatePresetChange,
@@ -439,6 +446,7 @@ export function EntityListView<T extends EntityRow>({
               </TableHead>
               <TableHead className="w-12" />
               <TableHead>名称</TableHead>
+              <TableHead>状态</TableHead>
               {enableBudget && <TableHead>日预算</TableHead>}
               {METRIC_COLUMNS.map((column) => (
                 <SortableMetricHead
@@ -454,13 +462,13 @@ export function EntityListView<T extends EntityRow>({
           </TableHeader>
           <TableBody>
             {isLoading && (
-              <EmptyTableRow colSpan={enableBudget ? 12 : 11} text="加载中..." />
+              <EmptyTableRow colSpan={enableBudget ? 13 : 12} text="加载中..." />
             )}
             {!isLoading && rows.length === 0 && (
-              <EmptyTableRow colSpan={enableBudget ? 12 : 11} text={`暂无${layerLabel}`} />
+              <EmptyTableRow colSpan={enableBudget ? 13 : 12} text={`暂无${layerLabel}`} />
             )}
             {!isLoading && rows.length > 0 && filteredRows.length === 0 && (
-              <EmptyTableRow colSpan={enableBudget ? 12 : 11} text="无匹配项，请清除筛选条件" />
+              <EmptyTableRow colSpan={enableBudget ? 13 : 12} text="无匹配项，请清除筛选条件" />
             )}
             {pager.pageItems.map((row) => {
               const insight = insights?.[row.id];
@@ -503,11 +511,9 @@ export function EntityListView<T extends EntityRow>({
                     ) : (
                       row.name
                     )}
-                    {row.status !== 'ACTIVE' && (
-                      <span className="ml-2 text-xs text-muted-foreground">
-                        [{metaEntityStatusLabel(row.status)}]
-                      </span>
-                    )}
+                  </TableCell>
+                  <TableCell>
+                    <DeliveryStatusBadge row={row} />
                   </TableCell>
                   {enableBudget && (
                     <TableCell>
@@ -627,6 +633,7 @@ export function EntityListView<T extends EntityRow>({
         onCancel={() => setCopyOpen(null)}
         onSubmit={doCopy}
         submitting={batch.isPending}
+        adAccountTimezone={adAccountTimezone}
       />
 
       <TaskProgress
@@ -737,7 +744,7 @@ function TaskProgress({ taskId, onClose }: { taskId: string | null; onClose: () 
       <p className="text-sm">
         {snap ? (
           <>
-            <b>{taskStatusLabel(snap.status)}</b> - {snap.success}/{snap.total} 成功 - {snap.failed} 失败 ({pct}%)
+            <b>{taskStatusLabel(snap.status)}</b> - {snap.success}/{snap.total} 成功 - {snap.failed} 失败
           </>
         ) : (
           '连接中...'
@@ -811,6 +818,7 @@ function SummaryRow({
       <TableCell className={`${SUMMARY_CELL_CLASS} font-semibold`}>
         汇总（{label}）
       </TableCell>
+      <TableCell className={SUMMARY_CELL_CLASS} />
       {enableBudget && <TableCell className={SUMMARY_CELL_CLASS} />}
       <TableCell className={`${SUMMARY_CELL_CLASS} text-right tabular-nums`}>
         {fmtSummaryMoney(summary.spend, currency, summary.hasInsights)}
@@ -836,6 +844,43 @@ function SummaryRow({
       <TableCell className={`${SUMMARY_CELL_CLASS} text-right`} />
     </TableRow>
   );
+}
+
+function DeliveryStatusBadge({ row }: { row: EntityRow }) {
+  const state = deliveryState(row);
+  return (
+    <span className={`inline-flex min-w-[92px] items-center justify-center rounded border px-2 py-1 text-xs ${state.className}`}>
+      {state.label}
+    </span>
+  );
+}
+
+function deliveryState(row: EntityRow): { label: string; className: string } {
+  const start = row.adsetStartTime ?? row.startTime;
+  const startMs = start ? Date.parse(start) : NaN;
+  const scheduled = row.status === 'ACTIVE' && Number.isFinite(startMs) && startMs > Date.now();
+  if (scheduled) {
+    return {
+      label: '未投放已排期',
+      className: 'border-amber-200 bg-amber-50 text-amber-700',
+    };
+  }
+  if (row.status === 'ACTIVE' && (!row.effectiveStatus || row.effectiveStatus === 'ACTIVE')) {
+    return {
+      label: '投放中',
+      className: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+    };
+  }
+  if (row.status === 'ACTIVE' && row.effectiveStatus) {
+    return {
+      label: row.effectiveStatus,
+      className: 'border-blue-200 bg-blue-50 text-blue-700',
+    };
+  }
+  return {
+    label: metaEntityStatusLabel(row.status),
+    className: 'border-muted bg-muted/40 text-muted-foreground',
+  };
 }
 
 function applyPatch<T extends EntityRow>(row: T, patch: RowPatch | undefined): T {

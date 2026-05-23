@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { and, eq, sql as dsql } from 'drizzle-orm';
+import { and, eq, inArray, sql as dsql } from 'drizzle-orm';
 import { db, schema } from '../../lib/db';
 import { env } from '../../env';
 import type {
@@ -220,6 +220,46 @@ export async function upsertAdSnapshots(
         });
     }
     await markSyncSuccessTx(tx, companyId, adAccountId, 'ad', adsetId, now);
+  });
+}
+
+export async function hydrateAdsWithLocalAdSetSchedule(
+  companyId: string,
+  adAccountId: string,
+  rows: MetaAd[],
+): Promise<MetaAd[]> {
+  const adsetIds = Array.from(
+    new Set(rows.map((row) => row.adsetId).filter((id): id is string => !!id)),
+  );
+  if (adsetIds.length === 0) return rows;
+
+  const schedules = await db.transaction(async (tx) => {
+    await setTenant(tx, companyId);
+    const adsets = await tx
+      .select({
+        metaId: schema.adSetObjects.metaId,
+        startTime: schema.adSetObjects.startTime,
+        endTime: schema.adSetObjects.endTime,
+      })
+      .from(schema.adSetObjects)
+      .where(
+        and(
+          eq(schema.adSetObjects.companyId, companyId),
+          eq(schema.adSetObjects.adAccountId, adAccountId),
+          inArray(schema.adSetObjects.metaId, adsetIds),
+        ),
+      );
+    return new Map(adsets.map((adset) => [adset.metaId, adset]));
+  });
+
+  return rows.map((row) => {
+    const schedule = row.adsetId ? schedules.get(row.adsetId) : undefined;
+    if (!schedule) return row;
+    return {
+      ...row,
+      ...(schedule.startTime ? { adsetStartTime: schedule.startTime.toISOString() } : {}),
+      ...(schedule.endTime ? { adsetEndTime: schedule.endTime.toISOString() } : {}),
+    };
   });
 }
 
@@ -754,7 +794,27 @@ async function listLocalAds(
         ),
       )
       .orderBy(schema.adObjects.createdAt);
-    return rows.map((row) => ({
+    const adsetIds = Array.from(new Set(rows.map((row) => row.adsetMetaId)));
+    const adsets = adsetIds.length
+      ? await tx
+          .select({
+            metaId: schema.adSetObjects.metaId,
+            startTime: schema.adSetObjects.startTime,
+            endTime: schema.adSetObjects.endTime,
+          })
+          .from(schema.adSetObjects)
+          .where(
+            and(
+              eq(schema.adSetObjects.companyId, companyId),
+              eq(schema.adSetObjects.adAccountId, adAccountId),
+              inArray(schema.adSetObjects.metaId, adsetIds),
+            ),
+          )
+      : [];
+    const scheduleByAdSet = new Map(adsets.map((adset) => [adset.metaId, adset]));
+    return rows.map((row) => {
+      const schedule = scheduleByAdSet.get(row.adsetMetaId);
+      return {
       id: row.metaId,
       name: row.name,
       status: row.status,
@@ -762,8 +822,11 @@ async function listLocalAds(
       ...(row.campaignMetaId ? { campaignId: row.campaignMetaId } : {}),
       ...(row.effectiveStatus ? { effectiveStatus: row.effectiveStatus } : {}),
       ...(row.creativeId ? { creativeId: row.creativeId } : {}),
+      ...(schedule?.startTime ? { adsetStartTime: schedule.startTime.toISOString() } : {}),
+      ...(schedule?.endTime ? { adsetEndTime: schedule.endTime.toISOString() } : {}),
       ...(row.metaUpdatedTime ? { updatedTime: row.metaUpdatedTime.toISOString() } : {}),
-    }));
+    };
+    });
   });
 }
 

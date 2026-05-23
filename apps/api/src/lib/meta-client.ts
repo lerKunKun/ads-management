@@ -174,6 +174,8 @@ export interface MetaAd {
   adsetId?: string;
   campaignId?: string;
   creativeId?: string;
+  adsetStartTime?: string;
+  adsetEndTime?: string;
   updatedTime?: string;
 }
 
@@ -537,13 +539,6 @@ function copyCreateStatus(source: EntityStatus | undefined, opts: CopyOptions): 
   return 'PAUSED';
 }
 
-function futureIso(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  const t = Date.parse(value);
-  if (!Number.isFinite(t)) return undefined;
-  return t > Date.now() ? value : undefined;
-}
-
 function asyncCopyForm(input: AsyncCopyInput): Record<string, string> {
   const f =
     input.targetType === 'ad'
@@ -793,6 +788,8 @@ function copyCampaignCreateForm(source: MetaCampaignRaw, opts: CopyOptions, isTo
   addFormValue(form, 'bid_strategy', source.bid_strategy);
   addFormValue(form, 'daily_budget', source.daily_budget);
   addFormValue(form, 'lifetime_budget', source.lifetime_budget);
+  addFormValue(form, 'start_time', opts.startTime ?? source.start_time);
+  addFormValue(form, 'stop_time', opts.endTime ?? source.stop_time);
   addFormValue(form, 'special_ad_category_country', source.special_ad_category_country);
   return form;
 }
@@ -818,8 +815,8 @@ function copyAdSetCreateForm(
   addFormValue(form, 'promoted_object', source.promoted_object);
   addFormValue(form, 'attribution_spec', source.attribution_spec);
   addFormValue(form, 'destination_type', source.destination_type);
-  addFormValue(form, 'start_time', opts.startTime ?? futureIso(source.start_time));
-  addFormValue(form, 'end_time', opts.endTime ?? futureIso(source.end_time));
+  addFormValue(form, 'start_time', opts.startTime ?? source.start_time);
+  addFormValue(form, 'end_time', opts.endTime ?? source.end_time);
   return form;
 }
 
@@ -846,7 +843,7 @@ async function readCampaignForCopy(token: string, campaignId: string): Promise<M
   return graph<MetaCampaignRaw>(`/${campaignId}`, token, {
     query: {
       fields:
-        'id,name,status,objective,buying_type,bid_strategy,daily_budget,lifetime_budget,special_ad_categories,special_ad_category_country,account_id',
+        'id,name,status,objective,buying_type,bid_strategy,daily_budget,lifetime_budget,start_time,stop_time,special_ad_categories,special_ad_category_country,account_id',
     },
   });
 }
@@ -1342,6 +1339,49 @@ export const meta = {
     return out;
   },
 
+  async listAdSetsForAccount(
+    token: string,
+    metaActId: string,
+    limit = 100,
+  ): Promise<MetaAdSet[]> {
+    if (FAKE_MODE) {
+      const campaigns = fakeMeta.listCampaigns(metaActId);
+      return campaigns.flatMap((campaign) => fakeMeta.listAdSets(campaign.id));
+    }
+    const out: MetaAdSet[] = [];
+    let after: string | undefined;
+    const accountPath = `/${toActId(metaActId)}/adsets`;
+    do {
+      const q: Record<string, string> = {
+        fields:
+          'id,name,status,effective_status,campaign_id,daily_budget,lifetime_budget,optimization_goal,billing_event,bid_amount,start_time,end_time,updated_time',
+        limit: String(limit),
+      };
+      if (after) q['after'] = after;
+      const page = await graph<MetaPagedEnvelope<MetaAdSetRaw>>(accountPath, token, { query: q });
+      for (const a of page.data) {
+        out.push({
+          id: a.id,
+          name: a.name ?? a.id,
+          status: a.status ?? 'PAUSED',
+          ...(a.effective_status ? { effectiveStatus: a.effective_status } : {}),
+          ...(a.campaign_id ? { campaignId: a.campaign_id } : {}),
+          ...(n(a.daily_budget) !== undefined ? { dailyBudget: n(a.daily_budget)! } : {}),
+          ...(n(a.lifetime_budget) !== undefined ? { lifetimeBudget: n(a.lifetime_budget)! } : {}),
+          ...(a.optimization_goal ? { optimizationGoal: a.optimization_goal } : {}),
+          ...(a.billing_event ? { billingEvent: a.billing_event } : {}),
+          ...(n(a.bid_amount) !== undefined ? { bidAmount: n(a.bid_amount)! } : {}),
+          ...(a.start_time ? { startTime: a.start_time } : {}),
+          ...(a.end_time ? { endTime: a.end_time } : {}),
+          ...(a.updated_time ? { updatedTime: a.updated_time } : {}),
+        });
+      }
+      after = page.paging?.cursors?.after;
+      if (!page.paging?.next) break;
+    } while (after);
+    return out;
+  },
+
   async setAdSetStatus(
     token: string,
     adsetId: string,
@@ -1451,6 +1491,41 @@ export const meta = {
       };
       if (after) q['after'] = after;
       const page = await graph<MetaPagedEnvelope<MetaAdRaw>>(`/${adsetId}/ads`, token, { query: q });
+      for (const a of page.data) {
+        out.push({
+          id: a.id,
+          name: a.name ?? a.id,
+          status: a.status ?? 'PAUSED',
+          ...(a.effective_status ? { effectiveStatus: a.effective_status } : {}),
+          ...(a.adset_id ? { adsetId: a.adset_id } : {}),
+          ...(a.campaign_id ? { campaignId: a.campaign_id } : {}),
+          ...(a.creative?.id ? { creativeId: a.creative.id } : {}),
+          ...(a.updated_time ? { updatedTime: a.updated_time } : {}),
+        });
+      }
+      after = page.paging?.cursors?.after;
+      if (!page.paging?.next) break;
+    } while (after);
+    return out;
+  },
+
+  async listAdsForAccount(token: string, metaActId: string, limit = 100): Promise<MetaAd[]> {
+    if (FAKE_MODE) {
+      const campaigns = fakeMeta.listCampaigns(metaActId);
+      return campaigns.flatMap((campaign) =>
+        fakeMeta.listAdSets(campaign.id).flatMap((adset) => fakeMeta.listAds(adset.id)),
+      );
+    }
+    const out: MetaAd[] = [];
+    let after: string | undefined;
+    const accountPath = `/${toActId(metaActId)}/ads`;
+    do {
+      const q: Record<string, string> = {
+        fields: 'id,name,status,effective_status,adset_id,campaign_id,creative{id},updated_time',
+        limit: String(limit),
+      };
+      if (after) q['after'] = after;
+      const page = await graph<MetaPagedEnvelope<MetaAdRaw>>(accountPath, token, { query: q });
       for (const a of page.data) {
         out.push({
           id: a.id,

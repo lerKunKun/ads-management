@@ -76,6 +76,7 @@ function AdAccountCampaignsPage() {
         })}
         enableBudget
         currency={summary.data?.currency ?? null}
+        adAccountTimezone={summary.data?.timezoneName ?? null}
         {...(insights.data ? { insights: insights.data } : {})}
         datePreset={preset}
         onDatePresetChange={setPreset}

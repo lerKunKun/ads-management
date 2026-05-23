@@ -127,6 +127,8 @@ export interface Ad {
   adsetId?: string;
   campaignId?: string;
   creativeId?: string;
+  adsetStartTime?: string;
+  adsetEndTime?: string;
   updatedTime?: string;
 }
 
@@ -160,6 +162,7 @@ export interface CopyParams {
   count?: number;
   deepCopy?: boolean;
   startTime?: string;
+  endTime?: string;
   statusOption?: 'ACTIVE' | 'PAUSED' | 'INHERITED_FROM_SOURCE';
   renameOptions?: RenameOptions;
 }
@@ -184,7 +187,29 @@ export interface Campaign {
   objective?: string;
   dailyBudget?: number;
   lifetimeBudget?: number;
+  startTime?: string;
+  stopTime?: string;
   updatedTime?: string;
+}
+
+export interface TaskLayerProgress {
+  targetType: 'campaign' | 'adset' | 'ad';
+  label: string;
+  total: number;
+  success: number;
+  failed: number;
+  running: number;
+  pending: number;
+  successItems: TaskLayerProgressItem[];
+  failedItems: TaskLayerProgressItem[];
+}
+
+export interface TaskLayerProgressItem {
+  id: string;
+  targetId: string;
+  status: string;
+  attempts: number;
+  detail: string | null;
 }
 
 export const api = {
@@ -494,6 +519,7 @@ export const api = {
       payload: unknown;
       createdAt: string;
       userId: string;
+      layerProgress: TaskLayerProgress[];
       failures: Array<{ id: string; targetId: string; error: string | null; attempts: number }>;
     }>(`/operations/${taskId}`),
 };

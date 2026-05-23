@@ -27,6 +27,7 @@ import {
   markLocalBudget,
   markLocalDeleted,
   markLocalStatus,
+  hydrateAdsWithLocalAdSetSchedule,
   readFreshAds,
   readFreshAdSets,
   readFreshCampaigns,
@@ -339,7 +340,7 @@ export async function listAds(
   try {
     const rows = await meta.listAds(ctx.token, adsetId);
     await upsertAdSnapshots(principal.companyId, adAccountId, adsetId, rows);
-    return rows;
+    return await hydrateAdsWithLocalAdSetSchedule(principal.companyId, adAccountId, rows);
   } catch (err) {
     await handleMetaError(err, principal.companyId, ctx.fbAccountId);
     throw err;
@@ -452,6 +453,7 @@ export async function copyEntity(
       count,
       newIds: out,
       ...(args.startTime ? { startTime: args.startTime } : {}),
+      ...(args.endTime ? { endTime: args.endTime } : {}),
       ...(args.renameOptions ? { renameOptions: args.renameOptions } : {}),
     },
     ...(args.ip ? { ip: args.ip } : {}),

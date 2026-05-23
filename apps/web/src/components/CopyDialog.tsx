@@ -14,11 +14,12 @@ interface CopyDialogProps {
   onCancel: () => void;
   onSubmit: (params: CopyParams) => void;
   submitting: boolean;
+  adAccountTimezone?: string | null;
 }
 
 /**
  * 复制对话框 - 支持:
- *   排期起始时间(无结束时间,数据不好自己关停)
+ *   排期起始/结束时间(默认继承原对象)
  *   复制条数 N(默认 1, 不设上限)
  *   自定义前缀
  *   日期后缀(可选,自动 yyyymmdd)
@@ -33,30 +34,29 @@ export function CopyDialog({
   onCancel,
   onSubmit,
   submitting,
+  adAccountTimezone,
 }: CopyDialogProps) {
   const [startTime, setStartTime] = useState('');
+  const [endTime, setEndTime] = useState('');
   const [count, setCount] = useState(1);
   const [prefix, setPrefix] = useState('');
   const [dateSuffix, setDateSuffix] = useState(false);
   const [country, setCountry] = useState('');
   const [testIdx, setTestIdx] = useState('');
   const [deepCopy, setDeepCopy] = useState(true);
-  const [pauseAfter, setPauseAfter] = useState(true);
+  const [pauseAfter, setPauseAfter] = useState(false);
 
   useEffect(() => {
     if (!open) return;
-    // 默认 startTime: 明天 09:00 本地时间
-    const t = new Date();
-    t.setDate(t.getDate() + 1);
-    t.setHours(9, 0, 0, 0);
-    setStartTime(toLocalInput(t));
+    setStartTime('');
+    setEndTime('');
     setCount(1);
     setPrefix('');
     setDateSuffix(false);
     setCountry('');
     setTestIdx('');
     setDeepCopy(true);
-    setPauseAfter(true);
+    setPauseAfter(false);
   }, [open]);
 
   function buildSuffix(): string {
@@ -72,10 +72,28 @@ export function CopyDialog({
       alert('复制条数必须 ≥ 1');
       return;
     }
+    let resolvedStartTime: string | undefined;
+    let resolvedEndTime: string | undefined;
+    try {
+      resolvedStartTime = startTime ? localInputToIso(startTime, adAccountTimezone) : undefined;
+      resolvedEndTime = endTime ? localInputToIso(endTime, adAccountTimezone) : undefined;
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+      return;
+    }
+    if (
+      resolvedStartTime &&
+      resolvedEndTime &&
+      Date.parse(resolvedEndTime) <= Date.parse(resolvedStartTime)
+    ) {
+      alert('结束时间必须晚于起始时间');
+      return;
+    }
     const suffix = buildSuffix();
     const params: CopyParams = {
       count,
-      ...(startTime ? { startTime: localInputToIso(startTime) } : {}),
+      ...(resolvedStartTime ? { startTime: resolvedStartTime } : {}),
+      ...(resolvedEndTime ? { endTime: resolvedEndTime } : {}),
       statusOption: pauseAfter ? 'PAUSED' : 'INHERITED_FROM_SOURCE',
       ...(layer !== 'ad' ? { deepCopy } : {}),
       ...((prefix || suffix)
@@ -93,6 +111,7 @@ export function CopyDialog({
 
   const layerName =
     layer === 'campaign' ? '广告系列' : layer === 'adset' ? '广告组' : '广告';
+  const timezoneLabel = adAccountTimezone ?? '账户时区加载中';
 
   return (
     <Dialog
@@ -103,17 +122,29 @@ export function CopyDialog({
       {hint && <p className="text-xs text-muted-foreground mb-2">{hint}</p>}
 
       <div className="space-y-3">
-        <div>
-          <label className="text-sm text-muted-foreground">起始时间</label>
-          <Input
-            type="datetime-local"
-            value={startTime}
-            onChange={(e) => setStartTime(e.target.value)}
-          />
-          <p className="text-xs text-muted-foreground mt-1">
-            不设结束时间;数据不好手动关停。
-          </p>
-        </div>
+        {layer !== 'ad' && (
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <div>
+              <label className="text-sm text-muted-foreground">起始时间</label>
+              <Input
+                type="datetime-local"
+                value={startTime}
+                onChange={(e) => setStartTime(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="text-sm text-muted-foreground">结束时间</label>
+              <Input
+                type="datetime-local"
+                value={endTime}
+                onChange={(e) => setEndTime(e.target.value)}
+              />
+            </div>
+            <p className="text-xs text-muted-foreground md:col-span-2">
+              留空保持原对象排期；填写时按广告账户时区 {timezoneLabel} 提交。
+            </p>
+          </div>
+        )}
 
         <div>
           <label className="text-sm text-muted-foreground">每个源复制 N 份</label>
@@ -215,14 +246,84 @@ export function CopyDialog({
   );
 }
 
-function toLocalInput(d: Date): string {
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-function localInputToIso(s: string): string {
-  return new Date(s).toISOString();
-}
 function formatYMD(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
+}
+
+function localInputToIso(s: string, timeZone: string | null | undefined): string {
+  const parsed = parseDateTimeLocal(s);
+  if (!parsed) throw new Error('排期时间格式无效');
+  if (!timeZone) throw new Error('广告账户时区未加载，不能设置排期时间');
+
+  const utcGuess = Date.UTC(parsed.year, parsed.month - 1, parsed.day, parsed.hour, parsed.minute, 0, 0);
+  let utcTime = utcGuess - timeZoneOffsetMs(new Date(utcGuess), timeZone);
+  for (let i = 0; i < 3; i++) {
+    const next = utcGuess - timeZoneOffsetMs(new Date(utcTime), timeZone);
+    if (Math.abs(next - utcTime) < 1) break;
+    utcTime = next;
+  }
+  return new Date(utcTime).toISOString();
+}
+
+function parseDateTimeLocal(value: string):
+  | { year: number; month: number; day: number; hour: number; minute: number }
+  | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value);
+  if (!match) return null;
+  const [, year, month, day, hour, minute] = match;
+  return {
+    year: Number(year),
+    month: Number(month),
+    day: Number(day),
+    hour: Number(hour),
+    minute: Number(minute),
+  };
+}
+
+function timeZoneOffsetMs(date: Date, timeZone: string): number {
+  let parts: Intl.DateTimeFormatPart[];
+  try {
+    parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(date);
+  } catch {
+    throw new Error(`广告账户时区无效：${timeZone}`);
+  }
+  const values: Partial<Record<Intl.DateTimeFormatPartTypes, number>> = {};
+  for (const part of parts) {
+    if (part.type !== 'literal') values[part.type] = Number(part.value);
+  }
+  const year = values.year;
+  const month = values.month;
+  const day = values.day;
+  const hour = values.hour;
+  const minute = values.minute;
+  const second = values.second;
+  if (
+    year === undefined ||
+    month === undefined ||
+    day === undefined ||
+    hour === undefined ||
+    minute === undefined ||
+    second === undefined
+  ) {
+    throw new Error(`广告账户时区无法解析：${timeZone}`);
+  }
+  const zonedAsUtc = Date.UTC(
+    year,
+    month - 1,
+    day,
+    hour,
+    minute,
+    second,
+  );
+  return zonedAsUtc - date.getTime();
 }
