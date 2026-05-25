@@ -12,6 +12,13 @@ interface MetaPagedEnvelope<T> {
   paging?: { cursors?: { after?: string }; next?: string };
 }
 
+type MetaRequestRunner = <T>(run: () => Promise<T>) => Promise<T>;
+
+interface InspectCampaignForCopyOptions {
+  adConcurrency?: number;
+  runRequest?: MetaRequestRunner;
+}
+
 interface MetaErrorEnvelope {
   error: {
     message: string;
@@ -507,6 +514,29 @@ interface MetaBatchResponseEntry {
   headers?: unknown;
 }
 
+function runDirect<T>(run: () => Promise<T>): Promise<T> {
+  return run();
+}
+
+async function mapLimited<T, R>(
+  items: T[],
+  concurrency: number,
+  run: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const limit = Math.max(1, concurrency);
+  const results: R[] = new Array(items.length);
+  let cursor = 0;
+  async function worker(): Promise<void> {
+    for (;;) {
+      const index = cursor++;
+      if (index >= items.length) return;
+      results[index] = await run(items[index]!, index);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+  return results;
+}
+
 function copyForm(opts: CopyOptions): Record<string, string> {
   const f: Record<string, string> = {};
   if (opts.deepCopy !== undefined) f['deep_copy'] = String(opts.deepCopy);
@@ -887,13 +917,17 @@ function copyAdCreateForm(
   return form;
 }
 
-async function readCampaignForCopy(token: string, campaignId: string): Promise<MetaCampaignRaw> {
-  return graph<MetaCampaignRaw>(`/${campaignId}`, token, {
+async function readCampaignForCopy(
+  token: string,
+  campaignId: string,
+  runRequest: MetaRequestRunner = runDirect,
+): Promise<MetaCampaignRaw> {
+  return runRequest(() => graph<MetaCampaignRaw>(`/${campaignId}`, token, {
     query: {
       fields:
         'id,name,status,objective,buying_type,bid_strategy,daily_budget,lifetime_budget,start_time,stop_time,special_ad_categories,special_ad_category_country,account_id',
     },
-  });
+  }));
 }
 
 async function readAdSetForCopy(token: string, adsetId: string): Promise<MetaAdSetRaw> {
@@ -913,7 +947,11 @@ async function readAdForCopy(token: string, adId: string): Promise<MetaAdRaw> {
   });
 }
 
-async function listAdSetsForCopy(token: string, campaignId: string): Promise<MetaAdSetRaw[]> {
+async function listAdSetsForCopy(
+  token: string,
+  campaignId: string,
+  runRequest: MetaRequestRunner = runDirect,
+): Promise<MetaAdSetRaw[]> {
   const out: MetaAdSetRaw[] = [];
   let after: string | undefined;
   do {
@@ -923,7 +961,7 @@ async function listAdSetsForCopy(token: string, campaignId: string): Promise<Met
       limit: '100',
     };
     if (after) q['after'] = after;
-    const page = await graph<MetaPagedEnvelope<MetaAdSetRaw>>(`/${campaignId}/adsets`, token, { query: q });
+    const page = await runRequest(() => graph<MetaPagedEnvelope<MetaAdSetRaw>>(`/${campaignId}/adsets`, token, { query: q }));
     out.push(...page.data);
     after = page.paging?.cursors?.after;
     if (!page.paging?.next) break;
@@ -931,7 +969,11 @@ async function listAdSetsForCopy(token: string, campaignId: string): Promise<Met
   return out;
 }
 
-async function listAdsForCopy(token: string, adsetId: string): Promise<MetaAdRaw[]> {
+async function listAdsForCopy(
+  token: string,
+  adsetId: string,
+  runRequest: MetaRequestRunner = runDirect,
+): Promise<MetaAdRaw[]> {
   const out: MetaAdRaw[] = [];
   let after: string | undefined;
   do {
@@ -940,12 +982,47 @@ async function listAdsForCopy(token: string, adsetId: string): Promise<MetaAdRaw
       limit: '100',
     };
     if (after) q['after'] = after;
-    const page = await graph<MetaPagedEnvelope<MetaAdRaw>>(`/${adsetId}/ads`, token, { query: q });
+    const page = await runRequest(() => graph<MetaPagedEnvelope<MetaAdRaw>>(`/${adsetId}/ads`, token, { query: q }));
     out.push(...page.data);
     after = page.paging?.cursors?.after;
     if (!page.paging?.next) break;
   } while (after);
   return out;
+}
+
+async function listCampaignAdsForCopy(
+  token: string,
+  campaignId: string,
+  runRequest: MetaRequestRunner = runDirect,
+): Promise<MetaAdRaw[]> {
+  const out: MetaAdRaw[] = [];
+  let after: string | undefined;
+  do {
+    const q: Record<string, string> = {
+      fields: 'id,name,status,adset_id,campaign_id,creative{id},bid_amount',
+      limit: '100',
+    };
+    if (after) q['after'] = after;
+    const page = await runRequest(() => graph<MetaPagedEnvelope<MetaAdRaw>>(`/${campaignId}/ads`, token, { query: q }));
+    out.push(...page.data);
+    after = page.paging?.cursors?.after;
+    if (!page.paging?.next) break;
+  } while (after);
+  return out;
+}
+
+function groupAdsByAdSet(ads: MetaAdRaw[]): Map<string, MetaAdRaw[]> | null {
+  const byAdset = new Map<string, MetaAdRaw[]>();
+  for (const ad of ads) {
+    if (!ad.adset_id) return null;
+    const list = byAdset.get(ad.adset_id);
+    if (list) {
+      list.push(ad);
+    } else {
+      byAdset.set(ad.adset_id, [ad]);
+    }
+  }
+  return byAdset;
 }
 
 // ===== 主对象 =====
@@ -1051,6 +1128,7 @@ export const meta = {
   async inspectCampaignForCopy(
     token: string,
     campaignId: string,
+    options: InspectCampaignForCopyOptions = {},
   ): Promise<{
     campaign: MetaCampaignRaw;
     adsets: Array<{ adset: MetaAdSetRaw; ads: MetaAdRaw[] }>;
@@ -1061,12 +1139,31 @@ export const meta = {
         adsets: [],
       };
     }
-    const campaign = await readCampaignForCopy(token, campaignId);
-    const adsets = await listAdSetsForCopy(token, campaignId);
-    const out: Array<{ adset: MetaAdSetRaw; ads: MetaAdRaw[] }> = [];
-    for (const adset of adsets) {
-      out.push({ adset, ads: await listAdsForCopy(token, adset.id) });
+    const runRequest = options.runRequest ?? runDirect;
+    const [campaign, adsets] = await Promise.all([
+      readCampaignForCopy(token, campaignId, runRequest),
+      listAdSetsForCopy(token, campaignId, runRequest),
+    ]);
+    try {
+      const campaignAds = await listCampaignAdsForCopy(token, campaignId, runRequest);
+      const adsByAdset = groupAdsByAdSet(campaignAds);
+      if (adsByAdset) {
+        return {
+          campaign,
+          adsets: adsets.map((adset) => ({ adset, ads: adsByAdset.get(adset.id) ?? [] })),
+        };
+      }
+      console.warn(`[meta-copy-inspect] campaign ads edge missing adset_id, fallback campaign=${campaignId}`);
+    } catch (err) {
+      console.warn(
+        `[meta-copy-inspect] campaign ads edge failed, fallback campaign=${campaignId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
+    const out = await mapLimited(
+      adsets,
+      options.adConcurrency ?? 8,
+      async (adset) => ({ adset, ads: await listAdsForCopy(token, adset.id, runRequest) }),
+    );
     return { campaign, adsets: out };
   },
 

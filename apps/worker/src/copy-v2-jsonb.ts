@@ -1,6 +1,6 @@
 import { and, eq, sql as dsql } from 'drizzle-orm';
 import { db, schema } from '../../api/src/lib/db';
-import { acquire, DEFAULT_BUCKETS } from '../../api/src/lib/rate-limit';
+import { acquire, acquireSemaphore, releaseSemaphore } from '../../api/src/lib/rate-limit';
 import { env } from '../../api/src/env';
 import {
   meta,
@@ -14,7 +14,7 @@ import {
 import { HttpError } from '../../api/src/lib/http-error';
 import type { OperationMessage } from '../../api/src/lib/rabbitmq-topology';
 import { isFake } from './fake-meta';
-import { assertTaskRunnable } from './task-control';
+import { assertTaskRunnable, TaskCancelledError, TaskPausedError } from './task-control';
 
 type StepStatus = 'pending' | 'running' | 'success' | 'unknown' | 'failed' | 'skipped' | 'retrying';
 type SourceType = 'campaign' | 'adset' | 'ad';
@@ -32,6 +32,7 @@ interface StepRow {
   sourceId: string;
   status: StepStatus;
   newId: string | null;
+  leaseUntil: Date | null;
   metadata: unknown;
 }
 
@@ -96,7 +97,12 @@ function workflowState(plan: CampaignCopyPlan): Record<string, unknown> {
     config: {
       adsetConcurrency: env.copyV2AdsetConcurrency,
       adConcurrency: env.copyV2AdConcurrency,
-      globalQps: env.copyV2JsonbEnabled ? 'configured' : 'disabled',
+      inspectConcurrency: env.copyV2InspectConcurrency,
+      verifyConcurrency: env.copyV2VerifyConcurrency,
+      globalQps: env.copyV2GlobalQps,
+      globalBurst: env.copyV2GlobalBurst,
+      globalConcurrency: env.copyV2GlobalConcurrency,
+      adAccountQps: env.copyV2AdAccountQps,
     },
     progress: {
       campaign: 'pending',
@@ -262,38 +268,74 @@ function pushStartTimeMismatch(
   });
 }
 
-async function acquireMetaBudget(metaActId: string): Promise<void> {
-  if (isFake()) return;
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    const rate = await acquire([
-      DEFAULT_BUCKETS.app(),
-      {
-        key: `ratelimit:copy-v2:adacct:${metaActId}`,
-        capacity: env.copyV2AdAccountBurst,
-        refillPerSec: env.copyV2AdAccountQps,
-      },
-    ]);
-    if (rate.allowed) return;
-    if (rate.waitMs <= 1000) {
-      await sleep(Math.max(25, rate.waitMs + 10));
+async function tryAcquireMetaRate(metaActId: string): Promise<{ allowed: boolean; waitMs: number }> {
+  if (isFake()) return { allowed: true, waitMs: 0 };
+  return acquire([
+    {
+      key: 'ratelimit:copy-v2:global',
+      capacity: env.copyV2GlobalBurst,
+      refillPerSec: env.copyV2GlobalQps,
+    },
+    {
+      key: `ratelimit:copy-v2:adacct:${metaActId}`,
+      capacity: env.copyV2AdAccountBurst,
+      refillPerSec: env.copyV2AdAccountQps,
+    },
+  ]);
+}
+
+async function withMetaBudget<T>(metaActId: string, run: () => Promise<T>): Promise<T> {
+  if (isFake()) return run();
+  const key = 'concurrency:copy-v2:global';
+  const deadline = Date.now() + 120_000;
+  for (;;) {
+    const lease = await acquireSemaphore(
+      key,
+      env.copyV2GlobalConcurrency,
+      env.copyV2GlobalLeaseTtlMs,
+    );
+    if (!lease.allowed) {
+      if (Date.now() + lease.waitMs > deadline) {
+        throw new HttpError(429, 1002, 'copy v2 global concurrency saturated');
+      }
+      await sleep(Math.min(1000, Math.max(25, lease.waitMs)));
       continue;
     }
-    throw new HttpError(429, 1002, `copy v2 rate-limited wait ${rate.waitMs}ms`);
+    const rate = await tryAcquireMetaRate(metaActId);
+    if (!rate.allowed) {
+      await releaseSemaphore(key, lease.token);
+      if (Date.now() + rate.waitMs > deadline) {
+        throw new HttpError(429, 1002, `copy v2 rate-limited wait ${rate.waitMs}ms`);
+      }
+      const jitter = Math.floor(Math.random() * 25);
+      await sleep(Math.min(1000, Math.max(25, rate.waitMs + 10 + jitter)));
+      continue;
+    }
+    try {
+      return await run();
+    } finally {
+      await releaseSemaphore(key, lease.token);
+    }
   }
-  throw new HttpError(429, 1002, 'copy v2 rate-limited after local wait');
 }
 
 async function buildPlan(msg: OperationMessage, token: string): Promise<CampaignCopyPlan> {
-  await acquireMetaBudget(msg.metaActId);
-  const inspected = await meta.inspectCampaignForCopy(token, msg.targetId);
+  const inspected = await meta.inspectCampaignForCopy(token, msg.targetId, {
+    adConcurrency: env.copyV2InspectConcurrency,
+    runRequest: (run) => withMetaBudget(msg.metaActId, run),
+  });
   const adsetCount = inspected.adsets.length;
   const adCount = inspected.adsets.reduce((sum, item) => sum + item.ads.length, 0);
+  const adsetPages = Math.max(1, Math.ceil(adsetCount / 100));
+  const adPages = Math.max(1, Math.ceil(adCount / 100));
+  const inspectRequests = 1 + adsetPages + adPages;
+  const createRequests = 1 + adsetCount + adCount;
+  const verifyRequests = env.copyV2VerifyEnabled ? inspectRequests : 0;
   return {
     ...inspected,
     adsetCount,
     adCount,
-    // Inspect campaign + list adsets + list ads per adset + create campaign/adsets/ads.
-    estimatedRequests: 2 + adsetCount + 1 + adsetCount + adCount,
+    estimatedRequests: inspectRequests + createRequests + verifyRequests,
   };
 }
 
@@ -409,6 +451,7 @@ async function readStep(workflowId: string, stepKey: string): Promise<StepRow | 
         sourceId: schema.operationCopySteps.sourceId,
         status: schema.operationCopySteps.status,
         newId: schema.operationCopySteps.newId,
+        leaseUntil: schema.operationCopySteps.leaseUntil,
         metadata: schema.operationCopySteps.metadata,
       })
       .from(schema.operationCopySteps)
@@ -427,6 +470,7 @@ async function readStep(workflowId: string, stepKey: string): Promise<StepRow | 
     sourceId: row.sourceId,
     status: row.status,
     newId: row.newId,
+    leaseUntil: row.leaseUntil,
     metadata: row.metadata,
   };
 }
@@ -540,6 +584,7 @@ async function readWorkflowSteps(workflowId: string): Promise<StepRow[]> {
         sourceId: schema.operationCopySteps.sourceId,
         status: schema.operationCopySteps.status,
         newId: schema.operationCopySteps.newId,
+        leaseUntil: schema.operationCopySteps.leaseUntil,
         metadata: schema.operationCopySteps.metadata,
       })
       .from(schema.operationCopySteps)
@@ -552,6 +597,7 @@ async function readWorkflowSteps(workflowId: string): Promise<StepRow[]> {
     sourceId: row.sourceId,
     status: row.status,
     newId: row.newId,
+    leaseUntil: row.leaseUntil,
     metadata: row.metadata,
   }));
 }
@@ -568,12 +614,21 @@ function progressState(plan: CampaignCopyPlan, steps: StepRow[]): Record<string,
   };
 }
 
+function isLeaseExpired(leaseUntil: Date | null): boolean {
+  if (!leaseUntil) return true;
+  return new Date(leaseUntil).getTime() <= Date.now();
+}
+
+function shouldRecoverStepOutcome(step: StepRow): boolean {
+  return step.status === 'unknown' || (step.status === 'running' && isLeaseExpired(step.leaseUntil));
+}
+
 async function updateWorkflowState(
   workflowId: string,
   plan: CampaignCopyPlan,
   phase: 'preflight' | 'create_campaign' | 'create_adsets' | 'create_ads' | 'verify' | 'repair' | 'restore_status' | 'done',
   patch: {
-    status?: 'running' | 'waiting' | 'success' | 'partial' | 'failed';
+    status?: 'running' | 'waiting' | 'success' | 'partial' | 'failed' | 'paused' | 'canceled';
     newCampaignId?: string;
     fieldCheck?: Record<string, unknown>;
     errors?: string[];
@@ -600,7 +655,10 @@ async function updateWorkflowState(
         version: dsql`${schema.operationCopyWorkflows.version} + 1`,
         updatedAt: dsql`now()`,
       })
-      .where(eq(schema.operationCopyWorkflows.id, workflowId));
+      .where(and(
+        eq(schema.operationCopyWorkflows.id, workflowId),
+        dsql`${schema.operationCopyWorkflows.status} <> 'canceled'`,
+      ));
   });
 }
 
@@ -624,7 +682,8 @@ async function executeCreateStep(
     throw new HttpError(409, 409, `copy v2 step outcome unknown, manual repair required: ${stepKey}`);
   }
 
-  const recoveredBeforeClaim = recover ? await recover() : undefined;
+  const shouldRecover = recover ? shouldRecoverStepOutcome(current) : false;
+  const recoveredBeforeClaim = shouldRecover && recover ? await recover() : undefined;
   if (recoveredBeforeClaim) {
     await finalize(recoveredBeforeClaim);
     await markStepSuccess(current.id, recoveredBeforeClaim, {
@@ -648,7 +707,7 @@ async function executeCreateStep(
     throw new HttpError(429, 1002, `copy v2 step is leased: ${stepKey}`);
   }
   try {
-    const recoveredAfterClaim = recover ? await recover() : undefined;
+    const recoveredAfterClaim = shouldRecover && recover ? await recover() : undefined;
     if (recoveredAfterClaim) {
       await finalize(recoveredAfterClaim);
       await markStepSuccess(current.id, recoveredAfterClaim, {
@@ -712,7 +771,10 @@ async function updateWorkflowDone(
         version: dsql`${schema.operationCopyWorkflows.version} + 1`,
         updatedAt: dsql`now()`,
       })
-      .where(eq(schema.operationCopyWorkflows.id, workflowId));
+      .where(and(
+        eq(schema.operationCopyWorkflows.id, workflowId),
+        dsql`${schema.operationCopyWorkflows.status} <> 'canceled'`,
+      ));
   });
 }
 
@@ -810,8 +872,7 @@ async function restoreFinalNames(
 
   await mapLimited(renameJobs, env.copyV2AdConcurrency, async (job) => {
     try {
-      await acquireMetaBudget(metaActId);
-      await meta.setObjectName(token, job.newId, job.finalName);
+      await withMetaBudget(metaActId, () => meta.setObjectName(token, job.newId, job.finalName));
       await patchStepMetadata(job.stepId, {
         markerName: job.finalName,
         finalName: job.finalName,
@@ -989,6 +1050,7 @@ function verifyAdFields(
 async function verifyCreatedWorkflow(
   workflowId: string,
   token: string,
+  metaActId: string,
   newCampaignId: string,
   plan: CampaignCopyPlan,
   opts: CopyOptions,
@@ -998,7 +1060,10 @@ async function verifyCreatedWorkflow(
   const mismatches: FieldMismatch[] = [];
   const steps = await readWorkflowSteps(workflowId);
   const stepByKey = new Map(steps.map((step) => [step.stepKey, step]));
-  const target = await meta.inspectCampaignForCopy(token, newCampaignId);
+  const target = await meta.inspectCampaignForCopy(token, newCampaignId, {
+    adConcurrency: env.copyV2VerifyConcurrency,
+    runRequest: (run) => withMetaBudget(metaActId, run),
+  });
   const targetAdsetsById = new Map(target.adsets.map((item) => [item.adset.id, item]));
   const targetAdsById = new Map<string, { adsetId: string; ad: MetaAdRaw }>();
   for (const item of target.adsets) {
@@ -1168,15 +1233,20 @@ export async function executeJsonbCampaignCopyV2(
       campaignStep(plan.campaign.id),
       workerId,
       campaignNames,
-      undefined,
       async () => {
-        await acquireMetaBudget(msg.metaActId);
-        const created = await meta.createCampaignFromSource(
+        const found = await withMetaBudget(
+          msg.metaActId,
+          () => meta.findCampaignByName(token, opts.targetAdAccountId ?? msg.metaActId, campaignNames.markerName),
+        );
+        return found?.id;
+      },
+      async () => {
+        const created = await withMetaBudget(msg.metaActId, () => meta.createCampaignFromSource(
           token,
           msg.metaActId,
           { ...plan.campaign, name: campaignNames.markerName },
           markerCreateOptions(opts),
-        );
+        ));
         return created.newCampaignId;
       },
     );
@@ -1194,17 +1264,22 @@ export async function executeJsonbCampaignCopyV2(
         adsetStep(adset.id),
         workerId,
         adsetNames,
-        undefined,
         async () => {
-          await acquireMetaBudget(msg.metaActId);
-          const created = await meta.createAdSetFromSource(
+          const found = await withMetaBudget(
+            msg.metaActId,
+            () => meta.findAdSetByName(token, newCampaignId, adsetNames.markerName),
+          );
+          return found?.id;
+        },
+        async () => {
+          const created = await withMetaBudget(msg.metaActId, () => meta.createAdSetFromSource(
             token,
             msg.metaActId,
             { ...adset, name: adsetNames.markerName },
             newCampaignId,
             markerCreateOptions(opts),
             false,
-          );
+          ));
           return created.newAdSetId;
         },
       );
@@ -1232,17 +1307,22 @@ export async function executeJsonbCampaignCopyV2(
         adStep(ad.id),
         workerId,
         adNames,
-        undefined,
         async () => {
-          await acquireMetaBudget(msg.metaActId);
-          const created = await meta.createAdFromSource(
+          const found = await withMetaBudget(
+            msg.metaActId,
+            () => meta.findAdByName(token, parentAdSetId, adNames.markerName),
+          );
+          return found?.id;
+        },
+        async () => {
+          const created = await withMetaBudget(msg.metaActId, () => meta.createAdFromSource(
             token,
             msg.metaActId,
             { ...ad, name: adNames.markerName },
             parentAdSetId,
             markerCreateOptions(opts),
             false,
-          );
+          ));
           return created.newAdId;
         },
       );
@@ -1261,7 +1341,7 @@ export async function executeJsonbCampaignCopyV2(
     phase = 'verify';
     await assertTaskRunnable(msg.taskId);
     await updateWorkflowState(workflow.id, plan, phase, { status: 'running', newCampaignId });
-    const verifyMismatches = await verifyCreatedWorkflow(workflow.id, token, newCampaignId, plan, opts);
+    const verifyMismatches = await verifyCreatedWorkflow(workflow.id, token, msg.metaActId, newCampaignId, plan, opts);
     const mismatches = [...renameMismatches, ...verifyMismatches];
     if (mismatches.length > 0) {
       await updateWorkflowState(workflow.id, plan, 'verify', {
@@ -1296,8 +1376,15 @@ export async function executeJsonbCampaignCopyV2(
     };
   } catch (err) {
     if (workflowSettled) throw err;
+    const status = err instanceof TaskCancelledError
+      ? 'canceled'
+      : err instanceof TaskPausedError
+        ? 'paused'
+        : isAmbiguousCreateError(err) || isRetryOnlyError(err)
+          ? 'waiting'
+          : 'failed';
     await updateWorkflowState(workflow.id, plan, phase, {
-      status: isAmbiguousCreateError(err) || isRetryOnlyError(err) ? 'waiting' : 'failed',
+      status,
       errors: [errorMessage(err)],
       clearLease: true,
     });

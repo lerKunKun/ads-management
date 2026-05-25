@@ -325,12 +325,36 @@ export async function assertTaskOwned(
 
 export async function pauseTask(principal: AuthPrincipal, taskId: string): Promise<void> {
   if (await updateTaskStatus(principal, taskId, 'paused')) {
+    await db.transaction(async (tx) => {
+      await tx.execute(dsql`SELECT set_config('app.current_company_id', ${principal.companyId}, true)`);
+      await tx.execute(dsql`
+        UPDATE operation_copy_workflows
+        SET status = 'paused',
+            lease_owner = NULL,
+            lease_until = NULL,
+            error = 'task paused by user',
+            updated_at = now()
+        WHERE task_id = ${taskId}
+          AND status NOT IN ('success','partial','failed','canceled')
+      `);
+    });
     await setProgressStatus(taskId, 'paused');
   }
 }
 
 export async function resumeTask(principal: AuthPrincipal, taskId: string): Promise<void> {
   if (await updateTaskStatus(principal, taskId, 'running')) {
+    await db.transaction(async (tx) => {
+      await tx.execute(dsql`SELECT set_config('app.current_company_id', ${principal.companyId}, true)`);
+      await tx.execute(dsql`
+        UPDATE operation_copy_workflows
+        SET status = 'waiting',
+            error = NULL,
+            updated_at = now()
+        WHERE task_id = ${taskId}
+          AND status = 'paused'
+      `);
+    });
     await setProgressStatus(taskId, 'running');
   }
 }

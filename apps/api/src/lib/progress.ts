@@ -49,10 +49,10 @@ export async function bumpProgress(
   const failed = Number(data['failed'] ?? 0);
   let status: TaskStatus = (data['status'] as TaskStatus) ?? 'pending';
   // 仅在未终态时推进
-  if (status !== 'success' && status !== 'failed' && status !== 'cancelled' && status !== 'paused') {
-    if (success + failed >= total) {
+  if (status !== 'cancelled' && status !== 'paused') {
+    if (total > 0 && success + failed >= total) {
       status = failed === 0 ? 'success' : success === 0 ? 'failed' : 'partial';
-    } else if (status === 'pending' && success + failed > 0) {
+    } else if (status !== 'pending' || success + failed > 0) {
       status = 'running';
     }
     await redis.hset(key, 'status', status);
