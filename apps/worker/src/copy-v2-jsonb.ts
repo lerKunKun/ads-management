@@ -156,7 +156,7 @@ function markerCreateOptions(opts: CopyOptions & { targetAdAccountId?: string })
   return {
     ...opts,
     renameOptions: { rename_strategy: 'NO_RENAME' },
-    statusOption: 'PAUSED',
+    statusOption: opts.statusOption ?? 'INHERITED_FROM_SOURCE',
   };
 }
 
@@ -233,6 +233,12 @@ function expectedStartTime(sourceStartTime: string | undefined, opts: CopyOption
   const ts = Date.parse(sourceStartTime);
   if (!Number.isFinite(ts)) return sourceStartTime;
   return ts > Date.now() ? sourceStartTime : undefined;
+}
+
+function expectedCopiedStatus(sourceStatus: string | undefined, opts: CopyOptions): 'ACTIVE' | 'PAUSED' {
+  if (opts.statusOption === 'ACTIVE') return 'ACTIVE';
+  if (opts.statusOption === 'PAUSED') return 'PAUSED';
+  return sourceStatus === 'ACTIVE' ? 'ACTIVE' : 'PAUSED';
 }
 
 function pushMismatch(
@@ -914,7 +920,7 @@ function verifyCampaignFields(
     sourceId: source.id,
     newId: target.id,
     field: 'status',
-    expected: 'PAUSED',
+    expected: expectedCopiedStatus(source.status, opts),
     actual: target.status,
   });
   for (const field of ['daily_budget', 'lifetime_budget'] as const) {
@@ -965,7 +971,7 @@ function verifyAdSetFields(
     sourceId: source.id,
     newId: target.id,
     field: 'status',
-    expected: 'PAUSED',
+    expected: expectedCopiedStatus(source.status, opts),
     actual: target.status,
   });
   for (const field of ['daily_budget', 'lifetime_budget'] as const) {
@@ -1021,6 +1027,7 @@ function verifyAdFields(
   target: MetaAdRaw,
   names: StepNamePlan,
 ): void {
+  const expectedStatus = source.status === 'ACTIVE' ? 'ACTIVE' : 'PAUSED';
   pushMismatch(mismatches, {
     type: 'ad',
     sourceId: source.id,
@@ -1034,7 +1041,7 @@ function verifyAdFields(
     sourceId: source.id,
     newId: target.id,
     field: 'status',
-    expected: 'PAUSED',
+    expected: expectedStatus,
     actual: target.status,
   });
   pushMismatch(mismatches, {
@@ -1183,7 +1190,7 @@ function v2CopyOptions(input: AsyncCopyInput): CopyOptions & { targetAdAccountId
     ...(input.endTime ? { endTime: input.endTime } : {}),
     ...(input.dailyBudget !== undefined ? { dailyBudget: input.dailyBudget } : {}),
     ...(input.lifetimeBudget !== undefined ? { lifetimeBudget: input.lifetimeBudget } : {}),
-    statusOption: 'PAUSED',
+    statusOption: input.statusOption ?? 'INHERITED_FROM_SOURCE',
     ...(input.renameOptions ? { renameOptions: input.renameOptions } : {}),
     ...(input.targetAdAccountId ? { targetAdAccountId: input.targetAdAccountId } : {}),
   };

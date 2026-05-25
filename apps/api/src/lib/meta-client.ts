@@ -538,11 +538,12 @@ async function mapLimited<T, R>(
 }
 
 function copyForm(opts: CopyOptions): Record<string, string> {
-  const f: Record<string, string> = {};
+  const f: Record<string, string> = {
+    status_option: opts.statusOption ?? 'INHERITED_FROM_SOURCE',
+  };
   if (opts.deepCopy !== undefined) f['deep_copy'] = String(opts.deepCopy);
   if (opts.startTime) f['start_time'] = opts.startTime;
   if (opts.endTime) f['end_time'] = opts.endTime;
-  if (opts.statusOption) f['status_option'] = opts.statusOption;
   if (opts.renameOptions && Object.keys(opts.renameOptions).length) {
     f['rename_options'] = JSON.stringify(opts.renameOptions);
   }
@@ -604,10 +605,12 @@ function applyCopyName(name: string | undefined, opts: RenameOptions | undefined
 
 function copyCreateStatus(source: EntityStatus | undefined, opts: CopyOptions): 'ACTIVE' | 'PAUSED' {
   if (opts.statusOption === 'ACTIVE') return 'ACTIVE';
-  if (opts.statusOption === 'INHERITED_FROM_SOURCE') {
-    return source === 'ACTIVE' ? 'ACTIVE' : 'PAUSED';
-  }
-  return 'PAUSED';
+  if (opts.statusOption === 'PAUSED') return 'PAUSED';
+  return source === 'ACTIVE' ? 'ACTIVE' : 'PAUSED';
+}
+
+function copyAdStatus(source: EntityStatus | undefined): 'ACTIVE' | 'PAUSED' {
+  return source === 'ACTIVE' ? 'ACTIVE' : 'PAUSED';
 }
 
 function copyStartTime(sourceStartTime: string | undefined, opts: CopyOptions): string | undefined {
@@ -622,7 +625,7 @@ function asyncCopyForm(input: AsyncCopyInput): Record<string, string> {
   const f =
     input.targetType === 'ad'
       ? {
-        ...(input.statusOption ? { status_option: input.statusOption } : {}),
+        status_option: 'INHERITED_FROM_SOURCE',
         ...(input.renameOptions && Object.keys(input.renameOptions).length
           ? { rename_options: JSON.stringify(input.renameOptions) }
           : {}),
@@ -910,7 +913,7 @@ function copyAdCreateForm(
   const form: Record<string, string> = {
     name: applyCopyName(source.name ?? source.id, opts.renameOptions, isTopLevel),
     adset_id: targetAdSetId,
-    status: copyCreateStatus(source.status, opts),
+    status: copyAdStatus(source.status),
     creative: JSON.stringify({ creative_id: source.creative.id }),
   };
   addFormValue(form, 'bid_amount', source.bid_amount);
@@ -1857,7 +1860,7 @@ export const meta = {
     }
     const form: Record<string, string> = {};
     if (opts.targetAdSetId) form['adset_id'] = opts.targetAdSetId;
-    if (opts.statusOption) form['status_option'] = opts.statusOption;
+    form['status_option'] = 'INHERITED_FROM_SOURCE';
     if (opts.renameOptions && Object.keys(opts.renameOptions).length) {
       form['rename_options'] = JSON.stringify(opts.renameOptions);
     }
