@@ -4,7 +4,7 @@
  */
 import { and, eq, sql as dsql } from 'drizzle-orm';
 import { db, schema } from '../../lib/db';
-import { readProgress, type ProgressSnapshot } from '../../lib/progress';
+import { readProgress, setProgressStatus, type ProgressSnapshot } from '../../lib/progress';
 import { HttpError } from '../../lib/http-error';
 import type { AuthPrincipal } from '../iam/auth-service';
 
@@ -101,6 +101,9 @@ export async function getTask(
 }
 
 async function readLayerProgress(companyId: string, taskId: string): Promise<LayerProgress[]> {
+  const v2 = await readCopyV2LayerProgress(companyId, taskId);
+  if (v2) return v2;
+
   const rows = await db.transaction(async (tx) => {
     await tx.execute(dsql`SELECT set_config('app.current_company_id', ${companyId}, true)`);
     return tx.execute(dsql`
@@ -152,6 +155,109 @@ async function readLayerProgress(companyId: string, taskId: string): Promise<Lay
       failedItems: itemBucket?.failedItems ?? [],
     };
   });
+}
+
+async function readCopyV2LayerProgress(companyId: string, taskId: string): Promise<LayerProgress[] | null> {
+  const rows = await db.transaction(async (tx) => {
+    await tx.execute(dsql`SELECT set_config('app.current_company_id', ${companyId}, true)`);
+    return tx.execute(dsql`
+      SELECT
+        source_type,
+        COUNT(*)::int AS total,
+        COUNT(*) FILTER (WHERE status = 'success')::int AS success,
+        COUNT(*) FILTER (WHERE status = 'failed')::int AS failed,
+        COUNT(*) FILTER (WHERE status IN ('running','retrying','unknown'))::int AS running,
+        COUNT(*) FILTER (WHERE status = 'pending')::int AS pending
+      FROM operation_copy_steps
+      WHERE task_id = ${taskId}
+      GROUP BY source_type
+    `);
+  }) as unknown as Array<{
+    source_type: string;
+    total: number;
+    success: number;
+    failed: number;
+    running: number;
+    pending: number;
+  }>;
+  if (rows.length === 0) return null;
+
+  const items = await readCopyV2LayerProgressItems(companyId, taskId);
+  const byType = new Map(rows.map((row) => [row.source_type, row]));
+  const itemsByType = new Map<string, { successItems: TaskLayerProgressItem[]; failedItems: TaskLayerProgressItem[] }>();
+  for (const item of items) {
+    const bucket = itemsByType.get(item.targetType) ?? { successItems: [], failedItems: [] };
+    if (item.status === 'success') bucket.successItems.push(item);
+    if (item.status === 'failed' || item.status === 'unknown') bucket.failedItems.push(item);
+    itemsByType.set(item.targetType, bucket);
+  }
+
+  return ([
+    ['campaign', '广告系列'],
+    ['adset', '广告组'],
+    ['ad', '广告'],
+  ] as const).map(([targetType]) => {
+    const row = byType.get(targetType);
+    const itemBucket = itemsByType.get(targetType);
+    return {
+      targetType,
+      label: taskLayerLabel(targetType),
+      total: Number(row?.total ?? 0),
+      success: Number(row?.success ?? 0),
+      failed: Number(row?.failed ?? 0),
+      running: Number(row?.running ?? 0),
+      pending: Number(row?.pending ?? 0),
+      successItems: itemBucket?.successItems ?? [],
+      failedItems: itemBucket?.failedItems ?? [],
+    };
+  });
+}
+
+async function readCopyV2LayerProgressItems(
+  companyId: string,
+  taskId: string,
+): Promise<Array<TaskLayerProgressItem & { targetType: string }>> {
+  const rows = await db.transaction(async (tx) => {
+    await tx.execute(dsql`SELECT set_config('app.current_company_id', ${companyId}, true)`);
+    return tx.execute(dsql`
+      SELECT
+        id::text,
+        source_type,
+        source_id,
+        new_id,
+        status,
+        attempt,
+        error
+      FROM operation_copy_steps
+      WHERE task_id = ${taskId}
+        AND status IN ('success','failed','unknown')
+      ORDER BY
+        CASE source_type WHEN 'campaign' THEN 1 WHEN 'adset' THEN 2 WHEN 'ad' THEN 3 ELSE 4 END,
+        CASE status WHEN 'success' THEN 1 ELSE 2 END,
+        updated_at ASC,
+        id ASC
+      LIMIT 500
+    `);
+  }) as unknown as Array<{
+    id: string;
+    source_type: string;
+    source_id: string;
+    new_id: string | null;
+    status: string;
+    attempt: number;
+    error: string | null;
+  }>;
+
+  return rows.map((row) => ({
+    id: row.id,
+    targetType: row.source_type,
+    targetId: row.source_id,
+    status: row.status,
+    attempts: Number(row.attempt ?? 0),
+    detail: row.status === 'success'
+      ? (row.new_id ? `新对象 ${row.new_id}` : null)
+      : row.error,
+  }));
 }
 
 function taskLayerLabel(targetType: 'campaign' | 'adset' | 'ad'): string {
@@ -215,4 +321,56 @@ export async function assertTaskOwned(
       .limit(1);
   });
   if (!r[0]) throw new HttpError(404, 404, 'task not found');
+}
+
+export async function pauseTask(principal: AuthPrincipal, taskId: string): Promise<void> {
+  if (await updateTaskStatus(principal, taskId, 'paused')) {
+    await setProgressStatus(taskId, 'paused');
+  }
+}
+
+export async function resumeTask(principal: AuthPrincipal, taskId: string): Promise<void> {
+  if (await updateTaskStatus(principal, taskId, 'running')) {
+    await setProgressStatus(taskId, 'running');
+  }
+}
+
+export async function stopTask(principal: AuthPrincipal, taskId: string): Promise<void> {
+  if (!await updateTaskStatus(principal, taskId, 'cancelled')) return;
+  await db.transaction(async (tx) => {
+    await tx.execute(dsql`SELECT set_config('app.current_company_id', ${principal.companyId}, true)`);
+    await tx.execute(dsql`
+      UPDATE operation_copy_workflows
+      SET status = 'canceled',
+          lease_owner = NULL,
+          lease_until = NULL,
+          error = 'task cancelled by user',
+          updated_at = now()
+      WHERE task_id = ${taskId}
+    `);
+  });
+  await setProgressStatus(taskId, 'cancelled');
+}
+
+async function updateTaskStatus(
+  principal: AuthPrincipal,
+  taskId: string,
+  status: 'paused' | 'running' | 'cancelled',
+): Promise<boolean> {
+  const rows = await db.transaction(async (tx) => {
+    await tx.execute(dsql`SELECT set_config('app.current_company_id', ${principal.companyId}, true)`);
+    return tx.execute(dsql`
+      UPDATE operation_tasks
+      SET status = ${status}::operation_status
+      WHERE id = ${taskId}
+        AND company_id = ${principal.companyId}
+        AND status NOT IN ('success','failed','partial','cancelled')
+      RETURNING id
+    `);
+  }) as unknown as Array<{ id: string }>;
+  if (rows.length === 0) {
+    await assertTaskOwned(principal, taskId);
+    return false;
+  }
+  return true;
 }

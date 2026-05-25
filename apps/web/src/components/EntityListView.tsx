@@ -59,7 +59,7 @@ export interface EntityListViewProps<T extends EntityRow> {
 }
 
 type TerminalTaskStatus = 'success' | 'failed' | 'partial' | 'cancelled';
-type TaskStatus = 'pending' | 'running' | TerminalTaskStatus;
+type TaskStatus = 'pending' | 'running' | 'paused' | TerminalTaskStatus;
 type RowPatch = Partial<Pick<EntityRow, 'status' | 'dailyBudget' | 'lifetimeBudget'>>;
 type SortMetric = 'spend' | 'orders' | 'cpa' | 'cpc' | 'addToCart' | 'initiateCheckout' | 'cpm';
 type SortDirection = 'asc' | 'desc';

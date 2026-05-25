@@ -41,6 +41,18 @@ export const env = {
   adObjectSyncMaxAdsets: Number(opt('AD_OBJECT_SYNC_MAX_ADSETS', '50')),
   adObjectSyncStaleMs: Number(opt('AD_OBJECT_SYNC_STALE_MS', '900000')),
 
+  copyV2JsonbEnabled: opt('COPY_V2_JSONB_ENABLED', '0') === '1',
+  copyV2AccountAllowlist: opt('COPY_V2_ACCOUNT_ALLOWLIST', ''),
+  copyV2MinAdCount: Number(opt('COPY_V2_MIN_AD_COUNT', '52')),
+  copyV2MinAdsetCount: Number(opt('COPY_V2_MIN_ADSET_COUNT', '5')),
+  copyV2AdsetConcurrency: Number(opt('COPY_V2_ADSET_CONCURRENCY', '2')),
+  copyV2AdConcurrency: Number(opt('COPY_V2_AD_CONCURRENCY', '3')),
+  copyV2AdAccountQps: Number(opt('COPY_V2_AD_ACCOUNT_QPS', '6')),
+  copyV2AdAccountBurst: Number(opt('COPY_V2_AD_ACCOUNT_BURST', '24')),
+  copyV2DefaultStatus: opt('COPY_V2_DEFAULT_STATUS', 'PAUSED') as 'PAUSED',
+  copyV2VerifyEnabled: opt('COPY_V2_VERIFY_ENABLED', '1') === '1',
+  copyV2RepairEnabled: opt('COPY_V2_REPAIR_ENABLED', '1') === '1',
+
   fbOauthRedirectUri: opt('FB_OAUTH_REDIRECT_URI', 'http://localhost:5173/oauth/fb/callback'),
 
   notifierDriver: opt('NOTIFIER_DRIVER', 'console') as 'console' | 'feishu',

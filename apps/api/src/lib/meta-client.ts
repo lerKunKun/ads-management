@@ -72,7 +72,7 @@ const ACCT_STATUS_MAP: Record<number, 'active' | 'disabled' | 'closed' | 'pendin
 // ===== Campaign / AdSet / Ad =====
 export type EntityStatus = 'ACTIVE' | 'PAUSED' | 'ARCHIVED' | 'DELETED';
 
-interface MetaCampaignRaw {
+export interface MetaCampaignRaw {
   id: string;
   name?: string;
   status?: EntityStatus;
@@ -105,7 +105,7 @@ export interface MetaCampaign {
   createdTime?: string;
 }
 
-interface MetaAdSetRaw {
+export interface MetaAdSetRaw {
   id: string;
   name?: string;
   status?: EntityStatus;
@@ -146,7 +146,7 @@ export interface MetaAdSet {
   updatedTime?: string;
 }
 
-interface MetaAdRaw {
+export interface MetaAdRaw {
   id: string;
   name?: string;
   status?: EntityStatus;
@@ -580,6 +580,14 @@ function copyCreateStatus(source: EntityStatus | undefined, opts: CopyOptions): 
   return 'PAUSED';
 }
 
+function copyStartTime(sourceStartTime: string | undefined, opts: CopyOptions): string | undefined {
+  if (opts.startTime) return opts.startTime;
+  if (!sourceStartTime) return undefined;
+  const ts = Date.parse(sourceStartTime);
+  if (!Number.isFinite(ts)) return sourceStartTime;
+  return ts > Date.now() ? sourceStartTime : undefined;
+}
+
 function asyncCopyForm(input: AsyncCopyInput): Record<string, string> {
   const f =
     input.targetType === 'ad'
@@ -828,7 +836,7 @@ function copyCampaignCreateForm(source: MetaCampaignRaw, opts: CopyOptions, isTo
   addFormValue(form, 'buying_type', source.buying_type ?? 'AUCTION');
   addFormValue(form, 'bid_strategy', source.bid_strategy);
   addBudgetFormValues(form, source, opts, isTopLevel);
-  addFormValue(form, 'start_time', opts.startTime ?? source.start_time);
+  addFormValue(form, 'start_time', copyStartTime(source.start_time, opts));
   addFormValue(form, 'stop_time', opts.endTime ?? source.stop_time);
   addFormValue(form, 'special_ad_category_country', source.special_ad_category_country);
   return form;
@@ -855,7 +863,7 @@ function copyAdSetCreateForm(
   addFormValue(form, 'promoted_object', source.promoted_object);
   addFormValue(form, 'attribution_spec', source.attribution_spec);
   addFormValue(form, 'destination_type', source.destination_type);
-  addFormValue(form, 'start_time', opts.startTime ?? source.start_time);
+  addFormValue(form, 'start_time', copyStartTime(source.start_time, opts));
   addFormValue(form, 'end_time', opts.endTime ?? source.end_time);
   return form;
 }
@@ -1038,6 +1046,28 @@ export const meta = {
   ): Promise<number> {
     if (FAKE_MODE || input.targetType === 'ad' || input.deepCopy === false) return 0;
     return countAdsOnObjectEdge(token, input.sourceId, max);
+  },
+
+  async inspectCampaignForCopy(
+    token: string,
+    campaignId: string,
+  ): Promise<{
+    campaign: MetaCampaignRaw;
+    adsets: Array<{ adset: MetaAdSetRaw; ads: MetaAdRaw[] }>;
+  }> {
+    if (FAKE_MODE) {
+      return {
+        campaign: { id: campaignId, name: campaignId, status: 'PAUSED' },
+        adsets: [],
+      };
+    }
+    const campaign = await readCampaignForCopy(token, campaignId);
+    const adsets = await listAdSetsForCopy(token, campaignId);
+    const out: Array<{ adset: MetaAdSetRaw; ads: MetaAdRaw[] }> = [];
+    for (const adset of adsets) {
+      out.push({ adset, ads: await listAdsForCopy(token, adset.id) });
+    }
+    return { campaign, adsets: out };
   },
 
   async submitAsyncCopy(
@@ -1226,6 +1256,31 @@ export const meta = {
     return out;
   },
 
+  async findCampaignByName(
+    token: string,
+    metaActId: string,
+    name: string,
+  ): Promise<{ id: string; name: string } | undefined> {
+    if (FAKE_MODE) return fakeMeta.listCampaigns(metaActId).find((item) => item.name === name);
+    const targetActId = toActId(metaActId);
+    if (!targetActId) return undefined;
+    let after: string | undefined;
+    do {
+      const q: Record<string, string> = { fields: 'id,name', limit: '100' };
+      if (after) q['after'] = after;
+      const page = await graph<MetaPagedEnvelope<{ id: string; name?: string }>>(
+        `/${targetActId}/campaigns`,
+        token,
+        { query: q },
+      );
+      const found = page.data.find((item) => item.name === name);
+      if (found) return { id: found.id, name: found.name ?? found.id };
+      after = page.paging?.cursors?.after;
+      if (!page.paging?.next) break;
+    } while (after);
+    return undefined;
+  },
+
   async setCampaignStatus(
     token: string,
     campaignId: string,
@@ -1239,6 +1294,41 @@ export const meta = {
       method: 'POST',
       form: { status },
     });
+  },
+
+  async setObjectName(
+    token: string,
+    objectId: string,
+    name: string,
+  ): Promise<void> {
+    if (FAKE_MODE) return;
+    await graph<{ success: boolean }>(`/${objectId}`, token, {
+      method: 'POST',
+      form: { name },
+    });
+  },
+
+  async createCampaignFromSource(
+    token: string,
+    metaActId: string,
+    source: MetaCampaignRaw,
+    opts: CopyOptions & { targetAdAccountId?: string } = {},
+  ): Promise<{ newCampaignId: string }> {
+    if (FAKE_MODE) {
+      return { newCampaignId: fakeMeta.copyCampaign(source.id, opts.renameOptions) };
+    }
+    const targetActId = toActId(opts.targetAdAccountId ?? metaActId);
+    if (!targetActId) {
+      throw new MetaApiError(400, 100, undefined, undefined, undefined, 'createCampaignFromSource: 缺 target ad account');
+    }
+    const created = await graph<{ id?: string }>(`/${targetActId}/campaigns`, token, {
+      method: 'POST',
+      form: copyCampaignCreateForm(source, opts, true),
+    });
+    if (!created.id) {
+      throw new MetaApiError(500, undefined, undefined, undefined, undefined, 'createCampaignFromSource: 缺 new campaign id');
+    }
+    return { newCampaignId: created.id };
   },
 
   async customCopyCampaign(
@@ -1377,6 +1467,17 @@ export const meta = {
       if (!page.paging?.next) break;
     } while (after);
     return out;
+  },
+
+  async findAdSetByName(
+    token: string,
+    campaignId: string,
+    name: string,
+  ): Promise<{ id: string; name: string } | undefined> {
+    if (FAKE_MODE) return fakeMeta.listAdSets(campaignId).find((item) => item.name === name);
+    const rows = await listAdSetsForCopy(token, campaignId);
+    const found = rows.find((item) => item.name === name);
+    return found ? { id: found.id, name: found.name ?? found.id } : undefined;
   },
 
   async listAdSetsForAccount(
@@ -1547,6 +1648,17 @@ export const meta = {
       if (!page.paging?.next) break;
     } while (after);
     return out;
+  },
+
+  async findAdByName(
+    token: string,
+    adsetId: string,
+    name: string,
+  ): Promise<{ id: string; name: string } | undefined> {
+    if (FAKE_MODE) return fakeMeta.listAds(adsetId).find((item) => item.name === name);
+    const rows = await listAdsForCopy(token, adsetId);
+    const found = rows.find((item) => item.name === name);
+    return found ? { id: found.id, name: found.name ?? found.id } : undefined;
   },
 
   async listAdsForAccount(token: string, metaActId: string, limit = 100): Promise<MetaAd[]> {

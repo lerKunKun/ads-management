@@ -214,6 +214,15 @@ export interface TaskLayerProgressItem {
   detail: string | null;
 }
 
+export type TaskStatus =
+  | 'pending'
+  | 'running'
+  | 'paused'
+  | 'partial'
+  | 'success'
+  | 'failed'
+  | 'cancelled';
+
 export const api = {
   login: (email: string, password: string) =>
     call<{ token: string; user: Omit<Me, 'scope'> }>('/iam/login', {
@@ -515,7 +524,7 @@ export const api = {
       total: number;
       success: number;
       failed: number;
-      status: 'pending' | 'running' | 'partial' | 'success' | 'failed' | 'cancelled';
+      status: TaskStatus;
       updatedAt: number;
       type: string;
       payload: unknown;
@@ -524,6 +533,12 @@ export const api = {
       layerProgress: TaskLayerProgress[];
       failures: Array<{ id: string; targetId: string; error: string | null; attempts: number }>;
     }>(`/operations/${taskId}`),
+  pauseTask: (taskId: string) =>
+    call<null>(`/operations/${taskId}/pause`, { method: 'POST' }),
+  resumeTask: (taskId: string) =>
+    call<null>(`/operations/${taskId}/resume`, { method: 'POST' }),
+  stopTask: (taskId: string) =>
+    call<null>(`/operations/${taskId}/stop`, { method: 'POST' }),
 };
 
 /** SSE: 返回 EventSource，调用方负责 close。token 通过 query 传(浏览器 EventSource 不支持自定义 header) */

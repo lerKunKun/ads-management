@@ -15,14 +15,12 @@ bun install
 # 启动底层服务（postgres / redis / rabbitmq）
 docker compose up -d
 
-# 数据库迁移 + 种子（首次或重建时）
-bun --cwd packages/db run migrate
-bun --cwd packages/db run seed
+# 数据库操作（根目录快捷方式）
+bun run db:migrate          # 跑迁移
+bun run db:seed             # 初始种子
+bun run db:generate         # 修改 schema 后生成新迁移文件
 # mock 种子（演示用：1 个 FB 个号 + 8 个广告账户）
 $env:MOCK_AD_ACCOUNT_COUNT='8'; bun --cwd packages/db run src/seed-mock-fb.ts
-
-# 修改 schema 后生成新的迁移文件
-bun --cwd packages/db run generate
 
 # 启动 API（终端 1，mock 模式）
 cd apps/api
@@ -33,6 +31,7 @@ $env:REDIS_URL='redis://localhost:6379'
 $env:RABBITMQ_URL='amqp://ads:ads@localhost:5672'
 $env:JWT_SECRET='devsecret'
 bun src/index.ts
+# 或根目录：$env:META_FAKE='1'; bun run dev:api
 
 # 启动 Worker（终端 2，mock 模式）
 cd apps/worker
@@ -48,20 +47,31 @@ bun src/index.ts
 # 启动前端（终端 3）
 cd apps/web
 bun run vite --port 5173
+# 或根目录：bun run dev:web
+
+# 一键启动 API + Web（Windows，自动开两个终端窗口）
+powershell scripts\start-local-dev.ps1
 
 # Typecheck（提交前必跑，任意一个失败都要修）
 bun run typecheck
-# 或逐包
-bun --cwd apps/api run typecheck
-bun --cwd apps/worker run typecheck
-bun --cwd apps/web run typecheck
-bun --cwd packages/db run typecheck
-bun --cwd packages/shared run typecheck
 
 # 重置 mock 环境（回到干净状态）
 docker exec -i ads_pg psql -U ads -d ads -c "UPDATE fb_accounts SET status='active' WHERE fb_user_id='mock_fb_user_1';"
 docker exec ads_redis redis-cli FLUSHALL
+docker exec ads_rabbit rabbitmqctl list_queues name | Select-Object -Skip 3 | ForEach-Object { docker exec ads_rabbit rabbitmqctl purge_queue $_ }
 ```
+
+### 根目录 package.json 快捷脚本
+
+| 命令 | 等价于 |
+|---|---|
+| `bun run dev:api` | `bun --cwd apps/api dev` |
+| `bun run dev:worker` | `bun --cwd apps/worker dev` |
+| `bun run dev:web` | `bun --cwd apps/web dev` |
+| `bun run db:generate` | `bun --cwd packages/db generate` |
+| `bun run db:migrate` | `bun --cwd packages/db migrate` |
+| `bun run db:seed` | `bun --cwd packages/db seed` |
+| `bun run typecheck` | 全包并行 typecheck |
 
 端口：API `:3001`，Web `:5173`，RabbitMQ 管理台 `:15672`（`ads`/`ads`），PostgreSQL `:5432`，Redis `:6379`。
 
@@ -134,6 +144,7 @@ apps/api/src/
 apps/worker/src/
   index.ts              # 启动 16 个 shard consumer，prefetch=5
   handler.ts            # 单消息处理：熔断→操作锁→幂等→令牌桶→token→provider→写库+进度
+  copy-v2-jsonb.ts      # 大型 campaign 复制的 JSONB 状态机（copy V2，由 COPY_V2_JSONB_ENABLED 控制）
   fake-meta.ts          # Worker 侧 fake 逻辑
 
 apps/web/src/
@@ -166,6 +177,20 @@ packages/eden/          # Elysia Eden 客户端导出（从 apps/api export type
 ```
 
 **单 target 操作（同步，M2）**：直接在 API 进程内调 `MetaProvider`，不经 RabbitMQ，适用于单行操作。
+
+**复制操作实现说明（重要）**：  
+当前复制主路径为**自建 create-copy**，**不使用** Meta 的 `/{id}/copies` copy edge（该接口返回 `#3 Application does not have the capability`）。实际调用链：
+```
+Worker copy branch
+  → executeCustomCopyBatchProvider()（批量，同一 copyBatch 内串行）
+  → executeProvider() → metaProvider.copy()
+  → meta.customCopyCampaign() / customCopyAdSet() / customCopyAd()
+  → 读源对象字段 → Meta create 接口（POST /{act_id}/campaigns|adsets|ads）
+```
+代码中保留了旧的 `executeAsyncCopyBatchProvider()` / `copyCampaign()` 等 async 路径，但**均未接入主路径，属于死代码**，勿误读。
+
+**Copy V2 JSONB 状态机**（`apps/worker/src/copy-v2-jsonb.ts`）：  
+处理大型 campaign（广告数 ≥ `COPY_V2_MIN_AD_COUNT` 或广告组数 ≥ `COPY_V2_MIN_ADSET_COUNT`）的有限并发复制，使用 JSONB 字段持久化步骤状态防止重复创建。默认关闭（`COPY_V2_JSONB_ENABLED=0`），通过 `COPY_V2_ACCOUNT_ALLOWLIST` 按广告账户灰度开启。
 
 **RabbitMQ 拓扑**：
 - Exchange `ad.ops`（direct）+ 16 个 shard 主队列（`shard.0`…`shard.15`）
@@ -289,6 +314,9 @@ Token 续期：CRM 无 refresh 端点。定时扫 `token_expires_at < NOW()+7d`�
 | 广告对象后台同步 | `apps/api/src/modules/ad-object/sync-service.ts` |
 | 前端接口类型 + fetch 客户端 | `apps/web/src/lib/api.ts` |
 | 前端路由树（**自动生成，禁止手动修改**） | `apps/web/src/routeTree.gen.ts` |
+| Copy V2 JSONB 状态机（大型 campaign） | `apps/worker/src/copy-v2-jsonb.ts` |
+| 当前复制链路文档 | `docs/copy-flow-serial-current.md` |
+| 批量复制旧链路（历史文档） | `docs/batch-copy-flow-current.md` |
 
 ---
 
@@ -307,6 +335,14 @@ Token 续期：CRM 无 refresh 端点。定时扫 `token_expires_at < NOW()+7d`�
 | `AD_OBJECT_SYNC_INTERVAL_MS` | `300000` | 后台同步间隔（毫秒） |
 | `AD_OBJECT_SYNC_DEPTH` | `campaign` | 同步深度：`campaign` / `adset` / `ad` |
 | `META_ASYNC_COPY_TIMEOUT_MS` | `1800000` | 异步复制轮询超时（毫秒） |
+| `COPY_V2_JSONB_ENABLED` | `0` | 设为 `1` 启用大型 campaign JSONB 状态机复制路径 |
+| `COPY_V2_ACCOUNT_ALLOWLIST` | `` | 逗号分隔的 ad account UUID 或 meta_act_id，为空则全量开放 |
+| `COPY_V2_MIN_AD_COUNT` | `52` | 广告数达到此阈值时路由到 V2 |
+| `COPY_V2_MIN_ADSET_COUNT` | `5` | 广告组数达到此阈值时路由到 V2 |
+| `COPY_V2_ADSET_CONCURRENCY` | `2` | V2 广告组并发数 |
+| `COPY_V2_AD_CONCURRENCY` | `3` | V2 广告并发数 |
+| `COPY_V2_VERIFY_ENABLED` | `1` | 复制后字段校验 |
+| `COPY_V2_REPAIR_ENABLED` | `1` | 字段不匹配时自动修复 |
 
 ---
 
@@ -321,3 +357,49 @@ Token 续期：CRM 无 refresh 端点。定时扫 `token_expires_at < NOW()+7d`�
 - **Windows 开发注意**：`bun --hot` 与 amqplib 长连接同用会出现僵尸连接，脚本中一律用 `bun src/index.ts`，不加 `--hot`。
 - **`operation_task_items.error` 列复用**：copy 操作生成的新对象 ID 暂存于 `error` 列（MVP 复用），M5 前需加 `result jsonb` 列并迁移。
 - **前端 `routeTree.gen.ts` 禁止手动修改**：由 `vite` + TanStack Router 插件在启动时自动从 `routes/` 目录生成，手动改会在下次启动时被覆盖。
+- **复制代码有死代码残留**：`meta-client.ts` 中仍保留旧的 `executeAsyncCopyBatchProvider()` / `meta.copyCampaign()` 等函数，当前 copy 主路径调用的是 `executeCustomCopyProvider()` / `customCopyCampaign()` 等。修改复制逻辑时认准 `custom*` 前缀的函数。
+- **Campaign 深拷贝耗时与广告数成正比**：`customCopyCampaign()` 按 campaign → adset → ad 逐层串行创建；源 campaign 层级越深耗时越长。大型 campaign 使用 Copy V2（`COPY_V2_JSONB_ENABLED=1`）有限并发执行。
+- **幂等检查仅覆盖主 item**：`copyBatch` 内只对聚合消息的主 `itemId` 做前置幂等过滤，batch 内其他 item 无前置过滤。极端半完成状态下主 item 已终态可能导致整条 batch 被跳过。
+
+---
+
+## 生产部署
+
+```powershell
+# 部署（Windows → 远程服务器）
+# 需要 SSH 密钥：~/.ssh/meta_ads_deploy
+scripts\deploy-production.ps1
+
+# 跳过 typecheck 和 web 构建（快速部署）
+scripts\deploy-production.ps1 -SkipLocalChecks
+
+# 回滚到上一个版本
+scripts\rollback-production.ps1
+```
+
+**部署流程**（`scripts/deploy-production.ps1` → `scripts/server-install-release.sh`）：
+1. 本地 typecheck + `bun --cwd apps/web build`
+2. 打包代码为 `tar.gz`（排除 `node_modules` / `.git` / `.env`）
+3. scp 上传到服务器 `/opt/ads-management/.deploy/incoming/`
+4. 服务器侧：备份当前版本 → 备份数据库（pg_dump）→ 解压新版本 → `bun install --frozen-lockfile` → `db migrate` → 重启服务（systemd 优先，fallback pm2）→ `/health` 健康检查
+5. 健康检查失败自动输出回滚命令
+
+服务器上手动回滚：`cd /opt/ads-management && ./rollback-last.sh`
+
+**服务器环境文件**：`/etc/ads-management/ads.env`（部署时自动读取，不会被代码覆盖）
+
+---
+
+## 设计文档（docs/）
+
+| 文件 | 内容 |
+|---|---|
+| `copy-flow-serial-current.md` | **当前**复制链路说明（串行自建 create-copy，主要参考文档） |
+| `batch-copy-flow-current.md` | 历史版本批量复制链路（Meta async_batch_requests，已废弃） |
+| `copy-parallel-async-plan.md` | 批量复制并行异步改造计划（设计草稿） |
+| `large-campaign-copy-v2-dag-plan.md` | 大型 campaign Copy V2 DAG 计划 |
+| `large-campaign-copy-jsonb-state-machine-plan.md` | Copy V2 JSONB 状态机设计 |
+| `overall-optimization-execution-roadmap.md` | 整体优化执行优先级排序（权限→IAM→工作台→广告对象落库→审计） |
+| `access-chain-permission-audit.md` | 权限与选择链路审计 |
+| `global-governance-and-ad-object-storage-evaluation.md` | 全局治理底座与广告对象存储评估 |
+| `ui-optimization-iam-and-home-workspace.md` | IAM 三栏联动 + 广告管理工作台 UI 设计 |

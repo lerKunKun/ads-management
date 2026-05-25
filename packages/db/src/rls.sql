@@ -140,6 +140,18 @@ CREATE POLICY p_op_items_all ON operation_task_items
     )
   );
 
+ALTER TABLE operation_copy_workflows ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS p_op_copy_workflows_all ON operation_copy_workflows;
+CREATE POLICY p_op_copy_workflows_all ON operation_copy_workflows
+  FOR ALL USING (app_bypass_rls() OR company_id = app_current_company())
+            WITH CHECK (app_bypass_rls() OR company_id = app_current_company());
+
+ALTER TABLE operation_copy_steps ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS p_op_copy_steps_all ON operation_copy_steps;
+CREATE POLICY p_op_copy_steps_all ON operation_copy_steps
+  FOR ALL USING (app_bypass_rls() OR company_id = app_current_company())
+            WITH CHECK (app_bypass_rls() OR company_id = app_current_company());
+
 -- ---------- local ad objects ----------
 ALTER TABLE campaigns ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS p_campaigns_all ON campaigns;

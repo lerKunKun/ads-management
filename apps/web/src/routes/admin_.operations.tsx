@@ -34,6 +34,7 @@ const TASK_STATUS_COLOR: Record<string, string> = {
   partial: 'text-amber-600',
   failed: 'text-rose-600',
   running: 'text-blue-600',
+  paused: 'text-amber-600',
   pending: 'text-muted-foreground',
   cancelled: 'text-muted-foreground',
 };
@@ -398,6 +399,7 @@ function TasksSection() {
                 { value: '', label: '全部' },
                 { value: 'pending', label: taskStatusLabel('pending') },
                 { value: 'running', label: taskStatusLabel('running') },
+                { value: 'paused', label: taskStatusLabel('paused') },
                 { value: 'partial', label: taskStatusLabel('partial') },
                 { value: 'success', label: taskStatusLabel('success') },
                 { value: 'failed', label: taskStatusLabel('failed') },

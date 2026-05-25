@@ -23,6 +23,7 @@ const COMPANY_STATUS = USER_STATUS;
 const TASK_STATUS: Record<string, string> = {
   pending: '等待中',
   running: '运行中',
+  paused: '已暂停',
   partial: '部分成功',
   success: '成功',
   failed: '失败',

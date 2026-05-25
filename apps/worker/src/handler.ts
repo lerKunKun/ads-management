@@ -46,6 +46,12 @@ import {
   type OperationMessage,
 } from '../../api/src/lib/rabbitmq-topology';
 import { isFake, runFake } from './fake-meta';
+import { executeJsonbCampaignCopyV2 } from './copy-v2-jsonb';
+import {
+  assertTaskRunnable,
+  TaskCancelledError,
+  TaskPausedError,
+} from './task-control';
 
 export type Outcome =
   | { kind: 'ack' }
@@ -181,6 +187,17 @@ export async function handle(msg: OperationMessage): Promise<Outcome> {
     if (cur.status === 'success' || cur.status === 'failed' || cur.status === 'dead') {
       return { kind: 'ack' };
     }
+    try {
+      await assertTaskRunnable(msg.taskId);
+    } catch (err) {
+      if (err instanceof TaskPausedError) {
+        return { kind: 'retry', reason: err.message, bumpAttempt: false };
+      }
+      if (err instanceof TaskCancelledError) {
+        return { kind: 'ack' };
+      }
+      throw err;
+    }
 
     // 4. 令牌桶（fake 模式不打真 Meta，跳过）
     if (!isFake()) {
@@ -252,6 +269,12 @@ export async function handle(msg: OperationMessage): Promise<Outcome> {
     } catch (err) {
       if (err instanceof AsyncCopyPending) {
         return { kind: 'retry', reason: err.message, bumpAttempt: false };
+      }
+      if (err instanceof TaskPausedError) {
+        return { kind: 'retry', reason: err.message, bumpAttempt: false };
+      }
+      if (err instanceof TaskCancelledError) {
+        return { kind: 'ack' };
       }
       return await handleErr(msg, err, msg.copyBatch);
     }
@@ -595,6 +618,9 @@ async function executeCustomCopyProvider(
   token: string,
   input: AsyncCopyInput,
 ): Promise<Record<string, unknown>> {
+  const v2Result = await executeJsonbCampaignCopyV2(msg, token, input);
+  if (v2Result) return v2Result;
+
   const result = await metaProvider.copy(token, {
     adAccountId: msg.metaActId,
     sourceId: input.sourceId,
