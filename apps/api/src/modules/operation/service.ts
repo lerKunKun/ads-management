@@ -531,17 +531,63 @@ export async function getInsightsByLevel(
   adAccountId: string,
   level: 'campaign' | 'adset' | 'ad',
   datePreset: DatePreset,
+  parentId?: string,
 ): Promise<Record<string, InsightsSummary>> {
   assertScope(principal, adAccountId);
   const localMock = await resolveLocalMockAdAccount(principal.companyId, adAccountId);
-  if (localMock) return fakeMeta.getInsightsByChild(localMock, level, datePreset);
+  if (localMock) return getLocalMockInsightsByLevel(localMock, level, datePreset, parentId);
   const ctx = await resolveAdAccount(principal.companyId, adAccountId);
   try {
-    return await meta.getInsightsByChild(ctx.token, ctx.metaActId, level, datePreset);
+    const objectId = await resolveInsightsObjectId(
+      principal,
+      ctx,
+      adAccountId,
+      level,
+      parentId,
+    );
+    return await meta.getInsightsByChild(ctx.token, objectId, level, datePreset);
   } catch (err) {
     await handleMetaError(err, principal.companyId, ctx.fbAccountId);
     throw err;
   }
+}
+
+async function resolveInsightsObjectId(
+  principal: AuthPrincipal,
+  ctx: { token: string; metaActId: string; fbAccountId: string },
+  adAccountId: string,
+  level: 'campaign' | 'adset' | 'ad',
+  parentId?: string,
+): Promise<string> {
+  if (!parentId || level === 'campaign') return ctx.metaActId;
+  if (level === 'adset') {
+    await assertTargetOwnership(principal, ctx, adAccountId, 'campaign', parentId);
+    return parentId;
+  }
+  await assertTargetOwnership(principal, ctx, adAccountId, 'adset', parentId);
+  return parentId;
+}
+
+function getLocalMockInsightsByLevel(
+  metaActId: string,
+  level: 'campaign' | 'adset' | 'ad',
+  datePreset: DatePreset,
+  parentId?: string,
+): Record<string, InsightsSummary> {
+  if (!parentId || level === 'campaign') {
+    return fakeMeta.getInsightsByChild(metaActId, level, datePreset);
+  }
+  const out: Record<string, InsightsSummary> = {};
+  if (level === 'adset') {
+    for (const adset of fakeMeta.listAdSets(parentId)) {
+      out[adset.id] = fakeMeta.getInsights(adset.id, datePreset);
+    }
+    return out;
+  }
+  for (const ad of fakeMeta.listAds(parentId)) {
+    out[ad.id] = fakeMeta.getInsights(ad.id, datePreset);
+  }
+  return out;
 }
 
 async function resolveLocalMockAdAccount(

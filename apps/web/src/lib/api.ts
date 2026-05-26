@@ -321,9 +321,14 @@ export const api = {
     adAccountId: string,
     level: 'campaign' | 'adset' | 'ad',
     preset: DatePreset,
+    parentId?: string,
   ) =>
     call<Record<string, InsightsSummary>>(
-      `/ad-accounts/${adAccountId}/insights?level=${level}&preset=${preset}`,
+      `/ad-accounts/${adAccountId}/insights?${new URLSearchParams({
+        level,
+        preset,
+        ...(parentId ? { parentId } : {}),
+      }).toString()}`,
     ),
 
   // M3: 批量入队 + 任务查询

@@ -31,8 +31,8 @@ function AdSetsPage() {
     queryFn: () => api.adSets(id, cid),
   });
   const insights = useQuery({
-    queryKey: ['insights', id, 'adset', preset],
-    queryFn: () => api.insightsByLevel(id, 'adset', preset),
+    queryKey: ['insights', id, 'adset', cid, preset],
+    queryFn: () => api.insightsByLevel(id, 'adset', preset, cid),
   });
 
   const campaign = campaigns.data?.find((item) => item.id === cid);
