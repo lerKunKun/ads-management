@@ -15,7 +15,7 @@ export const Route = createFileRoute('/ad-accounts_/$id')({
 
 function AdAccountCampaignsPage() {
   const { id } = Route.useParams();
-  const [preset, setPreset] = useState<DatePreset>('last_7d');
+  const [preset, setPreset] = useState<DatePreset>('yesterday');
 
   const summary = useQuery({
     queryKey: ['ad-account-summary', id],

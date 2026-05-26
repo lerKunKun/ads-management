@@ -1901,7 +1901,7 @@ export const meta = {
   async getInsights(
     token: string,
     objectId: string,
-    datePreset: DatePreset = 'last_7d',
+    datePreset: DatePreset = 'yesterday',
   ): Promise<InsightsSummary> {
     if (FAKE_MODE) return fakeMeta.getInsights(objectId, datePreset);
     const q: Record<string, string> = {
@@ -1921,7 +1921,7 @@ export const meta = {
     token: string,
     metaActId: string,
     level: 'campaign' | 'adset' | 'ad',
-    datePreset: DatePreset = 'last_7d',
+    datePreset: DatePreset = 'yesterday',
   ): Promise<Record<string, InsightsSummary>> {
     if (FAKE_MODE) return fakeMeta.getInsightsByChild(metaActId, level, datePreset);
     const baseQuery: Record<string, string> = {

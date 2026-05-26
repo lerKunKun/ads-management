@@ -18,7 +18,7 @@ export const Route = createFileRoute(
 function AdsPage() {
   const { id, cid, asid } = Route.useParams();
   const navigate = useNavigate();
-  const [preset, setPreset] = useState<DatePreset>('last_7d');
+  const [preset, setPreset] = useState<DatePreset>('yesterday');
 
   const summary = useQuery({
     queryKey: ['ad-account-summary', id],

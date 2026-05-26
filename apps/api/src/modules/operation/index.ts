@@ -375,7 +375,7 @@ export const operation = new Elysia({ name: 'operation' })
         '/ad-accounts/:id/insights',
         async ({ principal, params, query }) => {
           const level = (query.level ?? 'campaign') as 'campaign' | 'adset' | 'ad';
-          const preset = (query.preset ?? 'last_7d') as DatePreset;
+          const preset = (query.preset ?? 'yesterday') as DatePreset;
           const data = await svc.getInsightsByLevel(principal, params.id, level, preset);
           return { code: 0, msg: 'ok', data };
         },
