@@ -424,6 +424,30 @@ export const operation = new Elysia({ name: 'operation' })
         },
         { params: t.Object({ taskId: t.String({ format: 'uuid' }) }) },
       )
+      .post(
+        '/operations/:taskId/pause',
+        async ({ principal, params }) => {
+          await q.pauseTask(principal, params.taskId);
+          return { code: 0, msg: 'ok', data: null };
+        },
+        { params: t.Object({ taskId: t.String({ format: 'uuid' }) }) },
+      )
+      .post(
+        '/operations/:taskId/resume',
+        async ({ principal, params }) => {
+          await q.resumeTask(principal, params.taskId);
+          return { code: 0, msg: 'ok', data: null };
+        },
+        { params: t.Object({ taskId: t.String({ format: 'uuid' }) }) },
+      )
+      .post(
+        '/operations/:taskId/stop',
+        async ({ principal, params }) => {
+          await q.stopTask(principal, params.taskId);
+          return { code: 0, msg: 'ok', data: null };
+        },
+        { params: t.Object({ taskId: t.String({ format: 'uuid' }) }) },
+      )
 
       // ===== 批量入队 (M3 扩 action) =====
       .post(

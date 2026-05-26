@@ -22,6 +22,27 @@
       "when": 1779355916203,
       "tag": "0002_naive_rocket_raccoon",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1779674253653,
+      "tag": "0003_sweet_liz_osborn",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1779691200000,
+      "tag": "0004_add_operation_paused",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1779782400000,
+      "tag": "0005_bind_permission_for_all_roles",
+      "breakpoints": true
     }
   ]
 }

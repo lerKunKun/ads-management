@@ -9,6 +9,9 @@ WORKER_SERVICE="${WORKER_SERVICE:-ads-worker}"
 RUN_MIGRATIONS="${RUN_MIGRATIONS:-1}"
 BUILD_WEB="${BUILD_WEB:-1}"
 ENV_FILE="${ENV_FILE:-/etc/ads-management/ads.env}"
+DB_BACKUP_CONTAINER="${DB_BACKUP_CONTAINER:-ads_pg}"
+DB_BACKUP_USER="${DB_BACKUP_USER:-ads}"
+DB_BACKUP_NAME="${DB_BACKUP_NAME:-ads}"
 
 DEPLOY_DIR="$APP_DIR/.deploy"
 BACKUP_DIR="$DEPLOY_DIR/backups"
@@ -76,10 +79,10 @@ backup_database() {
     return 0
   fi
   if ! command -v pg_dump >/dev/null 2>&1; then
-    if command -v docker >/dev/null 2>&1 && sudo docker ps --format '{{.Names}}' | grep -qx 'ads_pg'; then
+    if command -v docker >/dev/null 2>&1 && sudo docker ps --format '{{.Names}}' | grep -qx "$DB_BACKUP_CONTAINER"; then
       local db_backup="$BACKUP_DIR/db-before-$RELEASE_ID.dump"
-      log "backup database via ads_pg container -> $db_backup"
-      sudo docker exec ads_pg pg_dump -U ads -d ads --format=custom > "$db_backup"
+      log "backup database via $DB_BACKUP_CONTAINER container -> $db_backup"
+      sudo docker exec "$DB_BACKUP_CONTAINER" pg_dump -U "$DB_BACKUP_USER" -d "$DB_BACKUP_NAME" --format=custom > "$db_backup"
       return 0
     fi
     log "pg_dump not found, skip database backup"

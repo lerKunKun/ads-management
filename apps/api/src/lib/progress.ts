@@ -13,7 +13,7 @@ import { redis } from './redis';
 export const ProgressKey = (taskId: string) => `task:${taskId}:progress`;
 export const ProgressChannel = (taskId: string) => `task:${taskId}:event`;
 
-export type TaskStatus = 'pending' | 'running' | 'partial' | 'success' | 'failed' | 'cancelled';
+export type TaskStatus = 'pending' | 'running' | 'paused' | 'partial' | 'success' | 'failed' | 'cancelled';
 
 export interface ProgressSnapshot {
   taskId: string;
@@ -49,10 +49,10 @@ export async function bumpProgress(
   const failed = Number(data['failed'] ?? 0);
   let status: TaskStatus = (data['status'] as TaskStatus) ?? 'pending';
   // 仅在未终态时推进
-  if (status !== 'success' && status !== 'failed' && status !== 'cancelled') {
-    if (success + failed >= total) {
+  if (status !== 'cancelled' && status !== 'paused') {
+    if (total > 0 && success + failed >= total) {
       status = failed === 0 ? 'success' : success === 0 ? 'failed' : 'partial';
-    } else if (status === 'pending' && success + failed > 0) {
+    } else if (status !== 'pending' || success + failed > 0) {
       status = 'running';
     }
     await redis.hset(key, 'status', status);
@@ -73,6 +73,24 @@ export async function setRunning(taskId: string): Promise<void> {
   if (cur === 'pending') {
     await redis.hset(key, 'status', 'running');
   }
+}
+
+export async function setProgressStatus(taskId: string, status: TaskStatus): Promise<ProgressSnapshot> {
+  const key = ProgressKey(taskId);
+  const existing = await redis.hgetall(key);
+  const total = Number(existing['total'] ?? 0);
+  const success = Number(existing['success'] ?? 0);
+  const failed = Number(existing['failed'] ?? 0);
+  const updatedAt = Date.now();
+  await redis.hmset(key, { total, success, failed, status, updatedAt });
+  const snap: ProgressSnapshot = { taskId, total, success, failed, status, updatedAt };
+  await redis.publish(ProgressChannel(taskId), JSON.stringify(snap));
+  if (status === 'success' || status === 'failed' || status === 'partial' || status === 'cancelled') {
+    await redis.expire(key, 15 * 60);
+  } else {
+    await redis.expire(key, 60 * 60);
+  }
+  return snap;
 }
 
 export async function readProgress(taskId: string): Promise<ProgressSnapshot | null> {

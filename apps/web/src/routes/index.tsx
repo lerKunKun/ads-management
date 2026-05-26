@@ -15,10 +15,7 @@ import {
 import { api, getToken, type FbAccount, type Me } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import {
-  accountGroupStatusLabel,
-  taskStatusLabel,
-} from '@/lib/labels';
+import { accountGroupStatusLabel } from '@/lib/labels';
 
 export const Route = createFileRoute('/')({
   beforeLoad: () => {
@@ -121,7 +118,7 @@ function DashboardPage() {
         />
       </section>
 
-      <section className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+      <section className="grid gap-4">
         <section className="rounded-md border bg-background">
           <div className="flex items-center justify-between gap-3 border-b p-4">
             <div>
@@ -143,66 +140,6 @@ function DashboardPage() {
               <AdAccountGroupItem key={group.id} group={group} />
             ))}
           </div>
-        </section>
-
-        <section className="space-y-4">
-          <section className="rounded-md border bg-background p-4">
-            <h2 className="font-medium">作用域</h2>
-            <div className="mt-3 grid gap-2 text-sm">
-              <SummaryRow label="角色" value={me.data?.roles.join(', ') || '-'} />
-              <SummaryRow
-                label="广告账户组作用域"
-                value={me.data?.scope.bypass ? '全量自动授权' : `${me.data?.scope.fbAccounts.length ?? 0} 个`}
-              />
-              <SummaryRow
-                label="广告账户"
-                value={
-                  me.data?.scope.bypass ? '全量自动授权' : `${me.data?.scope.adAccounts.length ?? 0} 个`
-                }
-              />
-            </div>
-          </section>
-
-          <section className="rounded-md border bg-background p-4">
-            <h2 className="font-medium">账号健康</h2>
-            <div className="mt-3 space-y-2 text-sm">
-              <HealthLine
-                ok={invalidFb === 0}
-                label={invalidFb === 0 ? '广告账户组 Token 状态正常' : `${invalidFb} 个广告账户组 Token 异常`}
-              />
-              <HealthLine
-                ok={abnormalAdAccounts === 0}
-                label={
-                  abnormalAdAccounts === 0
-                    ? '广告账户状态正常'
-                    : `${abnormalAdAccounts} 个广告账户状态异常`
-                }
-              />
-              <HealthLine
-                ok={!canManage || runningTasks === 0}
-                label={canManage ? `${runningTasks} 个后台任务运行中` : '后台任务仅管理员可见'}
-              />
-            </div>
-          </section>
-
-          {canManage && (
-            <section className="rounded-md border bg-background p-4">
-              <h2 className="font-medium">最近任务</h2>
-              <div className="mt-3 space-y-2">
-                {(tasksQ.data ?? []).length === 0 && (
-                  <p className="text-sm text-muted-foreground">暂无任务记录</p>
-                )}
-                {(tasksQ.data ?? []).map((task) => (
-                  <div key={task.id} className="flex items-center justify-between gap-3 text-sm">
-                    <span className="truncate font-mono text-xs">{task.type}</span>
-                    <span className={task.status === 'success' ? 'text-emerald-600' : 'text-muted-foreground'}>
-                      {taskStatusLabel(task.status)}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
         </section>
       </section>
 
@@ -284,28 +221,6 @@ function StatusBadge({ status }: { status: string }) {
       {active ? <CheckCircle2 className="h-3 w-3" /> : <AlertTriangle className="h-3 w-3" />}
       {accountGroupStatusLabel(status)}
     </span>
-  );
-}
-
-function SummaryRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between gap-3 border-b py-2 last:border-b-0">
-      <span className="text-muted-foreground">{label}</span>
-      <span className="min-w-0 truncate text-right font-medium">{value}</span>
-    </div>
-  );
-}
-
-function HealthLine({ ok, label }: { ok: boolean; label: string }) {
-  return (
-    <div className="flex items-center gap-2">
-      {ok ? (
-        <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-      ) : (
-        <AlertTriangle className="h-4 w-4 text-amber-600" />
-      )}
-      <span>{label}</span>
-    </div>
   );
 }
 

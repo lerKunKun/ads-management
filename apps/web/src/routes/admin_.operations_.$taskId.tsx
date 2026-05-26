@@ -1,7 +1,7 @@
 import { createFileRoute, redirect, Link } from '@tanstack/react-router';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo } from 'react';
-import { ArrowLeft, RefreshCw } from 'lucide-react';
+import { ArrowLeft, Pause, Play, RefreshCw, Square } from 'lucide-react';
 import { api, getToken, openTaskStream } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { TaskDetailPanel } from '@/components/TaskDetailPanel';
@@ -30,6 +30,23 @@ function OperationTaskDetailPage() {
     },
   });
   const currentStatus = q.data?.status;
+  const pause = useMutation({
+    mutationFn: () => api.pauseTask(taskId),
+    onSuccess: () => qc.invalidateQueries({ queryKey }),
+  });
+  const resume = useMutation({
+    mutationFn: () => api.resumeTask(taskId),
+    onSuccess: () => qc.invalidateQueries({ queryKey }),
+  });
+  const stop = useMutation({
+    mutationFn: () => api.stopTask(taskId),
+    onSuccess: () => qc.invalidateQueries({ queryKey }),
+  });
+  const actionBusy = pause.isPending || resume.isPending || stop.isPending;
+  const canPause = currentStatus === 'pending' || currentStatus === 'running';
+  const canResume = currentStatus === 'paused';
+  const canStop = currentStatus === 'pending' || currentStatus === 'running' || currentStatus === 'paused';
+  const actionError = pause.error ?? resume.error ?? stop.error;
 
   useEffect(() => {
     if (!taskId) return;
@@ -76,11 +93,34 @@ function OperationTaskDetailPage() {
             任务历史
           </Link>
         </Button>
-        <Button size="sm" variant="outline" onClick={() => q.refetch()} disabled={q.isFetching}>
-          <RefreshCw className="mr-2 h-4 w-4" />
-          刷新
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          {canPause ? (
+            <Button size="sm" variant="outline" onClick={() => pause.mutate()} disabled={actionBusy}>
+              <Pause className="mr-2 h-4 w-4" />
+              暂停
+            </Button>
+          ) : null}
+          {canResume ? (
+            <Button size="sm" variant="outline" onClick={() => resume.mutate()} disabled={actionBusy}>
+              <Play className="mr-2 h-4 w-4" />
+              恢复
+            </Button>
+          ) : null}
+          {canStop ? (
+            <Button size="sm" variant="outline" onClick={() => stop.mutate()} disabled={actionBusy}>
+              <Square className="mr-2 h-4 w-4" />
+              停止
+            </Button>
+          ) : null}
+          <Button size="sm" variant="outline" onClick={() => q.refetch()} disabled={q.isFetching}>
+            <RefreshCw className="mr-2 h-4 w-4" />
+            刷新
+          </Button>
+        </div>
       </div>
+      {actionError ? (
+        <p className="text-sm text-destructive">{(actionError as Error).message}</p>
+      ) : null}
 
       <header>
         <div className="text-sm text-muted-foreground">任务详情</div>

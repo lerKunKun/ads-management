@@ -48,6 +48,36 @@ async function loadScript(): Promise<string> {
   return scriptSha;
 }
 
+const SEMAPHORE_SCRIPT = `
+local key = KEYS[1]
+local limit = tonumber(ARGV[1])
+local now_ms = tonumber(ARGV[2])
+local ttl_ms = tonumber(ARGV[3])
+local token = ARGV[4]
+
+redis.call('ZREMRANGEBYSCORE', key, 0, now_ms)
+local count = redis.call('ZCARD', key)
+if count < limit then
+  redis.call('ZADD', key, now_ms + ttl_ms, token)
+  redis.call('PEXPIRE', key, ttl_ms + 60000)
+  return {1, 0}
+end
+
+local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
+local wait_ms = ttl_ms
+if oldest[2] ~= nil then
+  wait_ms = math.max(1, tonumber(oldest[2]) - now_ms)
+end
+return {0, wait_ms}
+`;
+
+let semaphoreScriptSha: string | null = null;
+async function loadSemaphoreScript(): Promise<string> {
+  if (semaphoreScriptSha) return semaphoreScriptSha;
+  semaphoreScriptSha = await redis.script('LOAD', SEMAPHORE_SCRIPT) as string;
+  return semaphoreScriptSha;
+}
+
 export interface BucketSpec {
   key: string;
   capacity: number;
@@ -102,6 +132,32 @@ export async function acquire(
     if (r[1] > maxWait) maxWait = r[1];
   }
   return { allowed: true, waitMs: 0 };
+}
+
+export async function acquireSemaphore(
+  key: string,
+  limit: number,
+  ttlMs: number,
+  token = `${process.pid}:${Date.now()}:${Math.random().toString(16).slice(2)}`,
+): Promise<{ allowed: true; token: string; waitMs: number } | { allowed: false; token: string; waitMs: number }> {
+  if (limit <= 0) return { allowed: true, token, waitMs: 0 };
+  const sha = await loadSemaphoreScript();
+  const r = (await redis.evalsha(
+    sha,
+    1,
+    key,
+    limit,
+    Date.now(),
+    ttlMs,
+    token,
+  )) as [number, number];
+  return { allowed: r[0] === 1, token, waitMs: Number(r[1] ?? 0) } as
+    | { allowed: true; token: string; waitMs: number }
+    | { allowed: false; token: string; waitMs: number };
+}
+
+export async function releaseSemaphore(key: string, token: string): Promise<void> {
+  await redis.zrem(key, token);
 }
 
 /**

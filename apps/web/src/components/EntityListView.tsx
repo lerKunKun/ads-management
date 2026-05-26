@@ -7,6 +7,7 @@ import {
   type CopyParams,
   type DatePreset,
   type InsightsSummary,
+  type Me,
 } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogFooter } from '@/components/ui/dialog';
@@ -59,7 +60,7 @@ export interface EntityListViewProps<T extends EntityRow> {
 }
 
 type TerminalTaskStatus = 'success' | 'failed' | 'partial' | 'cancelled';
-type TaskStatus = 'pending' | 'running' | TerminalTaskStatus;
+type TaskStatus = 'pending' | 'running' | 'paused' | TerminalTaskStatus;
 type RowPatch = Partial<Pick<EntityRow, 'status' | 'dailyBudget' | 'lifetimeBudget'>>;
 type SortMetric = 'spend' | 'orders' | 'cpa' | 'cpc' | 'addToCart' | 'initiateCheckout' | 'cpm';
 type SortDirection = 'asc' | 'desc';
@@ -77,6 +78,7 @@ interface ProgressSnap {
   success: number;
   failed: number;
   status: TaskStatus;
+  updatedAt?: number;
 }
 
 interface InsightSummaryTotal {
@@ -138,6 +140,7 @@ export function EntityListView<T extends EntityRow>({
   const [statusFilter, setStatusFilter] = useState('');
   const [sort, setSort] = useState<SortState | null>(null);
   const [activeFirst, setActiveFirst] = useState(true);
+  const me = useQuery<Me>({ queryKey: ['me'], queryFn: api.me });
 
   const keySignature = JSON.stringify(invalidateKey);
   useEffect(() => {
@@ -312,6 +315,13 @@ export function EntityListView<T extends EntityRow>({
     value === 0 ? '-' : `${value.toFixed(2)}${currency ? ` ${currency}` : ''}`;
 
   const layerActionLabel = layer === 'campaign' ? '广告系列' : layer === 'adset' ? '广告组' : '广告';
+  const canOperateAdAccount =
+    me.data?.scope.bypass || me.data?.scope.adAccounts.includes(adAccountId) || false;
+  const hasPermission = (code: string) => me.data?.permissions.includes(code) ?? false;
+  const canChangeStatus = canOperateAdAccount && hasPermission('campaign:status');
+  const canChangeBudget = canOperateAdAccount && enableBudget && hasPermission('campaign:budget');
+  const canCopy = canOperateAdAccount && hasPermission('campaign:copy');
+  const canDelete = canOperateAdAccount && hasPermission('campaign:delete');
 
   return (
     <div className="space-y-3">
@@ -355,14 +365,14 @@ export function EntityListView<T extends EntityRow>({
           <Button
             size="sm"
             variant="outline"
-            disabled={selected.size === 0 || batch.isPending}
+            disabled={selected.size === 0 || batch.isPending || !canChangeStatus}
             onClick={() => runBatch(`${layer}:status`, { status: 'PAUSED' })}
           >
             批量暂停
           </Button>
           <Button
             size="sm"
-            disabled={selected.size === 0 || batch.isPending}
+            disabled={selected.size === 0 || batch.isPending || !canChangeStatus}
             onClick={() => runBatch(`${layer}:status`, { status: 'ACTIVE' })}
           >
             批量启用
@@ -371,7 +381,7 @@ export function EntityListView<T extends EntityRow>({
             <Button
               size="sm"
               variant="outline"
-              disabled={selected.size === 0 || batch.isPending}
+              disabled={selected.size === 0 || batch.isPending || !canChangeBudget}
               onClick={() => setBatchBudgetOpen(true)}
             >
               批量改预算
@@ -380,7 +390,7 @@ export function EntityListView<T extends EntityRow>({
           <Button
             size="sm"
             variant="outline"
-            disabled={selected.size === 0 || batch.isPending}
+            disabled={selected.size === 0 || batch.isPending || !canCopy}
             onClick={batchCopyClicked}
           >
             批量复制
@@ -388,7 +398,7 @@ export function EntityListView<T extends EntityRow>({
           <Button
             size="sm"
             variant="destructive"
-            disabled={selected.size === 0 || batch.isPending}
+            disabled={selected.size === 0 || batch.isPending || !canDelete}
             onClick={() => {
               if (!confirm(`批量归档 ${selected.size} 个${layerActionLabel}？`)) return;
               runBatch(`${layer}:delete`, { hard: false });
@@ -500,7 +510,7 @@ export function EntityListView<T extends EntityRow>({
                     <Switch
                       size="sm"
                       checked={row.status === 'ACTIVE'}
-                      disabled={archived || setStatus.isPending}
+                      disabled={archived || setStatus.isPending || !canChangeStatus}
                       onCheckedChange={() =>
                         setStatus.mutate({ id: row.id, status: statusFromSwitch(row.status) })
                       }
@@ -534,7 +544,7 @@ export function EntityListView<T extends EntityRow>({
                             ...(row.dailyBudget !== undefined ? { daily: row.dailyBudget } : {}),
                           })
                         }
-                        disabled={archived}
+                        disabled={archived || !canChangeBudget}
                         className="text-left hover:underline disabled:opacity-50"
                       >
                         {fmtBudget(row.dailyBudget)}
@@ -566,7 +576,7 @@ export function EntityListView<T extends EntityRow>({
                     <Button
                       size="sm"
                       variant="outline"
-                      disabled={archived || batch.isPending}
+                      disabled={archived || batch.isPending || !canCopy}
                       onClick={() => singleCopyClicked(row)}
                     >
                       复制
@@ -574,7 +584,7 @@ export function EntityListView<T extends EntityRow>({
                     <Button
                       size="sm"
                       variant="destructive"
-                      disabled={archived || deleteMut.isPending}
+                      disabled={archived || deleteMut.isPending || !canDelete}
                       onClick={() => {
                         if (!confirm(`归档 "${row.name}"？`)) return;
                         deleteMut.mutate(row.id);
@@ -722,10 +732,15 @@ function BudgetEditDialog({
 
 function TaskProgress({ taskId, onClose }: { taskId: string | null; onClose: () => void }) {
   const [snap, setSnap] = useState<ProgressSnap | null>(null);
+  const [startedAtMs, setStartedAtMs] = useState(() => Date.now());
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   useEffect(() => {
     if (!taskId) return;
     setSnap(null);
+    const started = Date.now();
+    setStartedAtMs(started);
+    setNowMs(started);
     const es = openTaskStream(taskId);
     es.addEventListener('progress', (event) => {
       try {
@@ -739,11 +754,19 @@ function TaskProgress({ taskId, onClose }: { taskId: string | null; onClose: () 
     return () => es.close();
   }, [taskId]);
 
+  useEffect(() => {
+    if (!taskId || (snap && isTerminalTaskStatus(snap.status))) return;
+    const id = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [snap, taskId]);
+
   if (!taskId) return null;
   const pct = snap && snap.total > 0
     ? Math.round(((snap.success + snap.failed) / snap.total) * 100)
     : 0;
   const terminal = !!snap && isTerminalTaskStatus(snap.status);
+  const durationEndMs = terminal ? (snap?.updatedAt ?? nowMs) : nowMs;
+  const durationSeconds = Math.max(0, Math.floor((durationEndMs - startedAtMs) / 1000));
 
   return (
     <Dialog open onOpenChange={(open) => !open && terminal && onClose()} title="任务进度">
@@ -759,6 +782,9 @@ function TaskProgress({ taskId, onClose }: { taskId: string | null; onClose: () 
         ) : (
           '连接中...'
         )}
+      </p>
+      <p className="mt-1 text-xs text-muted-foreground">
+        {terminal ? '完成' : '已用'} {durationSeconds} 秒
       </p>
       <DialogFooter>
         <Button variant={terminal ? 'default' : 'outline'} onClick={onClose} disabled={!terminal && !snap}>
@@ -807,7 +833,7 @@ function SortableMetricHead({
   );
 }
 
-const SUMMARY_CELL_CLASS = 'sticky bottom-0 z-20 bg-[#73BEFF]/50';
+const SUMMARY_CELL_CLASS = 'sticky bottom-0 z-20 bg-[#B9DEFF]';
 
 function SummaryRow({
   mode,
@@ -822,7 +848,7 @@ function SummaryRow({
 }) {
   const label = mode === 'selected' ? `已选 ${summary.rows} 项` : `全部 ${summary.rows} 项`;
   return (
-    <TableRow className="border-t hover:bg-[#73BEFF]/50">
+    <TableRow className="border-t bg-[#B9DEFF] hover:bg-[#B9DEFF]">
       <TableCell className={`${SUMMARY_CELL_CLASS} w-12 px-2`} />
       <TableCell className={`${SUMMARY_CELL_CLASS} w-12`} />
       <TableCell className={`${SUMMARY_CELL_CLASS} font-semibold`}>

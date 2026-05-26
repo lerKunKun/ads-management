@@ -46,6 +46,12 @@ import {
   type OperationMessage,
 } from '../../api/src/lib/rabbitmq-topology';
 import { isFake, runFake } from './fake-meta';
+import { executeJsonbCampaignCopyV2 } from './copy-v2-jsonb';
+import {
+  assertTaskRunnable,
+  TaskCancelledError,
+  TaskPausedError,
+} from './task-control';
 
 export type Outcome =
   | { kind: 'ack' }
@@ -69,8 +75,17 @@ interface AsyncCopyStateRequest {
 const SYNC_COPY_CHILD_AD_LIMIT = 3;
 const ASYNC_COPY_CHILD_AD_LIMIT = 51;
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 interface BatchHandledResult extends Record<string, unknown> {
   __batchHandled: true;
+}
+
+interface ProgressDelta {
+  success: number;
+  failed: number;
 }
 
 class AsyncCopyPending extends Error {
@@ -121,6 +136,31 @@ function isBatchHandled(result: Record<string, unknown> | undefined): result is 
   return result?.['__batchHandled'] === true;
 }
 
+async function mapLimited<T>(
+  items: T[],
+  concurrency: number,
+  run: (item: T, index: number) => Promise<void>,
+): Promise<void> {
+  const limit = Math.max(1, concurrency);
+  let cursor = 0;
+  let firstError: unknown;
+  async function worker(): Promise<void> {
+    for (;;) {
+      if (firstError) return;
+      const index = cursor++;
+      if (index >= items.length) return;
+      try {
+        await run(items[index]!, index);
+      } catch (err) {
+        firstError = err;
+        return;
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+  if (firstError) throw firstError;
+}
+
 async function readItemStatus(itemId: string): Promise<string | undefined> {
   return db.transaction(async (tx) => {
     await tx.execute(dsql`SELECT set_config('app.bypass_rls', '1', true)`);
@@ -130,6 +170,29 @@ async function readItemStatus(itemId: string): Promise<string | undefined> {
       .where(eq(schema.operationTaskItems.id, itemId))
       .limit(1);
     return rows[0]?.status;
+  });
+}
+
+async function readItemStatuses(itemIds: string[]): Promise<Map<string, string>> {
+  if (itemIds.length === 0) return new Map();
+  return db.transaction(async (tx) => {
+    await tx.execute(dsql`SELECT set_config('app.bypass_rls', '1', true)`);
+    const rows = await tx
+      .select({
+        id: schema.operationTaskItems.id,
+        status: schema.operationTaskItems.status,
+      })
+      .from(schema.operationTaskItems)
+      .where(inArray(schema.operationTaskItems.id, itemIds));
+    return new Map(rows.map((row) => [row.id, row.status]));
+  });
+}
+
+async function applyProgressDelta(taskId: string, delta: ProgressDelta): Promise<void> {
+  if (delta.success === 0 && delta.failed === 0) return;
+  await bumpProgress(taskId, {
+    ...(delta.success !== 0 ? { success: delta.success } : {}),
+    ...(delta.failed !== 0 ? { failed: delta.failed } : {}),
   });
 }
 
@@ -168,18 +231,21 @@ export async function handle(msg: OperationMessage): Promise<Outcome> {
 
   try {
     // 3. item 查重 (幂等)
-    const cur = await db.transaction(async (tx) => {
-      await tx.execute(dsql`SELECT set_config('app.bypass_rls', '1', true)`);
-      const r = await tx
-        .select()
-        .from(schema.operationTaskItems)
-        .where(eq(schema.operationTaskItems.id, msg.itemId))
-        .limit(1);
-      return r[0];
-    });
-    if (!cur) return { kind: 'ack' };
-    if (cur.status === 'success' || cur.status === 'failed' || cur.status === 'dead') {
+    const itemStatuses = await readItemStatuses(copyItemsForMessage(msg).map((item) => item.itemId));
+    if (itemStatuses.size === 0) return { kind: 'ack' };
+    if (Array.from(itemStatuses.values()).every((status) => isTerminalStatus(status))) {
       return { kind: 'ack' };
+    }
+    try {
+      await assertTaskRunnable(msg.taskId);
+    } catch (err) {
+      if (err instanceof TaskPausedError) {
+        return { kind: 'retry', reason: err.message, bumpAttempt: false };
+      }
+      if (err instanceof TaskCancelledError) {
+        return { kind: 'ack' };
+      }
+      throw err;
     }
 
     // 4. 令牌桶（fake 模式不打真 Meta，跳过）
@@ -214,11 +280,13 @@ export async function handle(msg: OperationMessage): Promise<Outcome> {
           return r[0];
         });
         if (!fbRow) {
-          await failItem(msg, 'fb_account not found');
+          const delta = await failItem(msg, 'fb_account not found');
+          await applyProgressDelta(msg.taskId, delta);
           return { kind: 'dead', reason: 'fb_account missing' };
         }
         if (fbRow.status !== 'active') {
-          await failItem(msg, `fb_account status ${fbRow.status}`);
+          const delta = await failItem(msg, `fb_account status ${fbRow.status}`);
+          await applyProgressDelta(msg.taskId, delta);
           await openFor(BreakerKey.fbAccount(msg.fbAccountId), 0, fbRow.status);
           return { kind: 'dead', reason: `fb_account ${fbRow.status}` };
         }
@@ -253,6 +321,12 @@ export async function handle(msg: OperationMessage): Promise<Outcome> {
       if (err instanceof AsyncCopyPending) {
         return { kind: 'retry', reason: err.message, bumpAttempt: false };
       }
+      if (err instanceof TaskPausedError) {
+        return { kind: 'retry', reason: err.message, bumpAttempt: false };
+      }
+      if (err instanceof TaskCancelledError) {
+        return { kind: 'ack' };
+      }
       return await handleErr(msg, err, msg.copyBatch);
     }
 
@@ -261,8 +335,8 @@ export async function handle(msg: OperationMessage): Promise<Outcome> {
     await writeLocalBestEffort(msg, token, result);
 
     // 7. 成功
-    await markSuccess(msg, result);
-    await bumpProgress(msg.taskId, { success: 1 });
+    const delta = await markSuccess(msg, result);
+    await applyProgressDelta(msg.taskId, delta);
     return { kind: 'ack' };
   } finally {
     await Promise.allSettled(locks.map((lock) => lock.release()));
@@ -595,6 +669,9 @@ async function executeCustomCopyProvider(
   token: string,
   input: AsyncCopyInput,
 ): Promise<Record<string, unknown>> {
+  const v2Result = await executeJsonbCampaignCopyV2(msg, token, input);
+  if (v2Result) return v2Result;
+
   const result = await metaProvider.copy(token, {
     adAccountId: msg.metaActId,
     sourceId: input.sourceId,
@@ -617,28 +694,161 @@ async function executeCustomCopyProvider(
   };
 }
 
+function estimateCopyItemRequestCost(msg: OperationMessage): number {
+  const [layer, op] = msg.action.split(':') as ['campaign' | 'adset' | 'ad', string];
+  if (op !== 'copy') return 1;
+  const deepCopy = msg.params['deepCopy'] !== false;
+  if (layer === 'ad') return 4;
+  if (layer === 'adset') return deepCopy ? 6 : 4;
+  return deepCopy ? 12 : 4;
+}
+
+function batchConcurrencyForAction(action: OperationMessage['action']): number {
+  if (action === 'campaign:copy') return env.copyBatchCampaignConcurrency;
+  if (action === 'adset:copy') return env.copyBatchAdsetConcurrency;
+  if (action === 'ad:copy') return env.copyBatchAdConcurrency;
+  return env.copyBatchConcurrency;
+}
+
+async function acquireCopyItemBudget(msg: OperationMessage): Promise<void> {
+  if (isFake()) return;
+  const cost = estimateCopyItemRequestCost(msg);
+  const deadline = Date.now() + 120_000;
+  for (;;) {
+    const rate = await acquire([
+      {
+        key: 'ratelimit:copy-v2:global',
+        capacity: env.copyV2GlobalBurst,
+        refillPerSec: env.copyV2GlobalQps,
+      },
+      {
+        key: `ratelimit:copy-v2:adacct:${msg.metaActId}`,
+        capacity: env.copyV2AdAccountBurst,
+        refillPerSec: env.copyV2AdAccountQps,
+      },
+    ], cost);
+    if (rate.allowed) return;
+    if (Date.now() + rate.waitMs > deadline) {
+      throw new HttpError(429, 1002, `copy batch rate-limited wait ${rate.waitMs}ms`);
+    }
+    const jitter = Math.floor(Math.random() * 25);
+    await sleep(Math.min(1000, Math.max(25, rate.waitMs + 10 + jitter)));
+  }
+}
+
+function isRetryableBatchCopyError(err: unknown): { reason: string; bumpAttempt: boolean } | null {
+  const reason = err instanceof Error ? err.message : String(err);
+  if (err instanceof HttpError) {
+    if (err.status === 429) return { reason, bumpAttempt: false };
+    if (err.status >= 500) return { reason, bumpAttempt: true };
+    if (err.status === 409 && (
+      reason.includes('copy v2 verification failed') ||
+      reason.includes('leased')
+    )) {
+      return { reason, bumpAttempt: true };
+    }
+    return null;
+  }
+  if (err instanceof MetaApiError) {
+    if (err.isTokenInvalid || isMetaPermanentParameterError(err)) return null;
+    if (err.isRateLimited) return { reason, bumpAttempt: false };
+    if (err.httpStatus >= 500) return { reason, bumpAttempt: true };
+  }
+  if (
+    reason.toLowerCase().includes('please retry') ||
+    reason.toLowerCase().includes('timeout') ||
+    reason.toLowerCase().includes('temporar')
+  ) {
+    return { reason, bumpAttempt: true };
+  }
+  return { reason, bumpAttempt: true };
+}
+
+async function markRetryingItem(
+  msg: OperationMessage,
+  nextAttempt: number,
+  reason: string,
+): Promise<ProgressDelta> {
+  return db.transaction(async (tx) => {
+    await tx.execute(dsql`SELECT set_config('app.bypass_rls', '1', true)`);
+    const rows = await tx.execute(dsql`
+      SELECT status
+      FROM operation_task_items
+      WHERE id = ${msg.itemId}
+      FOR UPDATE
+    `) as unknown as Array<{ status: string }>;
+    const previous = rows[0]?.status;
+    if (!previous) return { success: 0, failed: 0 };
+    const successDelta = previous === 'success' ? -1 : 0;
+    const failedDelta = previous === 'failed' || previous === 'dead' ? -1 : 0;
+    await tx
+      .update(schema.operationTaskItems)
+      .set({
+        status: 'retrying',
+        attempts: nextAttempt,
+        error: reason,
+      })
+      .where(eq(schema.operationTaskItems.id, msg.itemId));
+    await tx.execute(dsql`
+      UPDATE operation_tasks
+      SET success = GREATEST(0, success + ${successDelta}),
+          failed = GREATEST(0, failed + ${failedDelta}),
+          status = CASE WHEN status IN ('paused','cancelled') THEN status
+                        ELSE 'running'::operation_status END
+      WHERE id = ${msg.taskId}
+    `);
+    return { success: successDelta, failed: failedDelta };
+  });
+}
+
+async function retryBatchItem(
+  msg: OperationMessage,
+  reason: string,
+  bumpAttempt: boolean,
+): Promise<void> {
+  if (bumpAttempt && msg.attempt >= RMQ.maxAttempts) {
+    const delta = await failItem(msg, reason);
+    await applyProgressDelta(msg.taskId, delta);
+    return;
+  }
+  const nextAttempt = bumpAttempt ? msg.attempt + 1 : msg.attempt;
+  const delta = await markRetryingItem(msg, nextAttempt, reason);
+  await applyProgressDelta(msg.taskId, delta);
+  await publishRetry({ ...msg, attempt: nextAttempt });
+}
+
 async function executeCustomCopyBatchProvider(
   msg: OperationMessage,
   token: string,
   copyItems: OperationCopyBatchItem[],
 ): Promise<BatchHandledResult> {
-  console.warn(`[meta-custom-copy-batch] sequential copy task=${msg.taskId} count=${copyItems.length}`);
-  for (const item of copyItems) {
+  const concurrency = Math.max(1, batchConcurrencyForAction(msg.action));
+  console.warn(`[meta-custom-copy-batch] concurrent copy task=${msg.taskId} count=${copyItems.length} concurrency=${concurrency}`);
+  await mapLimited(copyItems, concurrency, async (item) => {
+    await assertTaskRunnable(msg.taskId);
     const itemMsg = messageForCopyItem(msg, item);
     const status = await readItemStatus(item.itemId);
-    if (isTerminalStatus(status)) continue;
+    if (isTerminalStatus(status)) return;
 
     try {
+      await acquireCopyItemBudget(itemMsg);
+      await assertTaskRunnable(msg.taskId);
       const result = await executeProvider(itemMsg, token);
       await writeLocalBestEffort(itemMsg, token, result);
-      await markSuccess(itemMsg, result);
-      await bumpProgress(itemMsg.taskId, { success: 1 });
+      const delta = await markSuccess(itemMsg, result);
+      await applyProgressDelta(itemMsg.taskId, delta);
     } catch (err) {
+      if (err instanceof TaskPausedError || err instanceof TaskCancelledError) throw err;
+      const retry = isRetryableBatchCopyError(err);
+      if (retry) {
+        await retryBatchItem(itemMsg, retry.reason, retry.bumpAttempt);
+        return;
+      }
       const message = err instanceof Error ? err.message : String(err);
-      await failItem(itemMsg, message);
-      await bumpProgress(itemMsg.taskId, { failed: 1 });
+      const delta = await failItem(itemMsg, message);
+      await applyProgressDelta(itemMsg.taskId, delta);
     }
-  }
+  });
   return { __batchHandled: true };
 }
 
@@ -704,14 +914,14 @@ async function executeAsyncCopyBatchProvider(
         asyncRequestSetId: state.requestSetId,
       };
       await writeLocalBestEffort(itemMsg, token, payload);
-      await markSuccess(itemMsg, payload);
-      await bumpProgress(itemMsg.taskId, { success: 1 });
+      const delta = await markSuccess(itemMsg, payload);
+      await applyProgressDelta(itemMsg.taskId, delta);
     } else {
-      await failItem(
+      const delta = await failItem(
         itemMsg,
         result?.error ?? `Meta async copy failed: request_set=${state.requestSetId}`,
       );
-      await bumpProgress(itemMsg.taskId, { failed: 1 });
+      await applyProgressDelta(itemMsg.taskId, delta);
     }
   }
   return { __batchHandled: true };
@@ -734,8 +944,8 @@ async function executeGraphBatchCopyProvider(
       syncEligibleItems.push(item);
       continue;
     }
-    await failItem(itemMsg, syncFallback.reason);
-    await bumpProgress(itemMsg.taskId, { failed: 1 });
+    const delta = await failItem(itemMsg, syncFallback.reason);
+    await applyProgressDelta(itemMsg.taskId, delta);
   }
 
   const chunkSize = 3;
@@ -758,11 +968,11 @@ async function executeGraphBatchCopyProvider(
           fallback: 'graph_batch_copy',
         };
         await writeLocalBestEffort(itemMsg, token, payload);
-        await markSuccess(itemMsg, payload);
-        await bumpProgress(itemMsg.taskId, { success: 1 });
+        const delta = await markSuccess(itemMsg, payload);
+        await applyProgressDelta(itemMsg.taskId, delta);
       } else {
-        await failItem(itemMsg, result?.error ?? 'Meta Graph batch copy failed');
-        await bumpProgress(itemMsg.taskId, { failed: 1 });
+        const delta = await failItem(itemMsg, result?.error ?? 'Meta Graph batch copy failed');
+        await applyProgressDelta(itemMsg.taskId, delta);
       }
     }
   }
@@ -1054,6 +1264,9 @@ async function handleErr(
   batchItems?: OperationCopyBatchItem[],
 ): Promise<Outcome> {
   const message = err instanceof Error ? err.message : String(err);
+  if (err instanceof HttpError && err.status === 429) {
+    return { kind: 'retry', reason: message, bumpAttempt: false };
+  }
   if (err instanceof HttpError && err.status < 500 && err.status !== 429) {
     await failMessages(msg, batchItems, message);
     return { kind: 'dead', reason: message };
@@ -1102,8 +1315,8 @@ async function failMessages(
     ? batchItems.map((item) => messageForCopyItem(msg, item))
     : [msg];
   for (const itemMsg of messages) {
-    await failItem(itemMsg, message);
-    await bumpProgress(itemMsg.taskId, { failed: 1 });
+    const delta = await failItem(itemMsg, message);
+    await applyProgressDelta(itemMsg.taskId, delta);
   }
 }
 
@@ -1122,9 +1335,19 @@ async function incAttemptsForMessages(
 async function markSuccess(
   msg: OperationMessage,
   result?: Record<string, unknown>,
-): Promise<void> {
-  await db.transaction(async (tx) => {
+): Promise<ProgressDelta> {
+  return db.transaction(async (tx) => {
     await tx.execute(dsql`SELECT set_config('app.bypass_rls', '1', true)`);
+    const rows = await tx.execute(dsql`
+      SELECT status
+      FROM operation_task_items
+      WHERE id = ${msg.itemId}
+      FOR UPDATE
+    `) as unknown as Array<{ status: string }>;
+    const previous = rows[0]?.status;
+    if (!previous) return { success: 0, failed: 0 };
+    const successDelta = previous === 'success' ? 0 : 1;
+    const failedDelta = previous === 'failed' || previous === 'dead' ? -1 : 0;
     await tx
       .update(schema.operationTaskItems)
       .set({
@@ -1136,19 +1359,32 @@ async function markSuccess(
       .where(eq(schema.operationTaskItems.id, msg.itemId));
     await tx.execute(
       dsql`UPDATE operation_tasks
-           SET success = success + 1,
-               status = CASE WHEN success + 1 + failed >= total
-                             THEN CASE WHEN failed > 0 THEN 'partial'::operation_status
+           SET success = GREATEST(0, success + ${successDelta}),
+               failed = GREATEST(0, failed + ${failedDelta}),
+               status = CASE WHEN status IN ('paused','cancelled') THEN status
+                             WHEN GREATEST(0, success + ${successDelta}) + GREATEST(0, failed + ${failedDelta}) >= total
+                             THEN CASE WHEN GREATEST(0, failed + ${failedDelta}) > 0 THEN 'partial'::operation_status
                                        ELSE 'success'::operation_status END
                              ELSE 'running'::operation_status END
            WHERE id = ${msg.taskId}`,
     );
+    return { success: successDelta, failed: failedDelta };
   });
 }
 
-async function failItem(msg: OperationMessage, error: string): Promise<void> {
-  await db.transaction(async (tx) => {
+async function failItem(msg: OperationMessage, error: string): Promise<ProgressDelta> {
+  return db.transaction(async (tx) => {
     await tx.execute(dsql`SELECT set_config('app.bypass_rls', '1', true)`);
+    const rows = await tx.execute(dsql`
+      SELECT status
+      FROM operation_task_items
+      WHERE id = ${msg.itemId}
+      FOR UPDATE
+    `) as unknown as Array<{ status: string }>;
+    const previous = rows[0]?.status;
+    if (!previous) return { success: 0, failed: 0 };
+    const successDelta = previous === 'success' ? -1 : 0;
+    const failedDelta = previous === 'failed' || previous === 'dead' ? 0 : 1;
     await tx
       .update(schema.operationTaskItems)
       .set({
@@ -1159,13 +1395,16 @@ async function failItem(msg: OperationMessage, error: string): Promise<void> {
       .where(eq(schema.operationTaskItems.id, msg.itemId));
     await tx.execute(
       dsql`UPDATE operation_tasks
-           SET failed = failed + 1,
-               status = CASE WHEN success + failed + 1 >= total
-                             THEN CASE WHEN success > 0 THEN 'partial'::operation_status
+           SET success = GREATEST(0, success + ${successDelta}),
+               failed = GREATEST(0, failed + ${failedDelta}),
+               status = CASE WHEN status IN ('paused','cancelled') THEN status
+                             WHEN GREATEST(0, success + ${successDelta}) + GREATEST(0, failed + ${failedDelta}) >= total
+                             THEN CASE WHEN GREATEST(0, success + ${successDelta}) > 0 THEN 'partial'::operation_status
                                        ELSE 'failed'::operation_status END
                              ELSE 'running'::operation_status END
            WHERE id = ${msg.taskId}`,
     );
+    return { success: successDelta, failed: failedDelta };
   });
 }
 

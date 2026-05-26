@@ -528,14 +528,6 @@ export async function upsertLocalCopyPlaceholder(args: {
 }): Promise<void> {
   const cloned = await cloneLocalObject(args);
   if (cloned) return;
-  await markLocalStatus({
-    companyId: args.companyId,
-    adAccountId: args.adAccountId,
-    targetType: args.targetType,
-    targetId: args.newId,
-    status: 'PAUSED',
-    owner: args.owner,
-  });
 }
 
 async function cloneLocalObject(args: {
@@ -571,8 +563,8 @@ async function cloneLocalObject(args: {
           adAccountId: args.adAccountId,
           metaId: args.newId,
           name: applyLocalRename(row.name, args.renameOptions),
-          status: 'PAUSED',
-          effectiveStatus: 'PAUSED',
+          status: row.status,
+          effectiveStatus: row.effectiveStatus,
           objective: row.objective,
           dailyBudget: row.dailyBudget,
           lifetimeBudget: row.lifetimeBudget,
@@ -622,8 +614,8 @@ async function cloneLocalObject(args: {
           campaignMetaId: row.campaignMetaId,
           metaId: args.newId,
           name: applyLocalRename(row.name, args.renameOptions),
-          status: 'PAUSED',
-          effectiveStatus: 'PAUSED',
+          status: row.status,
+          effectiveStatus: row.effectiveStatus,
           dailyBudget: row.dailyBudget,
           lifetimeBudget: row.lifetimeBudget,
           optimizationGoal: row.optimizationGoal,
@@ -675,8 +667,8 @@ async function cloneLocalObject(args: {
         adsetMetaId: row.adsetMetaId,
         metaId: args.newId,
         name: applyLocalRename(row.name, args.renameOptions),
-        status: 'PAUSED',
-        effectiveStatus: 'PAUSED',
+        status: row.status,
+        effectiveStatus: row.effectiveStatus,
         creativeId: row.creativeId,
         metaUpdatedTime: now,
         lastSyncedAt: now,

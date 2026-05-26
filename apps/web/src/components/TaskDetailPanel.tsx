@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 import { api, type TaskLayerProgress, type TaskLayerProgressItem } from '@/lib/api';
 import {
   Table,
@@ -18,9 +19,12 @@ const TASK_STATUS_COLOR: Record<string, string> = {
   partial: 'text-amber-600',
   failed: 'text-rose-600',
   running: 'text-blue-600',
+  paused: 'text-amber-600',
   pending: 'text-muted-foreground',
   cancelled: 'text-muted-foreground',
 };
+
+const TERMINAL_TASK_STATUSES = new Set(['success', 'failed', 'partial', 'cancelled']);
 
 export function TaskDetailPanel({
   taskId,
@@ -34,8 +38,29 @@ export function TaskDetailPanel({
   error: unknown;
 }) {
   const layers = detail?.layerProgress ?? emptyLayerProgress();
-  const completed = detail ? detail.success + detail.failed : 0;
-  const pct = detail?.total ? Math.min(100, Math.round((completed / detail.total) * 100)) : 0;
+  const stepTotals = layers.reduce(
+    (sum, layer) => ({
+      total: sum.total + layer.total,
+      success: sum.success + layer.success,
+      failed: sum.failed + layer.failed,
+      running: sum.running + layer.running,
+      pending: sum.pending + layer.pending,
+    }),
+    { total: 0, success: 0, failed: 0, running: 0, pending: 0 },
+  );
+  const displayTotal = stepTotals.total > 0 ? stepTotals.total : (detail?.total ?? 0);
+  const displaySuccess = stepTotals.total > 0 ? stepTotals.success : (detail?.success ?? 0);
+  const displayFailed = stepTotals.total > 0 ? stepTotals.failed : (detail?.failed ?? 0);
+  const completed = displaySuccess + displayFailed;
+  const pct = displayTotal ? Math.min(100, Math.round((completed / displayTotal) * 100)) : 0;
+  const liveTask = detail ? !isTerminalTaskStatus(detail.status) : false;
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!liveTask) return;
+    const id = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [liveTask]);
 
   return (
     <div className="space-y-4">
@@ -43,25 +68,30 @@ export function TaskDetailPanel({
         <div className="font-mono text-xs text-muted-foreground">task: {taskId}</div>
         {detail ? (
           <>
-            <div className="mt-3 grid gap-3 md:grid-cols-5">
+            <div className="mt-3 grid gap-3 md:grid-cols-6">
               <TaskMetric label="类型" value={detail.type} />
               <TaskMetric
                 label="状态"
                 value={taskStatusLabel(detail.status)}
                 className={TASK_STATUS_COLOR[detail.status] ?? ''}
               />
-              <TaskMetric label="总计" value={detail.total} />
-              <TaskMetric label="成功" value={detail.success} className="text-emerald-700" />
+              <TaskMetric label="总计" value={displayTotal} />
+              <TaskMetric label="成功" value={displaySuccess} className="text-emerald-700" />
               <TaskMetric
                 label="失败"
-                value={detail.failed}
-                className={detail.failed > 0 ? 'text-rose-700' : ''}
+                value={displayFailed}
+                className={displayFailed > 0 ? 'text-rose-700' : ''}
+              />
+              <TaskMetric
+                label="任务时间"
+                value={formatTaskDuration(detail.status, detail.createdAt, detail.updatedAt, nowMs)}
               />
             </div>
             <div className="mt-4">
               <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
                 <span>
-                  已处理 {completed} / {detail.total}，进度 {pct}%
+                  已处理 {completed} / {displayTotal}，进度 {pct}%
+                  {stepTotals.total > 0 ? `，处理中 ${stepTotals.running}，等待 ${stepTotals.pending}` : ''}
                 </span>
                 <span>最后更新 {formatUpdatedAt(detail.updatedAt)}</span>
               </div>
@@ -122,7 +152,6 @@ function TaskLayerProgressRow({
   layer: TaskLayerProgress;
 }) {
   const done = layer.success + layer.failed;
-  const active = layer.running + layer.pending;
   const width = layer.total > 0 ? Math.min(100, Math.round((done / layer.total) * 100)) : 0;
   return (
     <div className="rounded-md border bg-background p-4">
@@ -138,7 +167,8 @@ function TaskLayerProgressRow({
       <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
         <span className="text-emerald-700">成功 {layer.success}</span>
         <span className={layer.failed > 0 ? 'text-rose-700' : ''}>失败 {layer.failed}</span>
-        <span>处理中 {active}</span>
+        <span>处理中 {layer.running}</span>
+        <span>等待 {layer.pending}</span>
       </div>
       <div className="mt-4 grid gap-3 xl:grid-cols-2">
         <TaskLayerItemDetails
@@ -223,6 +253,25 @@ function shortDetail(value: string): string {
 function formatUpdatedAt(value: number): string {
   if (!Number.isFinite(value)) return '-';
   return new Date(value).toLocaleString();
+}
+
+function isTerminalTaskStatus(status: string): boolean {
+  return TERMINAL_TASK_STATUSES.has(status);
+}
+
+function formatTaskDuration(
+  status: string,
+  createdAt: string,
+  updatedAt: number | null | undefined,
+  nowMs: number,
+): string {
+  const createdMs = Date.parse(createdAt);
+  if (!Number.isFinite(createdMs)) return '-';
+  const terminal = isTerminalTaskStatus(status);
+  const endMs = terminal ? updatedAt : nowMs;
+  if (typeof endMs !== 'number' || !Number.isFinite(endMs)) return terminal ? '完成 -' : '-';
+  const seconds = Math.max(0, Math.floor((endMs - createdMs) / 1000));
+  return terminal ? `完成 ${seconds} 秒` : `已用 ${seconds} 秒`;
 }
 
 function emptyLayerProgress(): TaskLayerProgress[] {
