@@ -5,6 +5,7 @@ import { db, schema } from '../../lib/db';
 import { redis } from '../../lib/redis';
 import { HttpError } from '../../lib/http-error';
 import type { AuthPrincipal } from '../iam/auth-service';
+import { deleteManagedUser } from '../iam/user-service';
 
 export interface CompanyListItem {
   id: string;
@@ -258,6 +259,9 @@ export async function updateCompanyUser(
   userId: string,
   patch: { roleCode?: string; status?: 'active' | 'disabled' },
 ): Promise<void> {
+  if (!isPlatformAdmin(principal)) {
+    throw new HttpError(403, 403, '仅平台超管可以修改用户');
+  }
   assertCompanyAccess(principal, companyId);
   if (userId === principal.userId && patch.status === 'disabled') {
     throw new HttpError(422, 422, '不能禁用自己');
@@ -308,6 +312,15 @@ export async function updateCompanyUser(
   });
 
   await invalidateUser(userId);
+}
+
+export async function deleteCompanyUser(
+  principal: AuthPrincipal,
+  companyId: string,
+  userId: string,
+) {
+  assertCompanyAccess(principal, companyId);
+  return deleteManagedUser(principal, userId, companyId);
 }
 
 async function ensureCompanyRoles(tx: typeof db, companyId: string): Promise<void> {

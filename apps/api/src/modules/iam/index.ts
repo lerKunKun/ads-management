@@ -70,6 +70,26 @@ export const iam = new Elysia({ name: 'iam', prefix: '/iam' })
         },
       }))
       .post(
+        '/me/password',
+        async ({ principal, body, request }) => {
+          await users.changeOwnPassword(principal, body);
+          await writeAudit({
+            companyId: principal.companyId,
+            userId: principal.userId,
+            action: 'iam:password:update',
+            resource: `user:${principal.userId}`,
+            ...(ipOf(request) ? { ip: ipOf(request)! } : {}),
+          });
+          return { code: 0, msg: 'ok', data: null };
+        },
+        {
+          body: t.Object({
+            currentPassword: t.String({ minLength: 1, maxLength: 128 }),
+            newPassword: t.String({ minLength: 8, maxLength: 128 }),
+          }),
+        },
+      )
+      .post(
         '/switch-company',
         async ({ principal, body, request, set }) => {
           if (!principal.roles.includes('PlatformAdmin')) {
@@ -164,6 +184,25 @@ export const iam = new Elysia({ name: 'iam', prefix: '/iam' })
             roleCode: t.Optional(t.String()),
             status: t.Optional(t.Union([t.Literal('active'), t.Literal('disabled')])),
           }),
+          beforeHandle: requirePermission('iam:manage'),
+        },
+      )
+      .delete(
+        '/users/:id',
+        async ({ principal, params, request }) => {
+          const data = await users.deleteManagedUser(principal, params.id);
+          await writeAudit({
+            companyId: principal.companyId,
+            userId: principal.userId,
+            action: 'iam:user:delete',
+            resource: `user:${params.id}`,
+            detail: data,
+            ...(ipOf(request) ? { ip: ipOf(request)! } : {}),
+          });
+          return { code: 0, msg: 'ok', data };
+        },
+        {
+          params: t.Object({ id: t.String({ format: 'uuid' }) }),
           beforeHandle: requirePermission('iam:manage'),
         },
       )

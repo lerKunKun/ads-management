@@ -35,6 +35,16 @@ export interface RoleOption {
 
 const ROLE_ALLOW = new Set(['CompanyAdmin', 'Operator', 'Viewer']);
 
+function isPlatformAdmin(principal: AuthPrincipal): boolean {
+  return principal.roles.includes('PlatformAdmin');
+}
+
+function assertPlatformAdmin(principal: AuthPrincipal): void {
+  if (!isPlatformAdmin(principal)) {
+    throw new HttpError(403, 403, '仅平台超管可以执行此操作');
+  }
+}
+
 async function bumpPermCache(userId: string): Promise<void> {
   const stream = redis.scanStream({ match: `perm:${userId}:*`, count: 50 });
   const keys: string[] = [];
@@ -44,6 +54,46 @@ async function bumpPermCache(userId: string): Promise<void> {
     stream.on('error', reject);
   });
   if (keys.length > 0) await redis.del(...keys);
+}
+
+export async function changeOwnPassword(
+  principal: AuthPrincipal,
+  args: { currentPassword: string; newPassword: string },
+): Promise<void> {
+  assertPlatformAdmin(principal);
+  if (args.newPassword.length < 8) {
+    throw new HttpError(422, 422, '新密码至少 8 位');
+  }
+  if (args.currentPassword === args.newPassword) {
+    throw new HttpError(422, 422, '新密码不能和当前密码相同');
+  }
+
+  await db.transaction(async (tx) => {
+    await tx.execute(dsql`SELECT set_config('app.bypass_rls', '1', true)`);
+    const user = (
+      await tx
+        .select({
+          id: schema.users.id,
+          pwdHash: schema.users.pwdHash,
+          status: schema.users.status,
+        })
+        .from(schema.users)
+        .where(eq(schema.users.id, principal.userId))
+        .limit(1)
+    )[0];
+    if (!user || user.status !== 'active') {
+      throw new HttpError(404, 404, '用户不存在或已禁用');
+    }
+
+    const ok = await bcrypt.compare(args.currentPassword, user.pwdHash);
+    if (!ok) throw new HttpError(401, 401, '当前密码不正确');
+
+    await tx
+      .update(schema.users)
+      .set({ pwdHash: await bcrypt.hash(args.newPassword, 10) })
+      .where(eq(schema.users.id, principal.userId));
+  });
+  await bumpPermCache(principal.userId);
 }
 
 /** 列出本公司用户(含角色 + 作用域计数) */
@@ -156,6 +206,7 @@ export async function updateUser(
   userId: string,
   patch: { roleCode?: string; status?: 'active' | 'disabled' },
 ): Promise<void> {
+  assertPlatformAdmin(principal);
   if (userId === principal.userId && patch.status === 'disabled') {
     throw new HttpError(422, 422, '不能禁用自己');
   }
@@ -205,6 +256,80 @@ export async function updateUser(
     }
   });
   await bumpPermCache(userId);
+}
+
+export async function deleteManagedUser(
+  principal: AuthPrincipal,
+  userId: string,
+  companyId = principal.companyId,
+): Promise<{
+  id: string;
+  email: string;
+  auditLogsDetached: number;
+  tasksReassigned: number;
+  grantsReassigned: number;
+}> {
+  assertPlatformAdmin(principal);
+  if (userId === principal.userId) {
+    throw new HttpError(422, 422, '不能删除自己');
+  }
+
+  const result = await db.transaction(async (tx) => {
+    await tx.execute(dsql`SELECT set_config('app.bypass_rls', '1', true)`);
+    const target = (
+      await tx.execute(dsql`
+        SELECT
+          u.id::text AS id,
+          u.email AS email,
+          COALESCE(
+            ARRAY_AGG(DISTINCT r.code) FILTER (WHERE r.code IS NOT NULL),
+            '{}'::text[]
+          ) AS roles
+        FROM users u
+        LEFT JOIN user_roles ur ON ur.user_id = u.id
+        LEFT JOIN roles r ON r.id = ur.role_id
+        WHERE u.id = ${userId} AND u.company_id = ${companyId}
+        GROUP BY u.id, u.email
+        LIMIT 1
+      `)
+    )[0] as { id: string; email: string; roles: string[] } | undefined;
+    if (!target) throw new HttpError(404, 404, '用户不存在');
+    if ((target.roles ?? []).includes('PlatformAdmin')) {
+      throw new HttpError(422, 422, '不能删除平台超管');
+    }
+
+    const grantsReassigned = await tx
+      .update(schema.userResourceGrants)
+      .set({ grantedBy: principal.userId })
+      .where(eq(schema.userResourceGrants.grantedBy, userId))
+      .returning({ id: schema.userResourceGrants.id });
+    const auditLogsDetached = await tx
+      .update(schema.auditLogs)
+      .set({ userId: null })
+      .where(eq(schema.auditLogs.userId, userId))
+      .returning({ id: schema.auditLogs.id });
+    const tasksReassigned = await tx
+      .update(schema.operationTasks)
+      .set({ userId: principal.userId })
+      .where(eq(schema.operationTasks.userId, userId))
+      .returning({ id: schema.operationTasks.id });
+    const deleted = await tx
+      .delete(schema.users)
+      .where(eq(schema.users.id, userId))
+      .returning({ id: schema.users.id, email: schema.users.email });
+    if (!deleted[0]) throw new HttpError(404, 404, '用户不存在');
+
+    return {
+      id: deleted[0].id,
+      email: deleted[0].email,
+      auditLogsDetached: auditLogsDetached.length,
+      tasksReassigned: tasksReassigned.length,
+      grantsReassigned: grantsReassigned.length,
+    };
+  });
+
+  await bumpPermCache(userId);
+  return result;
 }
 
 /** 列可分配角色 */

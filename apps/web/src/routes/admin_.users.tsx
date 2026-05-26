@@ -1,7 +1,7 @@
 import { createFileRoute, redirect, Link, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useState } from 'react';
-import { Building2, Plus, ShieldCheck, Users } from 'lucide-react';
+import { Building2, KeyRound, Plus, ShieldCheck, Trash2, Users } from 'lucide-react';
 import { api, getToken, setToken, type Me } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -67,6 +67,9 @@ function UsersPage() {
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<UserRow | null>(null);
+  const [notice, setNotice] = useState('');
 
   useEffect(() => {
     if (!me.data || companies.length === 0) return;
@@ -107,6 +110,27 @@ function UsersPage() {
     },
   });
 
+  const deleteUser = useMutation({
+    mutationFn: ({ companyId, id }: { companyId: string; id: string }) =>
+      api.deleteCompanyUser(companyId, id),
+    onSuccess: (_data, variables) => {
+      setDeleteTarget(null);
+      setNotice('用户已删除');
+      qc.invalidateQueries({ queryKey: ['admin', 'companies'] });
+      qc.invalidateQueries({ queryKey: ['admin', 'company-users', variables.companyId] });
+      qc.invalidateQueries({ queryKey: ['admin', 'users'] });
+    },
+  });
+
+  const changePassword = useMutation({
+    mutationFn: (args: { currentPassword: string; newPassword: string }) =>
+      api.changeOwnPassword(args),
+    onSuccess: () => {
+      setPasswordDialogOpen(false);
+      setNotice('超管密码已更新');
+    },
+  });
+
   const switchCompany = useMutation({
     mutationFn: (companyId: string) => api.switchCompany(companyId),
   });
@@ -132,6 +156,8 @@ function UsersPage() {
     (usersQ.error as Error | null)?.message ??
     (create.error as Error | null)?.message ??
     (update.error as Error | null)?.message ??
+    (deleteUser.error as Error | null)?.message ??
+    (changePassword.error as Error | null)?.message ??
     (switchCompany.error as Error | null)?.message;
 
   async function goIam(userId?: string) {
@@ -149,7 +175,14 @@ function UsersPage() {
     patch: { roleCode?: RoleCode; status?: 'active' | 'disabled' },
   ) {
     if (!selectedCompany) return;
+    setNotice('');
     update.mutate({ companyId: selectedCompany.id, id: user.id, patch });
+  }
+
+  function confirmDeleteUser() {
+    if (!selectedCompany || !deleteTarget) return;
+    setNotice('');
+    deleteUser.mutate({ companyId: selectedCompany.id, id: deleteTarget.id });
   }
 
   return (
@@ -169,6 +202,12 @@ function UsersPage() {
           <h1 className="mt-1 text-xl font-semibold">用户与角色</h1>
         </div>
         <div className="flex gap-2">
+          {isPlatformAdmin && (
+            <Button variant="outline" size="sm" onClick={() => setPasswordDialogOpen(true)}>
+              <KeyRound className="mr-2 h-4 w-4" />
+              修改超管密码
+            </Button>
+          )}
           <Button
             variant="outline"
             size="sm"
@@ -188,6 +227,11 @@ function UsersPage() {
       {error && (
         <p className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
           {error}
+        </p>
+      )}
+      {notice && (
+        <p className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+          {notice}
         </p>
       )}
 
@@ -287,10 +331,13 @@ function UsersPage() {
                 key={user.id}
                 user={user}
                 company={selectedCompany}
-                updating={update.isPending}
+                currentUserId={me.data?.id ?? ''}
+                canManageUsers={isPlatformAdmin}
+                updating={update.isPending || deleteUser.isPending}
                 switching={switchCompany.isPending}
                 onUpdate={(patch) => updateUser(user, patch)}
                 onIam={() => goIam(user.id)}
+                onDelete={() => setDeleteTarget(user)}
               />
             ))}
           </TableBody>
@@ -310,6 +357,21 @@ function UsersPage() {
         onSubmit={(args) => create.mutate(args)}
         submitting={create.isPending}
       />
+      <ChangePasswordDialog
+        open={passwordDialogOpen}
+        onCancel={() => setPasswordDialogOpen(false)}
+        onSubmit={(args) => {
+          setNotice('');
+          changePassword.mutate(args);
+        }}
+        submitting={changePassword.isPending}
+      />
+      <DeleteUserDialog
+        user={deleteTarget}
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={confirmDeleteUser}
+        submitting={deleteUser.isPending}
+      />
     </div>
   );
 }
@@ -317,20 +379,29 @@ function UsersPage() {
 function UserTableRow({
   user,
   company,
+  currentUserId,
+  canManageUsers,
   updating,
   switching,
   onUpdate,
   onIam,
+  onDelete,
 }: {
   user: UserRow;
   company: CompanyRow | null;
+  currentUserId: string;
+  canManageUsers: boolean;
   updating: boolean;
   switching: boolean;
   onUpdate: (patch: { roleCode?: RoleCode; status?: 'active' | 'disabled' }) => void;
   onIam: () => void;
+  onDelete: () => void;
 }) {
   const companyRole = ROLE_OPTIONS.find((role) => user.roles.includes(role.code))?.code ?? '';
   const isPlatformAdmin = user.roles.includes('PlatformAdmin');
+  const isSelf = user.id === currentUserId;
+  const canEditThisUser = canManageUsers && !isPlatformAdmin;
+  const canDeleteThisUser = canEditThisUser && !isSelf;
 
   return (
     <TableRow>
@@ -347,7 +418,7 @@ function UserTableRow({
           <select
             className="h-8 rounded-md border border-input bg-background px-2 text-sm"
             value={companyRole}
-            disabled={updating}
+            disabled={updating || !canEditThisUser}
             onChange={(event) => onUpdate({ roleCode: event.target.value as RoleCode })}
           >
             {!companyRole && <option value="">未分配</option>}
@@ -368,7 +439,7 @@ function UserTableRow({
         <select
           className="h-8 rounded-md border border-input bg-background px-2 text-sm"
           value={user.status}
-          disabled={updating}
+          disabled={updating || !canEditThisUser}
           onChange={(event) => onUpdate({ status: event.target.value as 'active' | 'disabled' })}
         >
           <option value="active">{userStatusLabel('active')}</option>
@@ -379,9 +450,23 @@ function UserTableRow({
         {new Date(user.createdAt).toLocaleString()}
       </TableCell>
       <TableCell className="text-right">
-        <Button size="sm" variant="outline" disabled={switching} onClick={onIam}>
-          IAM权限管理
-        </Button>
+        <div className="flex justify-end gap-2">
+          <Button size="sm" variant="outline" disabled={switching} onClick={onIam}>
+            IAM权限管理
+          </Button>
+          {canManageUsers && (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={updating || !canDeleteThisUser}
+              onClick={onDelete}
+              title={isPlatformAdmin ? '平台超管不能删除' : isSelf ? '不能删除自己' : '删除用户'}
+            >
+              <Trash2 className="mr-1 h-3 w-3" />
+              删除
+            </Button>
+          )}
+        </div>
       </TableCell>
     </TableRow>
   );
@@ -460,6 +545,113 @@ function CreateUserDialog({
           onClick={() => onSubmit({ email, password, roleCode })}
         >
           {submitting ? '创建中...' : '创建'}
+        </Button>
+      </DialogFooter>
+    </Dialog>
+  );
+}
+
+function ChangePasswordDialog({
+  open,
+  onCancel,
+  onSubmit,
+  submitting,
+}: {
+  open: boolean;
+  onCancel: () => void;
+  onSubmit: (args: { currentPassword: string; newPassword: string }) => void;
+  submitting: boolean;
+}) {
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const mismatch = !!confirmPassword && newPassword !== confirmPassword;
+
+  useEffect(() => {
+    if (!open) return;
+    setCurrentPassword('');
+    setNewPassword('');
+    setConfirmPassword('');
+  }, [open]);
+
+  return (
+    <Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && onCancel()} title="修改超管密码">
+      <div className="space-y-3">
+        <div>
+          <label className="text-sm text-muted-foreground">当前密码</label>
+          <Input
+            type="password"
+            autoComplete="current-password"
+            value={currentPassword}
+            onChange={(event) => setCurrentPassword(event.target.value)}
+          />
+        </div>
+        <div>
+          <label className="text-sm text-muted-foreground">新密码，至少 8 位</label>
+          <Input
+            type="password"
+            autoComplete="new-password"
+            value={newPassword}
+            onChange={(event) => setNewPassword(event.target.value)}
+          />
+        </div>
+        <div>
+          <label className="text-sm text-muted-foreground">确认新密码</label>
+          <Input
+            type="password"
+            autoComplete="new-password"
+            value={confirmPassword}
+            onChange={(event) => setConfirmPassword(event.target.value)}
+          />
+          {mismatch && <p className="mt-1 text-xs text-destructive">两次输入的新密码不一致</p>}
+        </div>
+      </div>
+      <DialogFooter>
+        <Button variant="outline" onClick={onCancel} disabled={submitting}>
+          取消
+        </Button>
+        <Button
+          disabled={
+            submitting ||
+            !currentPassword ||
+            newPassword.length < 8 ||
+            newPassword !== confirmPassword
+          }
+          onClick={() => onSubmit({ currentPassword, newPassword })}
+        >
+          {submitting ? '保存中...' : '保存'}
+        </Button>
+      </DialogFooter>
+    </Dialog>
+  );
+}
+
+function DeleteUserDialog({
+  user,
+  onCancel,
+  onConfirm,
+  submitting,
+}: {
+  user: UserRow | null;
+  onCancel: () => void;
+  onConfirm: () => void;
+  submitting: boolean;
+}) {
+  return (
+    <Dialog open={!!user} onOpenChange={(nextOpen) => !nextOpen && onCancel()} title="删除用户">
+      <div className="space-y-2 text-sm">
+        <p>确认删除这个用户？</p>
+        <p className="rounded-md bg-muted px-3 py-2 font-mono text-xs">{user?.email ?? '-'}</p>
+        <p className="text-muted-foreground">
+          删除后会移除该用户的角色和广告账户授权，历史审计记录会保留。
+        </p>
+      </div>
+      <DialogFooter>
+        <Button variant="outline" onClick={onCancel} disabled={submitting}>
+          取消
+        </Button>
+        <Button variant="destructive" disabled={submitting || !user} onClick={onConfirm}>
+          {submitting ? '删除中...' : '确认删除'}
         </Button>
       </DialogFooter>
     </Dialog>

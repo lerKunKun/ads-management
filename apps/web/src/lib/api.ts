@@ -244,6 +244,11 @@ export const api = {
       body: JSON.stringify({ email, password }),
     }),
   me: () => call<Me>('/iam/me'),
+  changeOwnPassword: (args: { currentPassword: string; newPassword: string }) =>
+    call<null>('/iam/me/password', {
+      method: 'POST',
+      body: JSON.stringify(args),
+    }),
   switchCompany: (companyId: string) =>
     call<{ token: string; user: Omit<Me, 'scope'> }>('/iam/switch-company', {
       method: 'POST',
@@ -415,6 +420,14 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify(patch),
     }),
+  deleteUser: (id: string) =>
+    call<{
+      id: string;
+      email: string;
+      auditLogsDetached: number;
+      tasksReassigned: number;
+      grantsReassigned: number;
+    }>(`/iam/users/${id}`, { method: 'DELETE' }),
   listRoles: () =>
     call<Array<{ id: string; code: string; name: string; scope: 'platform' | 'company' }>>(
       '/iam/roles',
@@ -480,6 +493,14 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify(patch),
     }),
+  deleteCompanyUser: (companyId: string, userId: string) =>
+    call<{
+      id: string;
+      email: string;
+      auditLogsDetached: number;
+      tasksReassigned: number;
+      grantsReassigned: number;
+    }>(`/_admin/companies/${companyId}/users/${userId}`, { method: 'DELETE' }),
   listBreakers: () =>
     call<
       Array<{ key: string; kind: 'adacct' | 'fb'; target: string; reason: string; ttl: number }>

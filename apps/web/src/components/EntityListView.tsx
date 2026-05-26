@@ -833,7 +833,7 @@ function SortableMetricHead({
   );
 }
 
-const SUMMARY_CELL_CLASS = 'sticky bottom-0 z-20 bg-[#73BEFF]/50';
+const SUMMARY_CELL_CLASS = 'sticky bottom-0 z-20 bg-[#B9DEFF]';
 
 function SummaryRow({
   mode,
@@ -848,7 +848,7 @@ function SummaryRow({
 }) {
   const label = mode === 'selected' ? `已选 ${summary.rows} 项` : `全部 ${summary.rows} 项`;
   return (
-    <TableRow className="border-t hover:bg-[#73BEFF]/50">
+    <TableRow className="border-t bg-[#B9DEFF] hover:bg-[#B9DEFF]">
       <TableCell className={`${SUMMARY_CELL_CLASS} w-12 px-2`} />
       <TableCell className={`${SUMMARY_CELL_CLASS} w-12`} />
       <TableCell className={`${SUMMARY_CELL_CLASS} font-semibold`}>
