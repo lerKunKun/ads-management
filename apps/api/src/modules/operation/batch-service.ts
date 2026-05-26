@@ -11,7 +11,7 @@ import { createHash } from 'node:crypto';
 import { db, schema } from '../../lib/db';
 import {
   RabbitMqPublishError,
-  publishOperation,
+  publishOperations,
   type OperationCopyBatchItem,
   type OperationMessage,
 } from '../../lib/rabbitmq-topology';
@@ -265,18 +265,18 @@ export async function batchEnqueue(
     });
   }
 
-  for (const msg of FAKE_MODE ? messages : publishMessages(messages, action)) {
-    if (FAKE_MODE) {
+  if (FAKE_MODE) {
+    for (const msg of messages) {
       await executeFakeBatchItem(msg);
-    } else {
-      try {
-        await publishOperation(msg);
-      } catch (err) {
-        if (err instanceof RabbitMqPublishError) {
-          throw new HttpError(503, 1006, 'queue service unavailable, please retry');
-        }
-        throw err;
+    }
+  } else {
+    try {
+      await publishOperations(publishMessages(messages, action));
+    } catch (err) {
+      if (err instanceof RabbitMqPublishError) {
+        throw new HttpError(503, 1006, 'queue service unavailable, please retry');
       }
+      throw err;
     }
   }
 

@@ -178,6 +178,43 @@ async function publishConfirmed(
   }
 }
 
+async function publishManyConfirmed(
+  messages: OperationMessage[],
+  chunkSize = 200,
+): Promise<void> {
+  if (messages.length === 0) return;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      await assertTopology();
+      const c = await getChannel();
+      for (let offset = 0; offset < messages.length; offset += chunkSize) {
+        const chunk = messages.slice(offset, offset + chunkSize);
+        for (const msg of chunk) {
+          const rk = shardKey(msg.adAccountId);
+          const buf = Buffer.from(JSON.stringify(msg));
+          c.publish(RMQ.exchange, rk, buf, {
+            persistent: true,
+            priority: priorityFor(msg.action),
+            messageId: msg.itemId,
+            headers: publishHeaders(msg),
+          });
+        }
+        await c.waitForConfirms();
+      }
+      return;
+    } catch (err) {
+      await closeCachedConnection();
+      if (attempt === 2) {
+        throw new RabbitMqPublishError(
+          `RabbitMQ batch publish failed after reconnect: ${errorMessage(err)}`,
+          err,
+        );
+      }
+      await sleep(250);
+    }
+  }
+}
+
 export function shardKey(adAccountId: string): string {
   let h = 0;
   for (let i = 0; i < adAccountId.length; i++) {
@@ -262,6 +299,10 @@ export async function publishOperation(msg: OperationMessage): Promise<void> {
   const rk = shardKey(msg.adAccountId);
   const buf = Buffer.from(JSON.stringify(msg));
   await publishConfirmed(RMQ.exchange, rk, msg, buf, publishHeaders(msg));
+}
+
+export async function publishOperations(messages: OperationMessage[]): Promise<void> {
+  await publishManyConfirmed(messages);
 }
 
 /** 入 per-shard retry queue. TTL 到期后 dead-letter 回主 shard 队列。 */

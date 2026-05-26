@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 import { api, type TaskLayerProgress, type TaskLayerProgressItem } from '@/lib/api';
 import {
   Table,
@@ -22,6 +23,8 @@ const TASK_STATUS_COLOR: Record<string, string> = {
   pending: 'text-muted-foreground',
   cancelled: 'text-muted-foreground',
 };
+
+const TERMINAL_TASK_STATUSES = new Set(['success', 'failed', 'partial', 'cancelled']);
 
 export function TaskDetailPanel({
   taskId,
@@ -50,6 +53,14 @@ export function TaskDetailPanel({
   const displayFailed = stepTotals.total > 0 ? stepTotals.failed : (detail?.failed ?? 0);
   const completed = displaySuccess + displayFailed;
   const pct = displayTotal ? Math.min(100, Math.round((completed / displayTotal) * 100)) : 0;
+  const liveTask = detail ? !isTerminalTaskStatus(detail.status) : false;
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!liveTask) return;
+    const id = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [liveTask]);
 
   return (
     <div className="space-y-4">
@@ -57,7 +68,7 @@ export function TaskDetailPanel({
         <div className="font-mono text-xs text-muted-foreground">task: {taskId}</div>
         {detail ? (
           <>
-            <div className="mt-3 grid gap-3 md:grid-cols-5">
+            <div className="mt-3 grid gap-3 md:grid-cols-6">
               <TaskMetric label="类型" value={detail.type} />
               <TaskMetric
                 label="状态"
@@ -70,6 +81,10 @@ export function TaskDetailPanel({
                 label="失败"
                 value={displayFailed}
                 className={displayFailed > 0 ? 'text-rose-700' : ''}
+              />
+              <TaskMetric
+                label="任务时间"
+                value={formatTaskDuration(detail.status, detail.createdAt, detail.updatedAt, nowMs)}
               />
             </div>
             <div className="mt-4">
@@ -238,6 +253,25 @@ function shortDetail(value: string): string {
 function formatUpdatedAt(value: number): string {
   if (!Number.isFinite(value)) return '-';
   return new Date(value).toLocaleString();
+}
+
+function isTerminalTaskStatus(status: string): boolean {
+  return TERMINAL_TASK_STATUSES.has(status);
+}
+
+function formatTaskDuration(
+  status: string,
+  createdAt: string,
+  updatedAt: number | null | undefined,
+  nowMs: number,
+): string {
+  const createdMs = Date.parse(createdAt);
+  if (!Number.isFinite(createdMs)) return '-';
+  const terminal = isTerminalTaskStatus(status);
+  const endMs = terminal ? updatedAt : nowMs;
+  if (typeof endMs !== 'number' || !Number.isFinite(endMs)) return terminal ? '完成 -' : '-';
+  const seconds = Math.max(0, Math.floor((endMs - createdMs) / 1000));
+  return terminal ? `完成 ${seconds} 秒` : `已用 ${seconds} 秒`;
 }
 
 function emptyLayerProgress(): TaskLayerProgress[] {

@@ -190,7 +190,12 @@ Worker copy branch
 代码中保留了旧的 `executeAsyncCopyBatchProvider()` / `copyCampaign()` 等 async 路径，但**均未接入主路径，属于死代码**，勿误读。
 
 **Copy V2 JSONB 状态机**（`apps/worker/src/copy-v2-jsonb.ts`）：  
-处理大型 campaign（广告数 ≥ `COPY_V2_MIN_AD_COUNT` 或广告组数 ≥ `COPY_V2_MIN_ADSET_COUNT`）的有限并发复制，使用 JSONB 字段持久化步骤状态防止重复创建。默认关闭（`COPY_V2_JSONB_ENABLED=0`），通过 `COPY_V2_ACCOUNT_ALLOWLIST` 按广告账户灰度开启。
+处理大型 campaign（广告数 ≥ `COPY_V2_MIN_AD_COUNT` 或广告组数 ≥ `COPY_V2_MIN_ADSET_COUNT`）的有限并发复制，使用持久化表（`operation_copy_workflows` + `operation_copy_steps`）防止进程崩溃后重复创建对象。通过 Redis ZSET 信号量（`COPY_V2_GLOBAL_CONCURRENCY`）跨 Worker 控制全局并发。默认关闭（`COPY_V2_JSONB_ENABLED=0`），通过 `COPY_V2_ACCOUNT_ALLOWLIST` 按广告账户灰度开启。
+
+**任务控制**（pause / resume / stop）：
+- `POST /operations/:taskId/pause` → 任务状态改为 `paused`，Worker 在 `assertTaskRunnable()` 处抛 `TaskPausedError` 后停止处理新消息
+- `POST /operations/:taskId/resume` → 状态改回 `running`，后续消息可继续消费
+- `POST /operations/:taskId/stop` → 状态改为 `cancelled`，Worker 抛 `TaskCancelledError`，已入队消息最终会 nack/dead
 
 **RabbitMQ 拓扑**：
 - Exchange `ad.ops`（direct）+ 16 个 shard 主队列（`shard.0`…`shard.15`）
@@ -228,15 +233,24 @@ fb_accounts      (id, company_id, fb_user_id, name, access_token_enc, token_expi
 ad_accounts      (id, fb_account_id, company_id, meta_act_id, name, currency, timezone_name,
                   business_country_code, status, last_synced_at)
 user_resource_grants (id, user_id, resource_type['fb_account'|'ad_account'], resource_id, granted_by)
-operation_tasks      (id, company_id, user_id, type, status, total, success, failed, payload jsonb)
+operation_tasks      (id, company_id, user_id, type, status[pending|running|paused|partial|success|failed|cancelled],
+                      total, success, failed, payload jsonb)
 operation_task_items (id, task_id, ad_account_id, target_type, target_id, action,
                       idempotency_key, status, error, attempts)
+operation_copy_workflows  # Copy V2 状态机（每个大型 campaign copy item 对应一行）
+  (id, task_id, task_item_id, company_id, fb_account_id, ad_account_id, meta_act_id,
+   source_campaign_id, new_campaign_id, status, phase, state jsonb, version,
+   lease_owner, lease_until, error)
+operation_copy_steps      # Copy V2 每个创建步骤（campaign/adset/ad 各一行）
+  (id, workflow_id, task_id, task_item_id, company_id, step_key, source_type, source_id,
+   parent_step_key, new_id, status, attempt, lease_owner, lease_until, error, metadata jsonb)
 campaigns / adsets / ads  # 广告对象快照（packages/db/src/schema/ad-objects.ts）
 audit_logs       (id, company_id, user_id, action, resource, detail, ip, created_at)
 ```
 
 - 预算字段用整数（分/最小货币单位），不用浮点
 - 广告对象快照表用于 `META_FAKE=1` 模式和减少 Meta API 调用
+- `operation_copy_workflows` / `operation_copy_steps` 是 Copy V2 的持久化状态机，用于防止进程崩溃或 Worker 重启后重复创建对象；通过 `lease_owner` + `lease_until` + `version` 乐观锁协调并发 Worker
 
 ---
 
@@ -315,6 +329,7 @@ Token 续期：CRM 无 refresh 端点。定时扫 `token_expires_at < NOW()+7d`�
 | 前端接口类型 + fetch 客户端 | `apps/web/src/lib/api.ts` |
 | 前端路由树（**自动生成，禁止手动修改**） | `apps/web/src/routeTree.gen.ts` |
 | Copy V2 JSONB 状态机（大型 campaign） | `apps/worker/src/copy-v2-jsonb.ts` |
+| 任务暂停/恢复/停止控制 | `apps/worker/src/task-control.ts` |
 | 当前复制链路文档 | `docs/copy-flow-serial-current.md` |
 | 批量复制旧链路（历史文档） | `docs/batch-copy-flow-current.md` |
 
@@ -341,8 +356,20 @@ Token 续期：CRM 无 refresh 端点。定时扫 `token_expires_at < NOW()+7d`�
 | `COPY_V2_MIN_ADSET_COUNT` | `5` | 广告组数达到此阈值时路由到 V2 |
 | `COPY_V2_ADSET_CONCURRENCY` | `2` | V2 广告组并发数 |
 | `COPY_V2_AD_CONCURRENCY` | `3` | V2 广告并发数 |
+| `COPY_V2_GLOBAL_QPS` | `27` | V2 全局 Meta API QPS 限制 |
+| `COPY_V2_GLOBAL_BURST` | `100` | V2 全局突发容量 |
+| `COPY_V2_GLOBAL_CONCURRENCY` | `120` | V2 全局并发 worker 信号量上限 |
+| `COPY_V2_GLOBAL_LEASE_TTL_MS` | `120000` | V2 信号量租约超时（毫秒） |
+| `COPY_V2_AD_ACCOUNT_QPS` | `6` | V2 单广告账户 QPS |
+| `COPY_V2_AD_ACCOUNT_BURST` | `24` | V2 单广告账户突发容量 |
+| `COPY_V2_INSPECT_CONCURRENCY` | `32` | V2 预检并发数 |
+| `COPY_V2_VERIFY_CONCURRENCY` | `32` | V2 字段校验并发数 |
 | `COPY_V2_VERIFY_ENABLED` | `1` | 复制后字段校验 |
 | `COPY_V2_REPAIR_ENABLED` | `1` | 字段不匹配时自动修复 |
+| `COPY_BATCH_CONCURRENCY` | `16` | 小型 campaign 批量复制全局并发数 |
+| `COPY_BATCH_CAMPAIGN_CONCURRENCY` | `2` | 批量 campaign 并发数 |
+| `COPY_BATCH_ADSET_CONCURRENCY` | `16` | 批量 adset 并发数（默认同 `COPY_BATCH_CONCURRENCY`） |
+| `COPY_BATCH_AD_CONCURRENCY` | `16` | 批量 ad 并发数（默认同 `COPY_BATCH_CONCURRENCY`） |
 
 ---
 
@@ -359,7 +386,9 @@ Token 续期：CRM 无 refresh 端点。定时扫 `token_expires_at < NOW()+7d`�
 - **前端 `routeTree.gen.ts` 禁止手动修改**：由 `vite` + TanStack Router 插件在启动时自动从 `routes/` 目录生成，手动改会在下次启动时被覆盖。
 - **复制代码有死代码残留**：`meta-client.ts` 中仍保留旧的 `executeAsyncCopyBatchProvider()` / `meta.copyCampaign()` 等函数，当前 copy 主路径调用的是 `executeCustomCopyProvider()` / `customCopyCampaign()` 等。修改复制逻辑时认准 `custom*` 前缀的函数。
 - **Campaign 深拷贝耗时与广告数成正比**：`customCopyCampaign()` 按 campaign → adset → ad 逐层串行创建；源 campaign 层级越深耗时越长。大型 campaign 使用 Copy V2（`COPY_V2_JSONB_ENABLED=1`）有限并发执行。
-- **幂等检查仅覆盖主 item**：`copyBatch` 内只对聚合消息的主 `itemId` 做前置幂等过滤，batch 内其他 item 无前置过滤。极端半完成状态下主 item 已终态可能导致整条 batch 被跳过。
+- **幂等检查仅覆盖主 item（Copy V1 路径）**：`copyBatch` 内只对聚合消息的主 `itemId` 做前置幂等过滤，batch 内其他 item 无前置过滤。极端半完成状态下主 item 已终态可能导致整条 batch 被跳过。Copy V2 通过 `operation_copy_steps` 逐步幂等，不受此限制。
+- **`bindFbAccount` 自动授权**：绑定 FB 个号时会自动给操作用户自身添加 `fb_account` 资源 grant（`user_resource_grants`）并立即刷新 Redis 权限缓存，无需手动分配。
+- **`operation_tasks.status` 有 `paused`/`cancelled` 两个新状态**：Worker 会在每条消息处理前调 `assertTaskRunnable()` 检查，`paused` 会 nack 消息等待恢复，`cancelled` 会 dead 消息。注意已在 retry queue 中的消息仍会被尝试消费，需等重试耗尽才彻底停止。
 
 ---
 

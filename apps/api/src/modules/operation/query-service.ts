@@ -59,13 +59,15 @@ export async function getTask(
   if (!row) throw new HttpError(404, 404, 'task not found');
 
   // Redis 进度优先(可能比 DB 计数更新)
-  const snap = (await readProgress(taskId)) ?? {
+  const progress = await readProgress(taskId);
+  const persistedUpdatedAt = progress ? null : await readTaskWorkflowUpdatedAt(principal.companyId, taskId);
+  const snap = progress ?? {
     taskId,
     total: row.total,
     success: row.success,
     failed: row.failed,
     status: row.status,
-    updatedAt: row.createdAt.getTime(),
+    updatedAt: persistedUpdatedAt ?? row.createdAt.getTime(),
   };
 
   const failures = await db.transaction(async (tx) => {
@@ -98,6 +100,20 @@ export async function getTask(
     layerProgress,
     failures,
   };
+}
+
+async function readTaskWorkflowUpdatedAt(companyId: string, taskId: string): Promise<number | null> {
+  const rows = await db.transaction(async (tx) => {
+    await tx.execute(dsql`SELECT set_config('app.current_company_id', ${companyId}, true)`);
+    return tx
+      .select({
+        updatedAt: dsql<Date | null>`max(${schema.operationCopyWorkflows.updatedAt})`,
+      })
+      .from(schema.operationCopyWorkflows)
+      .where(eq(schema.operationCopyWorkflows.taskId, taskId));
+  });
+  const value = rows[0]?.updatedAt;
+  return value ? new Date(value).getTime() : null;
 }
 
 async function readLayerProgress(companyId: string, taskId: string): Promise<LayerProgress[]> {
@@ -282,6 +298,7 @@ async function readLayerProgressItems(
         CASE status WHEN 'success' THEN 1 ELSE 2 END,
         created_at ASC,
         id ASC
+      LIMIT 500
     `);
   }) as unknown as Array<{
     id: string;

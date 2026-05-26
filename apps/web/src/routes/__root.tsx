@@ -7,6 +7,8 @@ export const Route = createRootRoute({
   component: RootLayout,
 });
 
+const ADMIN_ROLES = new Set(['CompanyAdmin', 'PlatformAdmin']);
+
 function RootLayout() {
   const nav = useNavigate();
   const qc = useQueryClient();
@@ -17,6 +19,7 @@ function RootLayout() {
     enabled: hasToken,
     retry: false,
   });
+  const isAdmin = me.data?.roles.some((role) => ADMIN_ROLES.has(role)) ?? false;
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -34,7 +37,7 @@ function RootLayout() {
                 <Link to="/fb-accounts" className="text-muted-foreground hover:text-foreground">
                   广告账户组
                 </Link>
-                {me.data.permissions.includes('iam:manage') && (
+                {isAdmin && (
                   <Link to="/admin" className="text-muted-foreground hover:text-foreground">
                     管理
                   </Link>

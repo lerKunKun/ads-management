@@ -41,6 +41,17 @@ interface EffectiveScopeInternal {
   visibleAdCountByFb: Map<string, number>;
 }
 
+async function invalidatePrincipalCache(userId: string): Promise<void> {
+  const stream = redis.scanStream({ match: `perm:${userId}:*`, count: 50 });
+  const keys: string[] = [];
+  await new Promise<void>((resolve, reject) => {
+    stream.on('data', (chunk: string[]) => keys.push(...chunk));
+    stream.on('end', () => resolve());
+    stream.on('error', reject);
+  });
+  if (keys.length > 0) await redis.del(...keys);
+}
+
 async function resolveEffectiveScopeInTenant(
   tx: typeof db,
   principal: AuthPrincipal,
@@ -74,7 +85,6 @@ async function resolveEffectiveScopeInTenant(
   for (const ad of adRows) {
     const visible =
       principal.scope.bypass ||
-      fbGrantSet.has(ad.fbAccountId) ||
       adGrantSet.has(ad.id);
     if (!visible) continue;
     adAccountIds.add(ad.id);
@@ -206,8 +216,19 @@ export async function bindFbAccount(args: {
       synced++;
     }
 
+    await tx
+      .insert(schema.userResourceGrants)
+      .values({
+        userId: principal.userId,
+        resourceType: 'fb_account',
+        resourceId: fbAccountId,
+        grantedBy: principal.userId,
+      })
+      .onConflictDoNothing();
+
     return { fbAccountId, adAccountsSynced: synced };
   }).then(async (res) => {
+    await invalidatePrincipalCache(principal.userId);
     await redis.del(`token:${res.fbAccountId}`, BreakerKey.fbAccount(res.fbAccountId));
     await writeAudit({
       companyId: principal.companyId,

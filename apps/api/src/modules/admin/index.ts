@@ -9,10 +9,11 @@
  *   PlatformAdmin 全局
  */
 import { Elysia, t } from 'elysia';
-import { and, desc, eq, sql as dsql } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql as dsql } from 'drizzle-orm';
 import { redis } from '../../lib/redis';
 import { close as breakerClose, BreakerKey } from '../../lib/breaker';
 import { db, schema } from '../../lib/db';
+import { readProgress } from '../../lib/progress';
 import { scanTokenHealth } from '../account/service';
 import {
   syncAdAccountObjects,
@@ -347,7 +348,45 @@ export const admin = new Elysia({ name: 'admin' }).group('', (g) =>
             .orderBy(desc(schema.operationTasks.createdAt))
             .limit(limit);
         });
-        return { code: 0, msg: 'ok', data: rows };
+        const taskIds = rows.map((row) => row.id);
+        const workflowRows = taskIds.length
+          ? await db.transaction(async (tx) => {
+              await tx.execute(
+                dsql`SELECT set_config('app.current_company_id', ${principal.companyId}, true)`,
+              );
+              return tx
+                .select({
+                  taskId: schema.operationCopyWorkflows.taskId,
+                  updatedAt: dsql<Date | null>`max(${schema.operationCopyWorkflows.updatedAt})`,
+                })
+                .from(schema.operationCopyWorkflows)
+                .where(inArray(schema.operationCopyWorkflows.taskId, taskIds))
+                .groupBy(schema.operationCopyWorkflows.taskId);
+            })
+          : [];
+        const workflowUpdatedAtByTask = new Map(
+          workflowRows.map((row) => [
+            row.taskId,
+            row.updatedAt ? new Date(row.updatedAt).getTime() : null,
+          ]),
+        );
+        const progressEntries = await Promise.all(
+          rows.map(async (row) => [row.id, await readProgress(row.id)] as const),
+        );
+        const progressByTask = new Map(progressEntries);
+        const data = rows.map((row) => {
+          const snap = progressByTask.get(row.id);
+          return {
+            ...row,
+            status: snap?.status ?? row.status,
+            total: snap?.total ?? row.total,
+            success: snap?.success ?? row.success,
+            failed: snap?.failed ?? row.failed,
+            createdAt: row.createdAt.toISOString(),
+            updatedAt: snap?.updatedAt ?? workflowUpdatedAtByTask.get(row.id) ?? null,
+          };
+        });
+        return { code: 0, msg: 'ok', data };
       },
       {
         query: t.Object({ limit: t.Optional(t.String()) }),

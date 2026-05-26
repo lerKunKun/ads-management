@@ -49,41 +49,41 @@ export function Pagination({
   const end = Math.min(total, page * pageSize);
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2 border-t px-3 py-2 text-sm">
-      <span className="text-xs text-muted-foreground">
+    <div className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3 text-base">
+      <span className="text-sm text-muted-foreground">
         {start}-{end} / {total} 条，每页 {pageSize}
       </span>
-      <div className="flex items-center gap-2">
-        <span className="text-xs text-muted-foreground">
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <span className="min-w-14 text-center text-sm text-muted-foreground">
           {page} / {pageCount}
         </span>
         <Button
-          size="sm"
           variant="outline"
+          className="min-w-16"
           disabled={page <= 1}
           onClick={() => onPageChange(1)}
         >
           首页
         </Button>
         <Button
-          size="sm"
           variant="outline"
+          className="min-w-20"
           disabled={page <= 1}
           onClick={() => onPageChange(page - 1)}
         >
           上一页
         </Button>
         <Button
-          size="sm"
           variant="outline"
+          className="min-w-20"
           disabled={page >= pageCount}
           onClick={() => onPageChange(page + 1)}
         >
           下一页
         </Button>
         <Button
-          size="sm"
           variant="outline"
+          className="min-w-16"
           disabled={page >= pageCount}
           onClick={() => onPageChange(pageCount)}
         >

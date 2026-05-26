@@ -7,7 +7,7 @@ const apiPort = process.env.API_PORT ?? '3001';
 const webPort = Number(process.env.WEB_PORT ?? '5173');
 
 export default defineConfig({
-  plugins: [TanStackRouterVite(), react()],
+  plugins: [TanStackRouterVite({ autoCodeSplitting: true }), react()],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, 'src'),

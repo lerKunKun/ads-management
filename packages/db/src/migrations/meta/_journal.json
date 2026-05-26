@@ -36,6 +36,13 @@
       "when": 1779691200000,
       "tag": "0004_add_operation_paused",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1779782400000,
+      "tag": "0005_bind_permission_for_all_roles",
+      "breakpoints": true
     }
   ]
 }

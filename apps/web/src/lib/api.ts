@@ -498,6 +498,7 @@ export const api = {
         failed: number;
         userId: string;
         createdAt: string;
+        updatedAt: number | null;
         payload: unknown;
       }>
     >(`/_admin/tasks?limit=${limit}`),

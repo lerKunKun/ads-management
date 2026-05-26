@@ -1,11 +1,10 @@
 import { createFileRoute, redirect, Link, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
-import { useMemo, useState } from 'react';
-import { Activity, DatabaseZap, RefreshCw } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Activity, RefreshCw } from 'lucide-react';
 import { api, getToken } from '@/lib/api';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import {
   Table,
   TableBody,
@@ -17,10 +16,6 @@ import {
 import { SearchFilterBar, matchText } from '@/components/SearchFilterBar';
 import { Pagination, usePagination } from '@/components/Pagination';
 import { breakerKindLabel, taskStatusLabel } from '@/lib/labels';
-
-type SyncDepth = 'campaign' | 'adset' | 'ad';
-type SyncArgs = NonNullable<Parameters<typeof api.syncAdObjects>[0]>;
-type SyncResult = Awaited<ReturnType<typeof api.syncAdObjects>>;
 
 export const Route = createFileRoute('/admin_/operations')({
   beforeLoad: () => {
@@ -39,11 +34,7 @@ const TASK_STATUS_COLOR: Record<string, string> = {
   cancelled: 'text-muted-foreground',
 };
 
-const depthOptions: Array<{ value: SyncDepth; label: string }> = [
-  { value: 'campaign', label: '广告系列' },
-  { value: 'adset', label: '广告系列 + 广告组' },
-  { value: 'ad', label: '广告系列 + 广告组 + 广告' },
-];
+const TERMINAL_TASK_STATUSES = new Set(['success', 'failed', 'partial', 'cancelled']);
 
 function OperationsPage() {
   return (
@@ -62,13 +53,7 @@ function OperationsPage() {
         <h1 className="mt-1 text-xl font-semibold">运行状态</h1>
       </header>
 
-      <div className="grid gap-6 xl:grid-cols-[1.1fr_1fr]">
-        <BreakersSection />
-        <div className="space-y-6">
-          <TokenHealthSection />
-          <AdObjectSyncSection />
-        </div>
-      </div>
+      <BreakersSection />
 
       <TasksSection />
     </div>
@@ -190,152 +175,6 @@ function BreakersSection() {
   );
 }
 
-function TokenHealthSection() {
-  const scan = useMutation({ mutationFn: api.scanTokenHealth });
-  return (
-    <section className="rounded-md border bg-background p-4">
-      <SectionTitle icon={<RefreshCw className="h-4 w-4" />} title="Token 健康" />
-      <div className="mt-4 flex flex-wrap items-center gap-3">
-        <Button size="sm" onClick={() => scan.mutate()} disabled={scan.isPending}>
-          {scan.isPending ? '扫描中...' : '立即扫描'}
-        </Button>
-        {scan.data && (
-          <span className="text-sm">
-            已扫描 <b>{scan.data.scanned}</b>，通知 <b>{scan.data.notified}</b>
-          </span>
-        )}
-        {scan.error && (
-          <span className="text-sm text-destructive">{(scan.error as Error).message}</span>
-        )}
-      </div>
-    </section>
-  );
-}
-
-function AdObjectSyncSection() {
-  const [depth, setDepth] = useState<SyncDepth>('campaign');
-  const [limit, setLimit] = useState(2);
-  const [adAccountId, setAdAccountId] = useState('');
-  const sync = useMutation({ mutationFn: (args: SyncArgs) => api.syncAdObjects(args) });
-
-  const runDueSync = () => sync.mutate({ depth, limit });
-  const runSingleSync = () => {
-    const id = adAccountId.trim();
-    if (!id) return;
-    sync.mutate({ depth, adAccountId: id });
-  };
-
-  return (
-    <section className="rounded-md border bg-background p-4">
-      <SectionTitle icon={<DatabaseZap className="h-4 w-4" />} title="广告对象同步" />
-
-      <div className="mt-4 grid gap-3 md:grid-cols-2">
-        <label className="space-y-1.5 text-sm">
-          <span className="text-xs text-muted-foreground">同步深度</span>
-          <select
-            value={depth}
-            onChange={(event) => setDepth(event.target.value as SyncDepth)}
-            className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
-          >
-            {depthOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label className="space-y-1.5 text-sm">
-          <span className="text-xs text-muted-foreground">到期账户上限</span>
-          <Input
-            type="number"
-            min={1}
-            max={20}
-            value={limit}
-            onChange={(event) => {
-              const next = Number(event.currentTarget.value);
-              setLimit(Number.isFinite(next) ? Math.min(Math.max(next, 1), 20) : 1);
-            }}
-          />
-        </label>
-      </div>
-
-      <label className="mt-3 block space-y-1.5 text-sm">
-        <span className="text-xs text-muted-foreground">指定广告账户 ID</span>
-        <Input
-          value={adAccountId}
-          onChange={(event) => setAdAccountId(event.currentTarget.value)}
-          placeholder="UUID，可留空"
-        />
-      </label>
-
-      <div className="mt-4 flex flex-wrap gap-2">
-        <Button size="sm" onClick={runDueSync} disabled={sync.isPending}>
-          {sync.isPending ? '同步中...' : '同步到期账户'}
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={runSingleSync}
-          disabled={sync.isPending || !adAccountId.trim()}
-        >
-          同步指定账户
-        </Button>
-      </div>
-
-      {sync.error && (
-        <p className="mt-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-          {(sync.error as Error).message}
-        </p>
-      )}
-      {sync.data && <SyncResultView result={sync.data} />}
-    </section>
-  );
-}
-
-function SyncResultView({ result }: { result: SyncResult }) {
-  if ('candidates' in result) {
-    return (
-      <div className="mt-3 grid gap-2 text-sm sm:grid-cols-4">
-        <ResultMetric label="候选" value={result.candidates} />
-        <ResultMetric label="成功" value={result.synced} tone="success" />
-        <ResultMetric label="跳过" value={result.skipped} />
-        <ResultMetric label="失败" value={result.failed} tone={result.failed > 0 ? 'danger' : 'default'} />
-      </div>
-    );
-  }
-
-  return (
-    <div className="mt-3 rounded-md border bg-muted/30 p-3 text-sm">
-      <div className="font-medium">{result.metaActId}</div>
-      <div className="mt-2 grid gap-2 sm:grid-cols-3">
-        <ResultMetric label="广告系列" value={result.campaigns} />
-        <ResultMetric label="广告组" value={result.adsets} />
-        <ResultMetric label="广告" value={result.ads} />
-      </div>
-    </div>
-  );
-}
-
-function ResultMetric({
-  label,
-  value,
-  tone = 'default',
-}: {
-  label: string;
-  value: number;
-  tone?: 'default' | 'success' | 'danger';
-}) {
-  const toneClass =
-    tone === 'success' ? 'text-emerald-700' : tone === 'danger' ? 'text-rose-700' : '';
-  return (
-    <div className="rounded-md border bg-background px-3 py-2">
-      <div className="text-xs text-muted-foreground">{label}</div>
-      <div className={`mt-1 text-lg font-semibold ${toneClass}`}>{value}</div>
-    </div>
-  );
-}
-
 function TasksSection() {
   const navigate = useNavigate();
   const q = useQuery({
@@ -344,9 +183,17 @@ function TasksSection() {
     refetchInterval: 2000,
   });
   const data = q.data ?? [];
+  const liveTasks = data.some((task) => !isTerminalTaskStatus(task.status));
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('');
   const [type, setType] = useState('');
+
+  useEffect(() => {
+    if (!liveTasks) return;
+    const id = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [liveTasks]);
 
   const typeOptions = useMemo(() => {
     const set = new Set<string>();
@@ -423,13 +270,14 @@ function TasksSection() {
             <TableHead>状态</TableHead>
             <TableHead>进度</TableHead>
             <TableHead>失败</TableHead>
+            <TableHead>用时</TableHead>
             <TableHead>创建时间</TableHead>
             <TableHead>task_id</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {q.isLoading && <EmptyRow colSpan={6} text="加载中..." />}
-          {!q.isLoading && filtered.length === 0 && <EmptyRow colSpan={6} text="暂无任务记录" />}
+          {q.isLoading && <EmptyRow colSpan={7} text="加载中..." />}
+          {!q.isLoading && filtered.length === 0 && <EmptyRow colSpan={7} text="暂无任务记录" />}
           {pager.pageItems.map((task) => (
             <TableRow
               key={task.id}
@@ -449,6 +297,9 @@ function TasksSection() {
                 <TaskProgressCell success={task.success} failed={task.failed} total={task.total} />
               </TableCell>
               <TableCell className={task.failed > 0 ? 'text-rose-600' : ''}>{task.failed}</TableCell>
+              <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+                {formatTaskDuration(task.status, task.createdAt, task.updatedAt, nowMs)}
+              </TableCell>
               <TableCell className="text-xs text-muted-foreground">
                 {new Date(task.createdAt).toLocaleString()}
               </TableCell>
@@ -502,15 +353,6 @@ function SectionHeader({ title, right }: { title: string; right?: ReactNode }) {
   );
 }
 
-function SectionTitle({ icon, title }: { icon: ReactNode; title: string }) {
-  return (
-    <div className="flex items-center gap-2 font-medium">
-      {icon}
-      <h2>{title}</h2>
-    </div>
-  );
-}
-
 function EmptyRow({ colSpan, text }: { colSpan: number; text: string }) {
   return (
     <TableRow>
@@ -519,4 +361,23 @@ function EmptyRow({ colSpan, text }: { colSpan: number; text: string }) {
       </TableCell>
     </TableRow>
   );
+}
+
+function isTerminalTaskStatus(status: string): boolean {
+  return TERMINAL_TASK_STATUSES.has(status);
+}
+
+function formatTaskDuration(
+  status: string,
+  createdAt: string,
+  updatedAt: number | null | undefined,
+  nowMs: number,
+): string {
+  const createdMs = Date.parse(createdAt);
+  if (!Number.isFinite(createdMs)) return '-';
+  const terminal = isTerminalTaskStatus(status);
+  const endMs = terminal ? updatedAt : nowMs;
+  if (typeof endMs !== 'number' || !Number.isFinite(endMs)) return terminal ? '完成 -' : '-';
+  const seconds = Math.max(0, Math.floor((endMs - createdMs) / 1000));
+  return terminal ? `完成 ${seconds} 秒` : `已用 ${seconds} 秒`;
 }
