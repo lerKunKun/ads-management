@@ -13,6 +13,43 @@ import { BreakerKey } from '../../lib/breaker';
 import { writeAudit } from '../iam/auth-service';
 import type { AuthPrincipal } from '../iam/auth-service';
 
+export interface PageResult<T> {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+  pageCount: number;
+}
+
+export interface AdAccountListItem {
+  id: string;
+  metaActId: string;
+  name: string;
+  currency: string | null;
+  timezoneName: string | null;
+  businessCountryCode: string | null;
+  status: 'active' | 'disabled' | 'closed' | 'pending';
+  lastSyncedAt: Date | null;
+  fbAccountId: string;
+}
+
+export interface AdAccountFacets {
+  currencies: string[];
+  timezoneNames: string[];
+  businessCountryCodes: string[];
+}
+
+export interface AdAccountPageOptions {
+  fbAccountId?: string;
+  search?: string;
+  status?: string;
+  currency?: string;
+  timezoneName?: string;
+  businessCountryCode?: string;
+  page?: number;
+  pageSize?: number;
+}
+
 async function withTenant<T>(
   companyId: string,
   fn: (txDb: typeof db) => Promise<T>,
@@ -322,6 +359,134 @@ export async function listAdAccounts(
     const finalCond = fbFilter ? dsql`(${scopeCond}) AND ${fbFilter}` : scopeCond;
     return tx.select(select).from(schema.adAccounts).where(finalCond);
   });
+}
+
+export async function listAdAccountsPage(
+  principal: AuthPrincipal,
+  opts: AdAccountPageOptions = {},
+): Promise<PageResult<AdAccountListItem> & { facets: AdAccountFacets }> {
+  return withTenant(principal.companyId, async (tx) => {
+    const scope = await resolveEffectiveScopeInTenant(tx, principal);
+    const page = normalizePage(opts.page);
+    const pageSize = normalizePageSize(opts.pageSize);
+    const offset = (page - 1) * pageSize;
+
+    if (!scope.bypass && scope.adAccountIds.size === 0) {
+      return {
+        items: [],
+        total: 0,
+        page,
+        pageSize,
+        pageCount: 1,
+        facets: { currencies: [], timezoneNames: [], businessCountryCodes: [] },
+      };
+    }
+
+    const scopeConditions = adAccountScopeConditions(principal, scope);
+    const filteredConditions = [...scopeConditions];
+    if (opts.fbAccountId) filteredConditions.push(dsql`aa.fb_account_id = ${opts.fbAccountId}`);
+    if (opts.status) filteredConditions.push(dsql`aa.status = ${opts.status}`);
+    if (opts.currency) filteredConditions.push(dsql`aa.currency = ${opts.currency}`);
+    if (opts.timezoneName) filteredConditions.push(dsql`aa.timezone_name = ${opts.timezoneName}`);
+    if (opts.businessCountryCode) {
+      filteredConditions.push(dsql`aa.business_country_code = ${opts.businessCountryCode}`);
+    }
+    const search = opts.search?.trim();
+    if (search) {
+      const needle = `%${search}%`;
+      filteredConditions.push(dsql`(aa.name ILIKE ${needle} OR aa.meta_act_id ILIKE ${needle})`);
+    }
+
+    const where = dsql.join(filteredConditions, dsql` AND `);
+    const countRows = await tx.execute(dsql`
+      SELECT COUNT(*)::int AS total
+      FROM ad_accounts aa
+      WHERE ${where}
+    `) as unknown as Array<{ total: number }>;
+    const total = Number(countRows[0]?.total ?? 0);
+    const rows = await tx.execute(dsql`
+      SELECT
+        aa.id::text AS id,
+        aa.meta_act_id AS "metaActId",
+        aa.name,
+        aa.currency,
+        aa.timezone_name AS "timezoneName",
+        aa.business_country_code AS "businessCountryCode",
+        aa.status,
+        aa.last_synced_at AS "lastSyncedAt",
+        aa.fb_account_id::text AS "fbAccountId"
+      FROM ad_accounts aa
+      WHERE ${where}
+      ORDER BY aa.created_at ASC, aa.id ASC
+      LIMIT ${pageSize}
+      OFFSET ${offset}
+    `) as unknown as AdAccountListItem[];
+
+    const facets = await readAdAccountFacets(tx, principal, scopeConditions);
+    return {
+      items: rows,
+      total,
+      page,
+      pageSize,
+      pageCount: Math.max(1, Math.ceil(total / pageSize)),
+      facets,
+    };
+  });
+}
+
+function normalizePage(value: number | undefined): number {
+  const page = Number(value ?? 1);
+  return Number.isFinite(page) ? Math.max(1, Math.floor(page)) : 1;
+}
+
+function normalizePageSize(value: number | undefined): number {
+  const pageSize = Number(value ?? 20);
+  if (!Number.isFinite(pageSize)) return 20;
+  return Math.min(100, Math.max(1, Math.floor(pageSize)));
+}
+
+function adAccountScopeConditions(
+  principal: AuthPrincipal,
+  scope: EffectiveScopeInternal,
+) {
+  const conditions = [dsql`aa.company_id = ${principal.companyId}`];
+  if (!scope.bypass) {
+    conditions.push(dsql`aa.id = ANY(${Array.from(scope.adAccountIds)}::uuid[])`);
+  }
+  return conditions;
+}
+
+async function readAdAccountFacets(
+  tx: typeof db,
+  principal: AuthPrincipal,
+  scopeConditions: ReturnType<typeof adAccountScopeConditions>,
+): Promise<AdAccountFacets> {
+  const where = dsql.join(scopeConditions, dsql` AND `);
+  const [currencies, timezoneNames, businessCountryCodes] = await Promise.all([
+    tx.execute(dsql`
+      SELECT DISTINCT aa.currency AS value
+      FROM ad_accounts aa
+      WHERE ${where} AND aa.currency IS NOT NULL
+      ORDER BY aa.currency ASC
+    `) as Promise<Array<{ value: string }>>,
+    tx.execute(dsql`
+      SELECT DISTINCT aa.timezone_name AS value
+      FROM ad_accounts aa
+      WHERE ${where} AND aa.timezone_name IS NOT NULL
+      ORDER BY aa.timezone_name ASC
+    `) as Promise<Array<{ value: string }>>,
+    tx.execute(dsql`
+      SELECT DISTINCT aa.business_country_code AS value
+      FROM ad_accounts aa
+      WHERE ${where} AND aa.business_country_code IS NOT NULL
+      ORDER BY aa.business_country_code ASC
+    `) as Promise<Array<{ value: string }>>,
+  ]);
+  return {
+    currencies: currencies.map((row) => row.value),
+    timezoneNames: timezoneNames.map((row) => row.value),
+    businessCountryCodes: businessCountryCodes.map((row) => row.value),
+  };
 }
 
 /**

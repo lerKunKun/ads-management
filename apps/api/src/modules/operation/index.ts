@@ -401,6 +401,27 @@ export const operation = new Elysia({ name: 'operation' })
         { params: t.Object({ taskId: t.String({ format: 'uuid' }) }) },
       )
       .get(
+        '/operations/:taskId/items',
+        async ({ principal, params, query }) => {
+          const data = await q.getTaskItems(principal, params.taskId, {
+            targetType: query.target_type,
+            status: query.status,
+            ...(query.page ? { page: Number(query.page) } : {}),
+            ...(query.page_size ? { pageSize: Number(query.page_size) } : {}),
+          });
+          return { code: 0, msg: 'ok', data };
+        },
+        {
+          params: t.Object({ taskId: t.String({ format: 'uuid' }) }),
+          query: t.Object({
+            target_type: t.Union([t.Literal('campaign'), t.Literal('adset'), t.Literal('ad')]),
+            status: t.Union([t.Literal('success'), t.Literal('failed')]),
+            page: t.Optional(t.String()),
+            page_size: t.Optional(t.String()),
+          }),
+        },
+      )
+      .get(
         '/operations/:taskId/stream',
         async ({ principal, params, set }) => {
           await q.assertTaskOwned(principal, params.taskId);

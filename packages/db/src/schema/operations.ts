@@ -103,6 +103,7 @@ export const operationTaskItems = pgTable(
     uniqIdempotency: uniqueIndex('op_items_idempotency_idx').on(t.idempotencyKey),
     taskIdx: index('op_items_task_idx').on(t.taskId),
     adAcctIdx: index('op_items_ad_account_idx').on(t.adAccountId),
+    taskStatusTypeCreatedIdx: index('op_items_task_status_type_created_idx').on(t.taskId, t.status, t.targetType, t.createdAt, t.id),
   }),
 );
 
@@ -164,5 +165,6 @@ export const operationCopySteps = pgTable(
     taskIdx: index('op_copy_steps_task_idx').on(t.taskId),
     companyIdx: index('op_copy_steps_company_idx').on(t.companyId),
     statusIdx: index('op_copy_steps_status_idx').on(t.status),
+    taskStatusTypeUpdatedIdx: index('op_copy_steps_task_status_type_updated_idx').on(t.taskId, t.status, t.sourceType, t.updatedAt, t.id),
   }),
 );

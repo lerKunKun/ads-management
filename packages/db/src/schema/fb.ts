@@ -60,5 +60,8 @@ export const adAccounts = pgTable(
     uniqActPerCompany: uniqueIndex('ad_accounts_company_act_idx').on(t.companyId, t.metaActId),
     fbAccountIdx: index('ad_accounts_fb_account_idx').on(t.fbAccountId),
     companyIdx: index('ad_accounts_company_idx').on(t.companyId),
+    companyCreatedIdx: index('ad_accounts_company_created_idx').on(t.companyId, t.createdAt, t.id),
+    companyStatusCreatedIdx: index('ad_accounts_company_status_created_idx').on(t.companyId, t.status, t.createdAt, t.id),
+    companyFbCreatedIdx: index('ad_accounts_company_fb_created_idx').on(t.companyId, t.fbAccountId, t.createdAt, t.id),
   }),
 );

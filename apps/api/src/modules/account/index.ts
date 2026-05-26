@@ -48,6 +48,19 @@ export const account = new Elysia({ name: 'account' })
       .get(
         '/ad-accounts',
         async ({ principal, query }) => {
+          if (query.paged === '1') {
+            const data = await svc.listAdAccountsPage(principal, {
+              ...(query.fb_account_id ? { fbAccountId: query.fb_account_id } : {}),
+              ...(query.search ? { search: query.search } : {}),
+              ...(query.status ? { status: query.status } : {}),
+              ...(query.currency ? { currency: query.currency } : {}),
+              ...(query.timezone_name ? { timezoneName: query.timezone_name } : {}),
+              ...(query.business_country_code ? { businessCountryCode: query.business_country_code } : {}),
+              ...(query.page ? { page: Number(query.page) } : {}),
+              ...(query.page_size ? { pageSize: Number(query.page_size) } : {}),
+            });
+            return { code: 0, msg: 'ok', data };
+          }
           const data = await svc.listAdAccounts(
             principal,
             query.fb_account_id ? { fbAccountId: query.fb_account_id } : {},
@@ -55,7 +68,24 @@ export const account = new Elysia({ name: 'account' })
           return { code: 0, msg: 'ok', data };
         },
         {
-          query: t.Object({ fb_account_id: t.Optional(t.String({ format: 'uuid' })) }),
+          query: t.Object({
+            fb_account_id: t.Optional(t.String({ format: 'uuid' })),
+            paged: t.Optional(t.String()),
+            search: t.Optional(t.String()),
+            status: t.Optional(
+              t.Union([
+                t.Literal('active'),
+                t.Literal('pending'),
+                t.Literal('disabled'),
+                t.Literal('closed'),
+              ]),
+            ),
+            currency: t.Optional(t.String()),
+            timezone_name: t.Optional(t.String()),
+            business_country_code: t.Optional(t.String()),
+            page: t.Optional(t.String()),
+            page_size: t.Optional(t.String()),
+          }),
           beforeHandle: requirePermission('ad_account:read'),
         },
       ),

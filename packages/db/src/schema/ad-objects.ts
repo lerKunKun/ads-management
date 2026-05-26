@@ -50,6 +50,7 @@ export const adCampaigns = pgTable(
     uniqCompanyMeta: uniqueIndex('campaigns_company_meta_idx').on(t.companyId, t.metaId),
     companyAccountIdx: index('campaigns_company_account_idx').on(t.companyId, t.adAccountId),
     accountStatusIdx: index('campaigns_account_status_idx').on(t.adAccountId, t.status),
+    accountCreatedIdx: index('campaigns_account_created_idx').on(t.adAccountId, t.createdAt, t.id),
   }),
 );
 
@@ -81,6 +82,7 @@ export const adSetObjects = pgTable(
     uniqCompanyMeta: uniqueIndex('adsets_company_meta_idx').on(t.companyId, t.metaId),
     accountCampaignIdx: index('adsets_account_campaign_idx').on(t.adAccountId, t.campaignMetaId),
     accountStatusIdx: index('adsets_account_status_idx').on(t.adAccountId, t.status),
+    accountCampaignCreatedIdx: index('adsets_account_campaign_created_idx').on(t.adAccountId, t.campaignMetaId, t.createdAt, t.id),
   }),
 );
 
@@ -107,6 +109,7 @@ export const adObjects = pgTable(
     uniqCompanyMeta: uniqueIndex('ads_company_meta_idx').on(t.companyId, t.metaId),
     accountAdsetIdx: index('ads_account_adset_idx').on(t.adAccountId, t.adsetMetaId),
     accountStatusIdx: index('ads_account_status_idx').on(t.adAccountId, t.status),
+    accountAdsetCreatedIdx: index('ads_account_adset_created_idx').on(t.adAccountId, t.adsetMetaId, t.createdAt, t.id),
   }),
 );
 

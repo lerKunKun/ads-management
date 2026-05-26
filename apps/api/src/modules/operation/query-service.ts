@@ -38,6 +38,14 @@ export interface TaskLayerProgressItem {
   detail: string | null;
 }
 
+export interface TaskLayerItemsPage {
+  items: TaskLayerProgressItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+  pageCount: number;
+}
+
 export async function getTask(
   principal: AuthPrincipal,
   taskId: string,
@@ -142,23 +150,13 @@ async function readLayerProgress(companyId: string, taskId: string): Promise<Lay
     running: number;
     pending: number;
   }>;
-  const items = await readLayerProgressItems(companyId, taskId);
-
   const byType = new Map(rows.map((row) => [row.target_type, row]));
-  const itemsByType = new Map<string, { successItems: TaskLayerProgressItem[]; failedItems: TaskLayerProgressItem[] }>();
-  for (const item of items) {
-    const bucket = itemsByType.get(item.targetType) ?? { successItems: [], failedItems: [] };
-    if (item.status === 'success') bucket.successItems.push(item);
-    if (item.status === 'failed' || item.status === 'dead') bucket.failedItems.push(item);
-    itemsByType.set(item.targetType, bucket);
-  }
   return ([
     ['campaign', '广告系列'],
     ['adset', '广告组'],
     ['ad', '广告'],
   ] as const).map(([targetType, label]) => {
     const row = byType.get(targetType);
-    const itemBucket = itemsByType.get(targetType);
     return {
       targetType,
       label: taskLayerLabel(targetType),
@@ -167,8 +165,8 @@ async function readLayerProgress(companyId: string, taskId: string): Promise<Lay
       failed: Number(row?.failed ?? 0),
       running: Number(row?.running ?? 0),
       pending: Number(row?.pending ?? 0),
-      successItems: itemBucket?.successItems ?? [],
-      failedItems: itemBucket?.failedItems ?? [],
+      successItems: [],
+      failedItems: [],
     };
   });
 }
@@ -198,15 +196,7 @@ async function readCopyV2LayerProgress(companyId: string, taskId: string): Promi
   }>;
   if (rows.length === 0) return null;
 
-  const items = await readCopyV2LayerProgressItems(companyId, taskId);
   const byType = new Map(rows.map((row) => [row.source_type, row]));
-  const itemsByType = new Map<string, { successItems: TaskLayerProgressItem[]; failedItems: TaskLayerProgressItem[] }>();
-  for (const item of items) {
-    const bucket = itemsByType.get(item.targetType) ?? { successItems: [], failedItems: [] };
-    if (item.status === 'success') bucket.successItems.push(item);
-    if (item.status === 'failed' || item.status === 'unknown') bucket.failedItems.push(item);
-    itemsByType.set(item.targetType, bucket);
-  }
 
   return ([
     ['campaign', '广告系列'],
@@ -214,7 +204,6 @@ async function readCopyV2LayerProgress(companyId: string, taskId: string): Promi
     ['ad', '广告'],
   ] as const).map(([targetType]) => {
     const row = byType.get(targetType);
-    const itemBucket = itemsByType.get(targetType);
     return {
       targetType,
       label: taskLayerLabel(targetType),
@@ -223,16 +212,67 @@ async function readCopyV2LayerProgress(companyId: string, taskId: string): Promi
       failed: Number(row?.failed ?? 0),
       running: Number(row?.running ?? 0),
       pending: Number(row?.pending ?? 0),
-      successItems: itemBucket?.successItems ?? [],
-      failedItems: itemBucket?.failedItems ?? [],
+      successItems: [],
+      failedItems: [],
     };
   });
 }
 
-async function readCopyV2LayerProgressItems(
+export async function getTaskItems(
+  principal: AuthPrincipal,
+  taskId: string,
+  args: {
+    targetType: 'campaign' | 'adset' | 'ad';
+    status: 'success' | 'failed';
+    page?: number;
+    pageSize?: number;
+  },
+): Promise<TaskLayerItemsPage> {
+  await assertTaskOwned(principal, taskId);
+  const page = normalizePage(args.page);
+  const pageSize = normalizePageSize(args.pageSize);
+  const copyV2 = await hasCopyV2Steps(principal.companyId, taskId);
+  return copyV2
+    ? readCopyV2LayerProgressItemsPage(principal.companyId, taskId, args.targetType, args.status, page, pageSize)
+    : readLayerProgressItemsPage(principal.companyId, taskId, args.targetType, args.status, page, pageSize);
+}
+
+async function hasCopyV2Steps(companyId: string, taskId: string): Promise<boolean> {
+  const rows = await db.transaction(async (tx) => {
+    await tx.execute(dsql`SELECT set_config('app.current_company_id', ${companyId}, true)`);
+    return tx.execute(dsql`
+      SELECT id
+      FROM operation_copy_steps
+      WHERE task_id = ${taskId}
+      LIMIT 1
+    `);
+  }) as unknown as Array<{ id: string }>;
+  return rows.length > 0;
+}
+
+async function readCopyV2LayerProgressItemsPage(
   companyId: string,
   taskId: string,
-): Promise<Array<TaskLayerProgressItem & { targetType: string }>> {
+  targetType: 'campaign' | 'adset' | 'ad',
+  status: 'success' | 'failed',
+  page: number,
+  pageSize: number,
+): Promise<TaskLayerItemsPage> {
+  const statusSql = status === 'success'
+    ? dsql`status = 'success'`
+    : dsql`status IN ('failed','unknown')`;
+  const offset = (page - 1) * pageSize;
+  const countRows = await db.transaction(async (tx) => {
+    await tx.execute(dsql`SELECT set_config('app.current_company_id', ${companyId}, true)`);
+    return tx.execute(dsql`
+      SELECT COUNT(*)::int AS total
+      FROM operation_copy_steps
+      WHERE task_id = ${taskId}
+        AND source_type = ${targetType}
+        AND ${statusSql}
+    `);
+  }) as unknown as Array<{ total: number }>;
+  const total = Number(countRows[0]?.total ?? 0);
   const rows = await db.transaction(async (tx) => {
     await tx.execute(dsql`SELECT set_config('app.current_company_id', ${companyId}, true)`);
     return tx.execute(dsql`
@@ -246,13 +286,15 @@ async function readCopyV2LayerProgressItems(
         error
       FROM operation_copy_steps
       WHERE task_id = ${taskId}
-        AND status IN ('success','failed','unknown')
+        AND source_type = ${targetType}
+        AND ${statusSql}
       ORDER BY
         CASE source_type WHEN 'campaign' THEN 1 WHEN 'adset' THEN 2 WHEN 'ad' THEN 3 ELSE 4 END,
         CASE status WHEN 'success' THEN 1 ELSE 2 END,
         updated_at ASC,
         id ASC
-      LIMIT 500
+      LIMIT ${pageSize}
+      OFFSET ${offset}
     `);
   }) as unknown as Array<{
     id: string;
@@ -264,16 +306,21 @@ async function readCopyV2LayerProgressItems(
     error: string | null;
   }>;
 
-  return rows.map((row) => ({
-    id: row.id,
-    targetType: row.source_type,
-    targetId: row.source_id,
-    status: row.status,
-    attempts: Number(row.attempt ?? 0),
-    detail: row.status === 'success'
-      ? (row.new_id ? `新对象 ${row.new_id}` : null)
-      : row.error,
-  }));
+  return {
+    items: rows.map((row) => ({
+      id: row.id,
+      targetId: row.source_id,
+      status: row.status,
+      attempts: Number(row.attempt ?? 0),
+      detail: row.status === 'success'
+        ? (row.new_id ? `新对象 ${row.new_id}` : null)
+        : row.error,
+    })),
+    total,
+    page,
+    pageSize,
+    pageCount: Math.max(1, Math.ceil(total / pageSize)),
+  };
 }
 
 function taskLayerLabel(targetType: 'campaign' | 'adset' | 'ad'): string {
@@ -282,23 +329,44 @@ function taskLayerLabel(targetType: 'campaign' | 'adset' | 'ad'): string {
   return '广告';
 }
 
-async function readLayerProgressItems(
+async function readLayerProgressItemsPage(
   companyId: string,
   taskId: string,
-): Promise<Array<TaskLayerProgressItem & { targetType: string }>> {
+  targetType: 'campaign' | 'adset' | 'ad',
+  status: 'success' | 'failed',
+  page: number,
+  pageSize: number,
+): Promise<TaskLayerItemsPage> {
+  const statusSql = status === 'success'
+    ? dsql`status = 'success'`
+    : dsql`status IN ('failed','dead')`;
+  const offset = (page - 1) * pageSize;
+  const countRows = await db.transaction(async (tx) => {
+    await tx.execute(dsql`SELECT set_config('app.current_company_id', ${companyId}, true)`);
+    return tx.execute(dsql`
+      SELECT COUNT(*)::int AS total
+      FROM operation_task_items
+      WHERE task_id = ${taskId}
+        AND target_type = ${targetType}
+        AND ${statusSql}
+    `);
+  }) as unknown as Array<{ total: number }>;
+  const total = Number(countRows[0]?.total ?? 0);
   const rows = await db.transaction(async (tx) => {
     await tx.execute(dsql`SELECT set_config('app.current_company_id', ${companyId}, true)`);
     return tx.execute(dsql`
       SELECT id::text, target_type, target_id, status, attempts, error
       FROM operation_task_items
       WHERE task_id = ${taskId}
-        AND status IN ('success','failed','dead')
+        AND target_type = ${targetType}
+        AND ${statusSql}
       ORDER BY
         CASE target_type WHEN 'campaign' THEN 1 WHEN 'adset' THEN 2 WHEN 'ad' THEN 3 ELSE 4 END,
         CASE status WHEN 'success' THEN 1 ELSE 2 END,
         created_at ASC,
         id ASC
-      LIMIT 500
+      LIMIT ${pageSize}
+      OFFSET ${offset}
     `);
   }) as unknown as Array<{
     id: string;
@@ -309,14 +377,30 @@ async function readLayerProgressItems(
     error: string | null;
   }>;
 
-  return rows.map((row) => ({
-    id: row.id,
-    targetType: row.target_type,
-    targetId: row.target_id,
-    status: row.status,
-    attempts: Number(row.attempts ?? 0),
-    detail: row.error,
-  }));
+  return {
+    items: rows.map((row) => ({
+      id: row.id,
+      targetId: row.target_id,
+      status: row.status,
+      attempts: Number(row.attempts ?? 0),
+      detail: row.error,
+    })),
+    total,
+    page,
+    pageSize,
+    pageCount: Math.max(1, Math.ceil(total / pageSize)),
+  };
+}
+
+function normalizePage(value: number | undefined): number {
+  const page = Number(value ?? 1);
+  return Number.isFinite(page) ? Math.max(1, Math.floor(page)) : 1;
+}
+
+function normalizePageSize(value: number | undefined): number {
+  const pageSize = Number(value ?? 20);
+  if (!Number.isFinite(pageSize)) return 20;
+  return Math.min(100, Math.max(1, Math.floor(pageSize)));
 }
 
 /** 用于 SSE 端校验任务归属(不返实体) */

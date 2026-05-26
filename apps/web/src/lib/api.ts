@@ -105,6 +105,20 @@ export interface AdAccount {
   fbAccountId: string;
 }
 
+export interface PageResult<T> {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+  pageCount: number;
+}
+
+export interface AdAccountFacets {
+  currencies: string[];
+  timezoneNames: string[];
+  businessCountryCodes: string[];
+}
+
 export interface AdSet {
   id: string;
   name: string;
@@ -240,6 +254,28 @@ export const api = {
     call<AdAccount[]>(
       `/ad-accounts${fbAccountId ? `?fb_account_id=${encodeURIComponent(fbAccountId)}` : ''}`,
     ),
+  adAccountsPage: (opts: {
+    page: number;
+    pageSize: number;
+    fbAccountId?: string;
+    search?: string;
+    status?: string;
+    currency?: string;
+    timezoneName?: string;
+    businessCountryCode?: string;
+  }) => {
+    const qp = new URLSearchParams();
+    qp.set('paged', '1');
+    qp.set('page', String(opts.page));
+    qp.set('page_size', String(opts.pageSize));
+    if (opts.fbAccountId) qp.set('fb_account_id', opts.fbAccountId);
+    if (opts.search) qp.set('search', opts.search);
+    if (opts.status) qp.set('status', opts.status);
+    if (opts.currency) qp.set('currency', opts.currency);
+    if (opts.timezoneName) qp.set('timezone_name', opts.timezoneName);
+    if (opts.businessCountryCode) qp.set('business_country_code', opts.businessCountryCode);
+    return call<PageResult<AdAccount> & { facets: AdAccountFacets }>(`/ad-accounts?${qp.toString()}`);
+  },
   fbAuthorizeUrl: () =>
     call<{ authorize_url: string }>('/oauth/fb/authorize-url', { method: 'POST' }),
   fbCallback: (code: string) =>
@@ -534,6 +570,22 @@ export const api = {
       layerProgress: TaskLayerProgress[];
       failures: Array<{ id: string; targetId: string; error: string | null; attempts: number }>;
     }>(`/operations/${taskId}`),
+  taskItems: (
+    taskId: string,
+    opts: {
+      targetType: 'campaign' | 'adset' | 'ad';
+      status: 'success' | 'failed';
+      page: number;
+      pageSize: number;
+    },
+  ) => {
+    const qp = new URLSearchParams();
+    qp.set('target_type', opts.targetType);
+    qp.set('status', opts.status);
+    qp.set('page', String(opts.page));
+    qp.set('page_size', String(opts.pageSize));
+    return call<PageResult<TaskLayerProgressItem>>(`/operations/${taskId}/items?${qp.toString()}`);
+  },
   pauseTask: (taskId: string) =>
     call<null>(`/operations/${taskId}/pause`, { method: 'POST' }),
   resumeTask: (taskId: string) =>

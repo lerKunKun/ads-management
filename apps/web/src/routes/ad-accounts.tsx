@@ -1,6 +1,6 @@
 import { createFileRoute, redirect, Link } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { api, getToken } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import {
@@ -11,8 +11,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { Pagination, usePagination } from '@/components/Pagination';
-import { SearchFilterBar, matchText } from '@/components/SearchFilterBar';
+import { Pagination, PAGE_SIZE } from '@/components/Pagination';
+import { SearchFilterBar } from '@/components/SearchFilterBar';
 import { adAccountStatusLabel } from '@/lib/labels';
 
 export const Route = createFileRoute('/ad-accounts')({
@@ -23,10 +23,6 @@ export const Route = createFileRoute('/ad-accounts')({
 });
 
 function AdAccountsPage() {
-  const adsQ = useQuery({
-    queryKey: ['ad-accounts'],
-    queryFn: () => api.adAccounts(),
-  });
   const fbQ = useQuery({
     queryKey: ['fb-accounts'],
     queryFn: api.fbAccounts,
@@ -38,6 +34,30 @@ function AdAccountsPage() {
   const [currency, setCurrency] = useState('');
   const [timezone, setTimezone] = useState('');
   const [country, setCountry] = useState('');
+  const [page, setPage] = useState(1);
+  const debouncedSearch = useDebouncedValue(search, 250);
+
+  useEffect(() => {
+    setPage(1);
+  }, [country, currency, debouncedSearch, fbAccountId, status, timezone]);
+
+  const adsQ = useQuery({
+    queryKey: [
+      'ad-accounts-page',
+      { page, search: debouncedSearch, fbAccountId, status, currency, timezone, country },
+    ],
+    queryFn: () =>
+      api.adAccountsPage({
+        page,
+        pageSize: PAGE_SIZE,
+        ...(debouncedSearch ? { search: debouncedSearch } : {}),
+        ...(fbAccountId ? { fbAccountId } : {}),
+        ...(status ? { status } : {}),
+        ...(currency ? { currency } : {}),
+        ...(timezone ? { timezoneName: timezone } : {}),
+        ...(country ? { businessCountryCode: country } : {}),
+      }),
+  });
 
   const fbById = useMemo(
     () => new Map((fbQ.data ?? []).map((account) => [account.id, account])),
@@ -53,57 +73,33 @@ function AdAccountsPage() {
   );
 
   const currencyOptions = useMemo(() => {
-    const set = new Set<string>();
-    for (const account of adsQ.data ?? []) {
-      if (account.currency) set.add(account.currency);
-    }
     return [
       { value: '', label: '全部' },
-      ...Array.from(set)
-        .sort()
-        .map((value) => ({ value, label: value })),
+      ...(adsQ.data?.facets.currencies ?? []).map((value) => ({ value, label: value })),
     ];
   }, [adsQ.data]);
 
   const timezoneOptions = useMemo(() => {
-    const set = new Set<string>();
-    for (const account of adsQ.data ?? []) {
-      if (account.timezoneName) set.add(account.timezoneName);
-    }
     return [
       { value: '', label: '全部' },
-      ...Array.from(set)
-        .sort()
-        .map((value) => ({ value, label: value })),
+      ...(adsQ.data?.facets.timezoneNames ?? []).map((value) => ({ value, label: value })),
     ];
   }, [adsQ.data]);
 
   const countryOptions = useMemo(() => {
-    const set = new Set<string>();
-    for (const account of adsQ.data ?? []) {
-      if (account.businessCountryCode) set.add(account.businessCountryCode);
-    }
     return [
       { value: '', label: '全部' },
-      ...Array.from(set)
-        .sort()
-        .map((value) => ({ value, label: countryLabel(value) })),
+      ...(adsQ.data?.facets.businessCountryCodes ?? []).map((value) => ({
+        value,
+        label: countryLabel(value),
+      })),
     ];
   }, [adsQ.data]);
 
-  const filtered = useMemo(() => {
-    const accounts = adsQ.data ?? [];
-    return accounts.filter(
-      (account) =>
-        (matchText(account.name, search) || matchText(account.metaActId, search)) &&
-        (!fbAccountId || account.fbAccountId === fbAccountId) &&
-        (!status || account.status === status) &&
-        (!currency || account.currency === currency) &&
-        (!timezone || account.timezoneName === timezone) &&
-        (!country || account.businessCountryCode === country),
-    );
-  }, [adsQ.data, country, currency, fbAccountId, search, status, timezone]);
-  const pager = usePagination(filtered);
+  const pageData = adsQ.data;
+  const rows = pageData?.items ?? [];
+  const total = pageData?.total ?? 0;
+  const pageCount = pageData?.pageCount ?? 1;
 
   return (
     <div className="space-y-4">
@@ -179,8 +175,8 @@ function AdAccountsPage() {
             options: countryOptions,
           },
         ]}
-        total={adsQ.data?.length ?? 0}
-        filtered={filtered.length}
+        total={total}
+        filtered={total}
         onReset={() => {
           setSearch('');
           setFbAccountId('');
@@ -207,13 +203,13 @@ function AdAccountsPage() {
           </TableHeader>
           <TableBody>
             {adsQ.isLoading && <EmptyRow text="加载中..." />}
-            {!adsQ.isLoading && (adsQ.data?.length ?? 0) === 0 && (
+            {!adsQ.isLoading && total === 0 && !hasActiveFilters({ search, fbAccountId, status, currency, timezone, country }) && (
               <EmptyRow text="当前没有可见广告账户，请联系管理员分配广告账户。" />
             )}
-            {!adsQ.isLoading && (adsQ.data?.length ?? 0) > 0 && filtered.length === 0 && (
+            {!adsQ.isLoading && total === 0 && hasActiveFilters({ search, fbAccountId, status, currency, timezone, country }) && (
               <EmptyRow text="无匹配项" />
             )}
-            {pager.pageItems.map((account) => {
+            {rows.map((account) => {
               const fb = fbById.get(account.fbAccountId);
               return (
                 <TableRow key={account.id}>
@@ -255,10 +251,11 @@ function AdAccountsPage() {
           </TableBody>
         </Table>
         <Pagination
-          page={pager.page}
-          pageCount={pager.pageCount}
-          total={filtered.length}
-          onPageChange={pager.setPage}
+          page={page}
+          pageCount={pageCount}
+          total={total}
+          pageSize={PAGE_SIZE}
+          onPageChange={setPage}
         />
       </div>
     </div>
@@ -284,4 +281,17 @@ function statusClass(status: string): string {
 function countryLabel(code: string | null | undefined): string {
   if (!code) return '-';
   return code.toUpperCase();
+}
+
+function hasActiveFilters(values: Record<string, string>): boolean {
+  return Object.values(values).some(Boolean);
+}
+
+function useDebouncedValue<T>(value: T, delayMs: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const id = window.setTimeout(() => setDebounced(value), delayMs);
+    return () => window.clearTimeout(id);
+  }, [delayMs, value]);
+  return debounced;
 }

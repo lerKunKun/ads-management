@@ -426,9 +426,14 @@ scripts\rollback-production.ps1
 | `copy-flow-serial-current.md` | **当前**复制链路说明（串行自建 create-copy，主要参考文档） |
 | `batch-copy-flow-current.md` | 历史版本批量复制链路（Meta async_batch_requests，已废弃） |
 | `copy-parallel-async-plan.md` | 批量复制并行异步改造计划（设计草稿） |
+| `copy-parallel-async-risk-analysis.md` | 并行异步改造风险分析 |
+| `copy-parallel-task-evaluation.md` | 并行任务评估 |
+| `copy-concurrency-overall-recommendation.md` | 并发方案综合推荐 |
 | `large-campaign-copy-v2-dag-plan.md` | 大型 campaign Copy V2 DAG 计划 |
 | `large-campaign-copy-jsonb-state-machine-plan.md` | Copy V2 JSONB 状态机设计 |
 | `overall-optimization-execution-roadmap.md` | 整体优化执行优先级排序（权限→IAM→工作台→广告对象落库→审计） |
 | `access-chain-permission-audit.md` | 权限与选择链路审计 |
 | `global-governance-and-ad-object-storage-evaluation.md` | 全局治理底座与广告对象存储评估 |
 | `ui-optimization-iam-and-home-workspace.md` | IAM 三栏联动 + 广告管理工作台 UI 设计 |
+| `ui-optimization-suggestions.md` | UI 优化建议汇总 |
+| `online-meta-test-config.md` | 线上 Meta API 真实测试配置指南 |

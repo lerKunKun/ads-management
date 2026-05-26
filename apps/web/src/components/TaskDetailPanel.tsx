@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
-import { api, type TaskLayerProgress, type TaskLayerProgressItem } from '@/lib/api';
+import { useQuery } from '@tanstack/react-query';
+import { api, type TaskLayerProgress } from '@/lib/api';
 import {
   Table,
   TableBody,
@@ -9,7 +10,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { Pagination, usePagination } from '@/components/Pagination';
+import { Pagination } from '@/components/Pagination';
 import { taskStatusLabel } from '@/lib/labels';
 
 type TaskDetail = Awaited<ReturnType<typeof api.taskStatus>>;
@@ -107,7 +108,12 @@ export function TaskDetailPanel({
 
       <section className="space-y-3">
         {layers.map((layer) => (
-          <TaskLayerProgressRow key={layer.targetType} taskId={taskId} layer={layer} />
+          <TaskLayerProgressRow
+            key={layer.targetType}
+            taskId={taskId}
+            layer={layer}
+            liveTask={liveTask}
+          />
         ))}
       </section>
 
@@ -147,9 +153,11 @@ function TaskMetric({
 function TaskLayerProgressRow({
   taskId,
   layer,
+  liveTask,
 }: {
   taskId: string;
   layer: TaskLayerProgress;
+  liveTask: boolean;
 }) {
   const done = layer.success + layer.failed;
   const width = layer.total > 0 ? Math.min(100, Math.round((done / layer.total) * 100)) : 0;
@@ -174,16 +182,22 @@ function TaskLayerProgressRow({
         <TaskLayerItemDetails
           title="成功详情"
           count={layer.success}
-          items={layer.successItems}
           tone="success"
+          taskId={taskId}
+          targetType={layer.targetType}
+          status="success"
           pagerKey={`${taskId}:${layer.targetType}:success`}
+          liveTask={liveTask}
         />
         <TaskLayerItemDetails
           title="失败详情"
           count={layer.failed}
-          items={layer.failedItems}
           tone="danger"
+          taskId={taskId}
+          targetType={layer.targetType}
+          status="failed"
           pagerKey={`${taskId}:${layer.targetType}:failed`}
+          liveTask={liveTask}
         />
       </div>
     </div>
@@ -193,27 +207,50 @@ function TaskLayerProgressRow({
 function TaskLayerItemDetails({
   title,
   count,
-  items,
   tone,
+  taskId,
+  targetType,
+  status,
   pagerKey,
+  liveTask,
 }: {
   title: string;
   count: number;
-  items: TaskLayerProgressItem[];
   tone: 'success' | 'danger';
+  taskId: string;
+  targetType: 'campaign' | 'adset' | 'ad';
+  status: 'success' | 'failed';
   pagerKey: string;
+  liveTask: boolean;
 }) {
   const toneClass = tone === 'success' ? 'text-emerald-700' : 'text-rose-700';
-  const pager = usePagination(items, 20, pagerKey);
+  const pageSize = 20;
+  const [page, setPage] = useState(1);
+
+  useEffect(() => {
+    setPage(1);
+  }, [pagerKey]);
+
+  const q = useQuery({
+    queryKey: ['task-items', taskId, targetType, status, page, pageSize],
+    queryFn: () => api.taskItems(taskId, { targetType, status, page, pageSize }),
+    enabled: count > 0,
+    refetchInterval: liveTask ? 2000 : false,
+  });
+  const items = q.data?.items ?? [];
+  const total = q.data?.total ?? count;
+  const pageCount = q.data?.pageCount ?? Math.max(1, Math.ceil(total / pageSize));
   return (
     <div className="rounded-md border bg-muted/20">
       <div className={`border-b px-3 py-2 text-sm font-medium ${count > 0 ? toneClass : 'text-muted-foreground'}`}>
         {title}: {count} 条
       </div>
-      {items.length === 0 ? (
+      {count === 0 ? (
         <div className="px-3 py-3 text-xs text-muted-foreground">暂无明细</div>
       ) : (
         <>
+          {q.isLoading && <div className="px-3 py-3 text-xs text-muted-foreground">加载中...</div>}
+          {q.error && <div className="px-3 py-3 text-xs text-destructive">{(q.error as Error).message}</div>}
           <Table>
             <TableHeader>
               <TableRow>
@@ -222,7 +259,7 @@ function TaskLayerItemDetails({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {pager.pageItems.map((item) => (
+              {items.map((item) => (
                 <TableRow key={item.id}>
                   <TableCell className="font-mono text-xs">{item.targetId}</TableCell>
                   <TableCell className="break-words text-xs text-muted-foreground">
@@ -233,11 +270,11 @@ function TaskLayerItemDetails({
             </TableBody>
           </Table>
           <Pagination
-            page={pager.page}
-            pageCount={pager.pageCount}
-            total={items.length}
-            pageSize={pager.pageSize}
-            onPageChange={pager.setPage}
+            page={page}
+            pageCount={pageCount}
+            total={total}
+            pageSize={pageSize}
+            onPageChange={setPage}
           />
         </>
       )}
