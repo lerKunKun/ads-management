@@ -107,8 +107,8 @@ const METRIC_COLUMNS: Array<{ metric: SortMetric; label: string }> = [
   { metric: 'addToCart', label: '加购' },
   { metric: 'initiateCheckout', label: '结账' },
   { metric: 'cpm', label: 'CPM' },
+  { metric: 'roi', label: 'ROI' },
 ];
-const ROI_METRIC_COLUMN = { metric: 'roi', label: 'ROI' } satisfies { metric: SortMetric; label: string };
 
 function isTerminalTaskStatus(status: string): status is TerminalTaskStatus {
   return (TASK_TERMINAL as readonly string[]).includes(status);
@@ -182,10 +182,7 @@ export function EntityListView<T extends EntityRow>({
     () => summarizeInsights(summaryRows, insights),
     [insights, summaryRows],
   );
-  const visibleMetricColumns = useMemo(
-    () => (layer === 'ad' ? [...METRIC_COLUMNS, ROI_METRIC_COLUMN] : METRIC_COLUMNS),
-    [layer],
-  );
+  const visibleMetricColumns = METRIC_COLUMNS;
   const tableColumnCount = 4 + (enableBudget ? 1 : 0) + visibleMetricColumns.length + 1;
 
   function patchRows(ids: string[], patch: RowPatch) {
@@ -580,11 +577,9 @@ export function EntityListView<T extends EntityRow>({
                   <TableCell className="text-right tabular-nums">
                     {insight ? (insight.cpm ? insight.cpm.toFixed(2) : '-') : '-'}
                   </TableCell>
-                  {layer === 'ad' && (
-                    <TableCell className="text-right tabular-nums">
-                      {insight ? (insight.roi ? insight.roi.toFixed(2) : '-') : '-'}
-                    </TableCell>
-                  )}
+                  <TableCell className="text-right tabular-nums">
+                    {insight ? (insight.roi ? insight.roi.toFixed(2) : '-') : '-'}
+                  </TableCell>
                   <TableCell className="space-x-1 text-right">
                     <Button
                       size="sm"
@@ -616,7 +611,6 @@ export function EntityListView<T extends EntityRow>({
               summary={summary}
               currency={currency ?? null}
               enableBudget={enableBudget}
-              showRoi={layer === 'ad'}
             />
           </TableFooter>
         </Table>
@@ -854,13 +848,11 @@ function SummaryRow({
   summary,
   currency,
   enableBudget,
-  showRoi,
 }: {
   mode: 'selected' | 'all';
   summary: InsightSummaryTotal;
   currency: string | null;
   enableBudget?: boolean;
-  showRoi: boolean;
 }) {
   const label = mode === 'selected' ? `已选 ${summary.rows} 项` : `全部 ${summary.rows} 项`;
   return (
@@ -893,11 +885,9 @@ function SummaryRow({
       <TableCell className={`${SUMMARY_CELL_CLASS} text-right tabular-nums`}>
         {fmtSummaryDecimal(summary.cpm, summary.hasInsights && summary.impressions > 0)}
       </TableCell>
-      {showRoi && (
-        <TableCell className={`${SUMMARY_CELL_CLASS} text-right tabular-nums`}>
-          {fmtSummaryDecimal(summary.roi, summary.hasInsights && summary.roiCount > 0)}
-        </TableCell>
-      )}
+      <TableCell className={`${SUMMARY_CELL_CLASS} text-right tabular-nums`}>
+        {fmtSummaryDecimal(summary.roi, summary.hasInsights && summary.roiCount > 0)}
+      </TableCell>
       <TableCell className={`${SUMMARY_CELL_CLASS} text-right`} />
     </TableRow>
   );
