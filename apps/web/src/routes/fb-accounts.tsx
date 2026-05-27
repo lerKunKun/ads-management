@@ -58,18 +58,18 @@ function FbAccountsPage() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
-        <div>
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
           <h1 className="text-xl font-semibold">广告账户组</h1>
           <p className="text-sm text-muted-foreground">
             点击账户组名称进入组内广告账户。
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => refetch()}>
+        <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:items-center">
+          <Button variant="outline" size="sm" className="w-full sm:w-auto" onClick={() => refetch()}>
             刷新
           </Button>
-          <Button size="sm" onClick={bindFb}>
+          <Button size="sm" className="w-full sm:w-auto" onClick={bindFb}>
             绑定广告账户组
           </Button>
         </div>
@@ -107,7 +107,7 @@ function FbAccountsPage() {
         />
       </div>
 
-      <div className="border rounded-md">
+      <div className="overflow-hidden rounded-md border">
         <Table>
           <TableHeader>
             <TableRow>

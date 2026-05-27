@@ -49,17 +49,17 @@ export function Pagination({
   const end = Math.min(total, page * pageSize);
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3 text-base">
+    <div className="flex flex-col gap-3 border-t px-3 py-3 text-sm sm:flex-row sm:items-center sm:justify-between sm:px-4">
       <span className="text-sm text-muted-foreground">
         {start}-{end} / {total} 条，每页 {pageSize}
       </span>
-      <div className="flex flex-wrap items-center justify-end gap-2">
-        <span className="min-w-14 text-center text-sm text-muted-foreground">
+      <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center sm:justify-end">
+        <span className="col-span-2 text-center text-sm text-muted-foreground sm:col-span-1 sm:min-w-14">
           {page} / {pageCount}
         </span>
         <Button
           variant="outline"
-          className="min-w-16"
+          className="w-full sm:min-w-16 sm:w-auto"
           disabled={page <= 1}
           onClick={() => onPageChange(1)}
         >
@@ -67,7 +67,7 @@ export function Pagination({
         </Button>
         <Button
           variant="outline"
-          className="min-w-20"
+          className="w-full sm:min-w-20 sm:w-auto"
           disabled={page <= 1}
           onClick={() => onPageChange(page - 1)}
         >
@@ -75,7 +75,7 @@ export function Pagination({
         </Button>
         <Button
           variant="outline"
-          className="min-w-20"
+          className="w-full sm:min-w-20 sm:w-auto"
           disabled={page >= pageCount}
           onClick={() => onPageChange(page + 1)}
         >
@@ -83,7 +83,7 @@ export function Pagination({
         </Button>
         <Button
           variant="outline"
-          className="min-w-16"
+          className="w-full sm:min-w-16 sm:w-auto"
           disabled={page >= pageCount}
           onClick={() => onPageChange(pageCount)}
         >

@@ -352,13 +352,13 @@ function IamWorkspacePage() {
           </div>
           <h1 className="mt-1 text-xl font-semibold">IAM 权限工作台</h1>
         </div>
-        <div className="flex flex-wrap items-center justify-end gap-2">
+        <div className="flex w-full flex-wrap items-center justify-start gap-2 sm:w-auto sm:justify-end">
           <Building2 className="h-4 w-4 text-muted-foreground" />
           <select
             value={me.data?.companyId ?? ''}
             disabled={!canSwitchCompany || switchCompany.isPending || busy || hasDraftChanges}
             onChange={(event) => switchCompany.mutate(event.currentTarget.value)}
-            className="h-9 min-w-72 rounded-md border border-input bg-background px-3 text-sm disabled:bg-muted"
+            className="h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-3 text-sm disabled:bg-muted sm:min-w-72 sm:flex-none"
           >
             {(companiesQ.data ?? []).length === 0 && (
               <option value={me.data?.companyId ?? ''}>
@@ -380,6 +380,7 @@ function IamWorkspacePage() {
           <Button
             size="sm"
             variant="outline"
+            className="flex-1 sm:flex-none"
             disabled={!hasDraftChanges || busy}
             onClick={cancelDraft}
           >
@@ -387,6 +388,7 @@ function IamWorkspacePage() {
           </Button>
           <Button
             size="sm"
+            className="flex-1 sm:flex-none"
             disabled={!hasDraftChanges || bypassScope || busy}
             onClick={saveDraft}
           >
@@ -556,7 +558,7 @@ function IamWorkspacePage() {
                 当前显示 {filteredAdAccounts.length} 个
                 {draftFbIds.size > 0 ? `，受 ${draftFbIds.size} 个广告账户组过滤` : ''}
               </div>
-              <div className="flex gap-2">
+              <div className="grid w-full grid-cols-3 gap-2 sm:flex sm:w-auto">
                 <Button
                   size="sm"
                   variant="outline"
@@ -662,13 +664,13 @@ function SearchInput({
   placeholder: string;
 }) {
   return (
-    <div className="relative">
+    <div className="relative w-full">
       <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
       <Input
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
-        className="h-9 pl-8"
+        className="h-9 w-full pl-8"
       />
     </div>
   );

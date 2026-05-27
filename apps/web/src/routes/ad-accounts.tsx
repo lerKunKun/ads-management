@@ -108,7 +108,7 @@ function AdAccountsPage() {
   return (
     <div className="space-y-4">
       <header className="flex flex-wrap items-center justify-between gap-3">
-        <div>
+        <div className="min-w-0">
           <h1 className="text-xl font-semibold">广告账户</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             点击广告账户名称进入广告系列，再逐级进入广告组和广告。
@@ -117,6 +117,7 @@ function AdAccountsPage() {
         <Button
           variant="outline"
           size="sm"
+          className="w-full sm:w-auto"
           onClick={() => {
             adsQ.refetch();
             fbQ.refetch();

@@ -2,8 +2,8 @@ import * as React from 'react';
 import { cn } from '@/lib/utils';
 
 export const Table = ({ className, ...props }: React.HTMLAttributes<HTMLTableElement>) => (
-  <div className="relative w-full">
-    <table className={cn('w-full caption-bottom text-sm', className)} {...props} />
+  <div className="relative w-full overflow-x-auto [-webkit-overflow-scrolling:touch]">
+    <table className={cn('w-full min-w-max caption-bottom text-sm', className)} {...props} />
   </div>
 );
 

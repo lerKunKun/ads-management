@@ -142,7 +142,7 @@ export function CopyDialog({
       onOpenChange={(o) => !o && !submitting && onCancel()}
       title={`复制 ${layerName}${targetCount > 1 ? ` ×${targetCount}` : ''}`}
     >
-      {hint && <p className="text-xs text-muted-foreground mb-2">{hint}</p>}
+      {hint && <p className="mb-2 break-words text-xs text-muted-foreground">{hint}</p>}
 
       <div className="space-y-3">
         <div className="space-y-2">
@@ -189,7 +189,7 @@ export function CopyDialog({
                 修改预算
               </label>
             </div>
-            <div className="grid grid-cols-[120px_1fr] gap-2">
+            <div className="grid gap-2 sm:grid-cols-[120px_1fr]">
               <select
                 className="h-9 rounded-md border border-input bg-background px-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                 value={budgetKind}
@@ -230,7 +230,7 @@ export function CopyDialog({
           )}
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid gap-3 sm:grid-cols-2">
           <div>
             <label className="text-sm text-muted-foreground">前缀</label>
             <Input
@@ -249,7 +249,7 @@ export function CopyDialog({
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid gap-3 sm:grid-cols-2">
           <div>
             <label className="flex items-center gap-2 text-sm text-muted-foreground mt-2">
               <input
@@ -270,7 +270,7 @@ export function CopyDialog({
           </div>
         </div>
 
-        <div className="flex items-center gap-4 pt-1">
+        <div className="flex flex-wrap items-center gap-3 pt-1">
           {layer !== 'ad' && (
             <label className="flex items-center gap-2 text-sm">
               <input
@@ -293,7 +293,7 @@ export function CopyDialog({
 
         <div className="rounded-md bg-muted/50 p-2 text-xs">
           <span className="text-muted-foreground">预览名:</span>{' '}
-          <span className="font-mono">
+          <span className="break-all font-mono">
             {prefix || ''}
             <span className="text-muted-foreground">{`{原${layerName}名}`}</span>
             {buildSuffix()}

@@ -88,7 +88,7 @@ function AdminPage() {
   return (
     <div className="space-y-6">
       <header className="flex flex-wrap items-center justify-between gap-3">
-        <div>
+        <div className="min-w-0">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <LayoutDashboard className="h-4 w-4" />
             <span>管理中心</span>
@@ -96,7 +96,7 @@ function AdminPage() {
           <h1 className="mt-1 text-xl font-semibold">后台管理</h1>
         </div>
         {me.data && (
-          <div className="rounded-md border px-3 py-2 text-xs text-muted-foreground">
+          <div className="max-w-full break-words rounded-md border px-3 py-2 text-xs text-muted-foreground sm:max-w-[32rem]">
             当前公司 <b className="text-foreground">{currentCompanyName}</b>
             <span className="mx-2">/</span>
             当前用户 <b className="text-foreground">{me.data.email}</b>
@@ -194,7 +194,7 @@ function AdminMenuCard({
       className="group rounded-md border bg-background p-4 transition-colors hover:border-primary/50 hover:bg-muted/30"
     >
       <div className="flex items-start justify-between gap-4">
-        <div>
+        <div className="min-w-0">
           <div className="flex items-center gap-2">
             <Icon className="h-4 w-4 text-primary" />
             <h2 className="font-medium">{item.title}</h2>

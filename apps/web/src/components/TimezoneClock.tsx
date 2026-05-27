@@ -17,10 +17,10 @@ export function TimezoneClock({
   const formatted = useMemo(() => formatTimezoneTime(now, timezone), [now, timezone]);
 
   return (
-    <div className="rounded-md border bg-background px-3 py-2 text-right">
+    <div className="w-full rounded-md border bg-background px-3 py-2 text-left sm:w-auto sm:text-right">
       <div className="text-xs text-muted-foreground">{label}</div>
       <div className="mt-1 font-mono text-sm font-medium tabular-nums">{formatted.time}</div>
-      <div className="mt-0.5 max-w-[220px] truncate text-xs text-muted-foreground">
+      <div className="mt-0.5 max-w-full truncate text-xs text-muted-foreground sm:max-w-[220px]">
         {formatted.timezone}
       </div>
     </div>

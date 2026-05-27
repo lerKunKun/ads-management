@@ -40,14 +40,14 @@ function AdSetsPage() {
   return (
     <div className="space-y-4">
       <div className="grid gap-3 rounded-md border bg-background p-3 lg:grid-cols-[1fr_auto]">
-        <div className="grid gap-3 md:grid-cols-2">
-          <label className="space-y-1 text-sm">
+        <div className="grid min-w-0 gap-3 md:grid-cols-2">
+          <label className="min-w-0 space-y-1 text-sm">
             <span className="text-xs text-muted-foreground">广告账户</span>
             <div className="h-9 truncate rounded-md border bg-muted px-3 py-2 text-sm">
               {summary.data?.name ?? id}
             </div>
           </label>
-          <label className="space-y-1 text-sm">
+          <label className="min-w-0 space-y-1 text-sm">
             <span className="text-xs text-muted-foreground">当前广告系列</span>
             <select
               className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
@@ -67,11 +67,11 @@ function AdSetsPage() {
             </select>
           </label>
         </div>
-        <div className="flex flex-wrap items-end gap-2">
-          <Button asChild size="sm" variant="outline">
+        <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-end">
+          <Button asChild size="sm" variant="outline" className="w-full sm:w-auto">
             <Link to="/ad-accounts">广告账户列表</Link>
           </Button>
-          <Button asChild size="sm" variant="outline">
+          <Button asChild size="sm" variant="outline" className="w-full sm:w-auto">
             <Link to="/ad-accounts/$id" params={{ id }}>
               广告系列列表
             </Link>
@@ -80,8 +80,8 @@ function AdSetsPage() {
       </div>
 
       <header className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold">{campaign?.name ?? '广告系列'}</h1>
+        <div className="min-w-0">
+          <h1 className="truncate text-xl font-semibold">{campaign?.name ?? '广告系列'}</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             目标：{campaign?.objective ?? '-'}
           </p>

@@ -94,8 +94,8 @@ function FbAccountAdAccountsPage() {
           ← 广告账户组
         </Link>
       </div>
-      <div className="mb-4">
-        <h1 className="text-xl font-semibold">{fb?.name ?? '…'}</h1>
+      <div className="mb-4 min-w-0">
+        <h1 className="truncate text-xl font-semibold">{fb?.name ?? '…'}</h1>
         <p className="text-sm text-muted-foreground">
           绑定账号 {fb?.fbUserId ?? '-'} · 状态 {accountGroupStatusLabel(fb?.status)}
         </p>
@@ -105,9 +105,9 @@ function FbAccountAdAccountsPage() {
         <p className="text-sm text-destructive mb-2">{(adsQ.error as Error).message}</p>
       )}
 
-      <div className="flex items-center justify-between mb-3">
+      <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <h2 className="font-medium">组内广告账户</h2>
-        <Button size="sm" variant="outline" onClick={() => adsQ.refetch()}>
+        <Button size="sm" variant="outline" className="w-full sm:w-auto" onClick={() => adsQ.refetch()}>
           刷新
         </Button>
       </div>
@@ -165,7 +165,7 @@ function FbAccountAdAccountsPage() {
         />
       </div>
 
-      <div className="border rounded-md">
+      <div className="overflow-hidden rounded-md border">
         <Table>
           <TableHeader>
             <TableRow>

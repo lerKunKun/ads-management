@@ -346,7 +346,7 @@ function TaskProgressCell({
 
 function SectionHeader({ title, right }: { title: string; right?: ReactNode }) {
   return (
-    <div className="flex items-center justify-between gap-3 p-3">
+    <div className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between">
       <h2 className="font-medium">{title}</h2>
       {right}
     </div>

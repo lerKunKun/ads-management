@@ -7,12 +7,20 @@ import {
   type AsyncCopyInput,
   type CopyOptions,
   MetaApiError,
+  type MetaAd,
   type MetaAdRaw,
+  type MetaAdSet,
   type MetaAdSetRaw,
+  type MetaCampaign,
   type MetaCampaignRaw,
 } from '../../api/src/lib/meta-client';
 import { HttpError } from '../../api/src/lib/http-error';
 import type { OperationMessage } from '../../api/src/lib/rabbitmq-topology';
+import {
+  upsertAdSetSnapshots,
+  upsertAdSnapshots,
+  upsertCampaignSnapshots,
+} from '../../api/src/modules/ad-object/local-store';
 import { isFake } from './fake-meta';
 import { assertTaskRunnable, TaskCancelledError, TaskPausedError } from './task-control';
 
@@ -239,6 +247,21 @@ function expectedCopiedStatus(sourceStatus: string | undefined, opts: CopyOption
   if (opts.statusOption === 'ACTIVE') return 'ACTIVE';
   if (opts.statusOption === 'PAUSED') return 'PAUSED';
   return sourceStatus === 'ACTIVE' ? 'ACTIVE' : 'PAUSED';
+}
+
+function expectedCopiedAdStatus(sourceStatus: string | undefined): 'ACTIVE' | 'PAUSED' {
+  return sourceStatus === 'ACTIVE' ? 'ACTIVE' : 'PAUSED';
+}
+
+function optionalNumber(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : undefined;
+}
+
+function stepFinalName(step: StepRow | undefined, fallback: string): string {
+  const metadata = stepMetadataRecord(step);
+  return typeof metadata['finalName'] === 'string' ? metadata['finalName'] : fallback;
 }
 
 function pushMismatch(
@@ -782,6 +805,111 @@ async function updateWorkflowDone(
         dsql`${schema.operationCopyWorkflows.status} <> 'canceled'`,
       ));
   });
+}
+
+async function materializeCopyV2LocalSnapshots(
+  msg: OperationMessage,
+  workflowId: string,
+  newCampaignId: string,
+  plan: CampaignCopyPlan,
+  opts: CopyOptions,
+): Promise<void> {
+  const steps = await readWorkflowSteps(workflowId);
+  const stepByKey = new Map(steps.map((step) => [step.stepKey, step]));
+  const now = new Date().toISOString();
+
+  const campaignRow = stepByKey.get(campaignStep(plan.campaign.id));
+  if (campaignRow?.status !== 'success' || campaignRow.newId !== newCampaignId) {
+    throw new Error(`copy v2 local snapshot missing campaign step: ${plan.campaign.id}`);
+  }
+
+  const campaignStatus = expectedCopiedStatus(plan.campaign.status, opts);
+  const campaignDailyBudget = optionalNumber(
+    expectedBudgetValue(plan.campaign, opts, 'daily_budget', true),
+  );
+  const campaignLifetimeBudget = optionalNumber(
+    expectedBudgetValue(plan.campaign, opts, 'lifetime_budget', true),
+  );
+  const campaignSnapshot: MetaCampaign = {
+    id: newCampaignId,
+    name: stepFinalName(
+      campaignRow,
+      stepNamePlan(workflowId, plan.campaign.id, plan.campaign.name, opts.renameOptions, true).finalName,
+    ),
+    status: campaignStatus,
+    effectiveStatus: campaignStatus,
+    ...(plan.campaign.objective ? { objective: plan.campaign.objective } : {}),
+    ...(campaignDailyBudget !== undefined ? { dailyBudget: campaignDailyBudget } : {}),
+    ...(campaignLifetimeBudget !== undefined ? { lifetimeBudget: campaignLifetimeBudget } : {}),
+    ...(expectedStartTime(plan.campaign.start_time, opts)
+      ? { startTime: expectedStartTime(plan.campaign.start_time, opts) }
+      : {}),
+    ...(opts.endTime ?? plan.campaign.stop_time ? { stopTime: opts.endTime ?? plan.campaign.stop_time } : {}),
+    createdTime: now,
+    updatedTime: now,
+  };
+
+  const adsetSnapshots: MetaAdSet[] = [];
+  const adsByNewAdSet = new Map<string, MetaAd[]>();
+
+  for (const { adset, ads } of plan.adsets) {
+    const adsetRow = stepByKey.get(adsetStep(adset.id));
+    if (adsetRow?.status !== 'success' || !adsetRow.newId) {
+      throw new Error(`copy v2 local snapshot missing adset step: ${adset.id}`);
+    }
+
+    const adsetStatus = expectedCopiedStatus(adset.status, opts);
+    const adsetDailyBudget = optionalNumber(expectedBudgetValue(adset, opts, 'daily_budget', false));
+    const adsetLifetimeBudget = optionalNumber(expectedBudgetValue(adset, opts, 'lifetime_budget', false));
+    const adsetStartTime = expectedStartTime(adset.start_time, opts);
+    adsetSnapshots.push({
+      id: adsetRow.newId,
+      name: stepFinalName(
+        adsetRow,
+        stepNamePlan(workflowId, adset.id, adset.name, opts.renameOptions, false).finalName,
+      ),
+      status: adsetStatus,
+      effectiveStatus: adsetStatus,
+      campaignId: newCampaignId,
+      ...(adsetDailyBudget !== undefined ? { dailyBudget: adsetDailyBudget } : {}),
+      ...(adsetLifetimeBudget !== undefined ? { lifetimeBudget: adsetLifetimeBudget } : {}),
+      ...(adset.optimization_goal ? { optimizationGoal: adset.optimization_goal } : {}),
+      ...(adset.billing_event ? { billingEvent: adset.billing_event } : {}),
+      ...(optionalNumber(adset.bid_amount) !== undefined ? { bidAmount: optionalNumber(adset.bid_amount)! } : {}),
+      ...(adsetStartTime ? { startTime: adsetStartTime } : {}),
+      ...(opts.endTime ?? adset.end_time ? { endTime: opts.endTime ?? adset.end_time } : {}),
+      updatedTime: now,
+    });
+
+    const adSnapshots: MetaAd[] = [];
+    for (const ad of ads) {
+      const adRow = stepByKey.get(adStep(ad.id));
+      if (adRow?.status !== 'success' || !adRow.newId) {
+        throw new Error(`copy v2 local snapshot missing ad step: ${ad.id}`);
+      }
+      const adStatus = expectedCopiedAdStatus(ad.status);
+      adSnapshots.push({
+        id: adRow.newId,
+        name: stepFinalName(
+          adRow,
+          stepNamePlan(workflowId, ad.id, ad.name, opts.renameOptions, false).finalName,
+        ),
+        status: adStatus,
+        effectiveStatus: adStatus,
+        adsetId: adsetRow.newId,
+        campaignId: newCampaignId,
+        ...(ad.creative?.id ? { creativeId: ad.creative.id } : {}),
+        updatedTime: now,
+      });
+    }
+    adsByNewAdSet.set(adsetRow.newId, adSnapshots);
+  }
+
+  await upsertCampaignSnapshots(msg.companyId, msg.adAccountId, [campaignSnapshot]);
+  await upsertAdSetSnapshots(msg.companyId, msg.adAccountId, newCampaignId, adsetSnapshots);
+  for (const [newAdSetId, rows] of adsByNewAdSet.entries()) {
+    await upsertAdSnapshots(msg.companyId, msg.adAccountId, newAdSetId, rows);
+  }
 }
 
 async function mapLimited<T, R>(
@@ -1370,6 +1498,7 @@ export async function executeJsonbCampaignCopyV2(
       );
     }
 
+    await materializeCopyV2LocalSnapshots(msg, workflow.id, newCampaignId, plan, opts);
     await updateWorkflowDone(workflow.id, newCampaignId, plan);
     workflowSettled = true;
 

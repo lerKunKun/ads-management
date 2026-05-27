@@ -22,30 +22,31 @@ function RootLayout() {
   const isAdmin = me.data?.roles.some((role) => ADMIN_ROLES.has(role)) ?? false;
 
   return (
-    <div className="flex min-h-screen flex-col">
+    <div className="flex min-h-screen min-w-0 flex-col">
       <header className="border-b bg-background">
-        <div className="container mx-auto flex h-14 items-center justify-between px-4">
-          <Link to="/" className="font-semibold">
+        <div className="mx-auto flex w-full max-w-screen-2xl flex-col gap-2 px-3 py-2 sm:px-4 md:h-14 md:flex-row md:items-center md:justify-between md:py-0 lg:px-6">
+          <Link to="/" className="shrink-0 font-semibold">
             广告管理系统
           </Link>
-          <nav className="flex items-center gap-4 text-sm">
+          <nav className="flex min-w-0 items-center gap-2 overflow-x-auto pb-1 text-sm md:justify-end md:overflow-visible md:pb-0">
             {hasToken && me.data && (
               <>
-                <Link to="/ad-accounts" className="text-muted-foreground hover:text-foreground">
+                <Link to="/ad-accounts" className="shrink-0 text-muted-foreground hover:text-foreground">
                   广告账户
                 </Link>
-                <Link to="/fb-accounts" className="text-muted-foreground hover:text-foreground">
+                <Link to="/fb-accounts" className="shrink-0 text-muted-foreground hover:text-foreground">
                   广告账户组
                 </Link>
                 {isAdmin && (
-                  <Link to="/admin" className="text-muted-foreground hover:text-foreground">
+                  <Link to="/admin" className="shrink-0 text-muted-foreground hover:text-foreground">
                     管理
                   </Link>
                 )}
-                <span className="text-muted-foreground">{me.data.email}</span>
+                <span className="max-w-40 shrink truncate text-muted-foreground sm:max-w-56">{me.data.email}</span>
                 <Button
                   variant="outline"
                   size="sm"
+                  className="shrink-0"
                   onClick={() => {
                     clearToken();
                     qc.clear();
@@ -59,7 +60,7 @@ function RootLayout() {
           </nav>
         </div>
       </header>
-      <main className="container mx-auto flex-1 px-4 py-6">
+      <main className="mx-auto w-full max-w-screen-2xl min-w-0 flex-1 px-3 py-4 sm:px-4 sm:py-6 lg:px-6">
         <Outlet />
       </main>
     </div>

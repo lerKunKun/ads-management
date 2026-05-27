@@ -189,18 +189,19 @@ function UsersPage() {
       </div>
 
       <header className="flex flex-wrap items-center justify-between gap-3">
-        <div>
+        <div className="min-w-0">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Users className="h-4 w-4" />
             <span>用户目录</span>
           </div>
           <h1 className="mt-1 text-xl font-semibold">用户与角色</h1>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap">
           {isPlatformAdmin && (
             <Button
               variant="outline"
               size="sm"
+              className="w-full sm:w-auto"
               onClick={() => setChangingPassword(true)}
               disabled={changePassword.isPending}
             >
@@ -211,13 +212,14 @@ function UsersPage() {
           <Button
             variant="outline"
             size="sm"
+            className="w-full sm:w-auto"
             onClick={() => goIam()}
             disabled={!selectedCompany || switchCompany.isPending}
           >
             <ShieldCheck className="mr-2 h-4 w-4" />
             IAM权限管理
           </Button>
-          <Button size="sm" onClick={() => setCreating(true)} disabled={!selectedCompany}>
+          <Button size="sm" className="w-full sm:w-auto" onClick={() => setCreating(true)} disabled={!selectedCompany}>
             <Plus className="mr-2 h-4 w-4" />
             新建用户
           </Button>
@@ -230,7 +232,7 @@ function UsersPage() {
         </p>
       )}
 
-      <section className="flex flex-wrap items-center gap-3 rounded-md border bg-background p-3">
+      <section className="flex flex-col gap-3 rounded-md border bg-background p-3 sm:flex-row sm:flex-wrap sm:items-center">
         <div className="flex items-center gap-2">
           <Building2 className="h-4 w-4 text-muted-foreground" />
           <label className="text-xs text-muted-foreground">公司</label>
@@ -239,7 +241,7 @@ function UsersPage() {
           value={selectedCompany?.id ?? ''}
           disabled={!isPlatformAdmin || companiesQ.isLoading || companies.length <= 1}
           onChange={(event) => setSelectedCompanyId(event.currentTarget.value)}
-          className="h-9 min-w-72 rounded-md border border-input bg-background px-3 text-sm disabled:bg-muted"
+          className="h-9 w-full min-w-0 rounded-md border border-input bg-background px-3 text-sm disabled:bg-muted sm:w-auto sm:min-w-72"
         >
           {companies.length === 0 && <option value="">加载中</option>}
           {companies.map((company) => (
@@ -452,7 +454,7 @@ function UserTableRow({
         {new Date(user.createdAt).toLocaleString()}
       </TableCell>
       <TableCell className="text-right">
-        <div className="flex flex-wrap justify-end gap-2">
+        <div className="inline-flex flex-wrap justify-end gap-2">
           {canModifyUser && (
             <Button size="sm" variant="outline" disabled={updating} onClick={onEditEmail}>
               <Mail className="mr-1 h-3 w-3" />

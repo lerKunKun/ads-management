@@ -62,21 +62,21 @@ function DashboardPage() {
   return (
     <div className="space-y-6">
       <header className="flex flex-wrap items-center justify-between gap-3">
-        <div>
+        <div className="min-w-0">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Activity className="h-4 w-4" />
             <span>总览</span>
           </div>
           <h1 className="mt-1 text-xl font-semibold">广告管理首页</h1>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Button asChild>
+        <div className="grid w-full grid-cols-1 gap-2 sm:flex sm:w-auto sm:flex-wrap">
+          <Button asChild className="w-full sm:w-auto">
             <Link to="/ad-accounts">
               进入完整广告管理
               <ArrowRight className="ml-2 h-4 w-4" />
             </Link>
           </Button>
-          <Button variant="outline" size="sm" onClick={refreshAll}>
+          <Button variant="outline" size="sm" className="w-full sm:w-auto" onClick={refreshAll}>
             <RefreshCw className="mr-2 h-4 w-4" />
             刷新
           </Button>
@@ -120,14 +120,14 @@ function DashboardPage() {
 
       <section className="grid gap-4">
         <section className="rounded-md border bg-background">
-          <div className="flex items-center justify-between gap-3 border-b p-4">
-            <div>
+          <div className="flex flex-col gap-3 border-b p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
               <h2 className="font-medium">可见广告账户组</h2>
               <p className="mt-1 text-sm text-muted-foreground">
                 点击账户组查看组内广告账户，再进入广告系列、广告组和广告。
               </p>
             </div>
-            <Button asChild size="sm" variant="outline">
+            <Button asChild size="sm" variant="outline" className="w-full sm:w-auto">
               <Link to="/fb-accounts">全部账户组</Link>
             </Button>
           </div>
@@ -151,7 +151,7 @@ function DashboardPage() {
               完整管理页按广告账户进入，后续页面通过点击名称逐级打开广告系列、广告组、广告。
             </p>
           </div>
-          <Button asChild variant="outline">
+          <Button asChild variant="outline" className="w-full sm:w-auto">
             <Link to="/ad-accounts">
               打开广告账户列表
               <ArrowRight className="ml-2 h-4 w-4" />
@@ -178,7 +178,7 @@ function Metric({
 }) {
   return (
     <div className="rounded-md border bg-background p-4">
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex min-w-0 items-center justify-between gap-3">
         <span className="text-sm text-muted-foreground">{label}</span>
         <Icon className={cn('h-4 w-4', tone === 'warning' ? 'text-amber-600' : 'text-muted-foreground')} />
       </div>

@@ -330,8 +330,8 @@ export function EntityListView<T extends EntityRow>({
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           <h2 className="font-medium">{layerLabel}</h2>
           {selected.size > 0 && (
             <span className="text-sm text-muted-foreground">
@@ -340,8 +340,8 @@ export function EntityListView<T extends EntityRow>({
             </span>
           )}
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <label className="flex h-9 items-center gap-2 rounded-md border border-input bg-background px-2 text-sm">
+        <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center sm:justify-end">
+          <label className="col-span-2 flex h-9 items-center gap-2 rounded-md border border-input bg-background px-2 text-sm sm:col-span-1">
             <Switch
               size="sm"
               checked={activeFirst}
@@ -354,7 +354,7 @@ export function EntityListView<T extends EntityRow>({
             <span>启用优先</span>
           </label>
           <select
-            className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+            className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm sm:w-auto"
             value={datePreset}
             onChange={(event) => onDatePresetChange(event.target.value as DatePreset)}
           >
@@ -364,12 +364,13 @@ export function EntityListView<T extends EntityRow>({
               </option>
             ))}
           </select>
-          <Button size="sm" variant="outline" onClick={refetch}>
+          <Button size="sm" variant="outline" className="w-full sm:w-auto" onClick={refetch}>
             刷新
           </Button>
           <Button
             size="sm"
             variant="outline"
+            className="w-full sm:w-auto"
             disabled={selected.size === 0 || batch.isPending || !canChangeStatus}
             onClick={() => runBatch(`${layer}:status`, { status: 'PAUSED' })}
           >
@@ -377,6 +378,7 @@ export function EntityListView<T extends EntityRow>({
           </Button>
           <Button
             size="sm"
+            className="w-full sm:w-auto"
             disabled={selected.size === 0 || batch.isPending || !canChangeStatus}
             onClick={() => runBatch(`${layer}:status`, { status: 'ACTIVE' })}
           >
@@ -386,6 +388,7 @@ export function EntityListView<T extends EntityRow>({
             <Button
               size="sm"
               variant="outline"
+              className="w-full sm:w-auto"
               disabled={selected.size === 0 || batch.isPending || !canChangeBudget}
               onClick={() => setBatchBudgetOpen(true)}
             >
@@ -395,6 +398,7 @@ export function EntityListView<T extends EntityRow>({
           <Button
             size="sm"
             variant="outline"
+            className="w-full sm:w-auto"
             disabled={selected.size === 0 || batch.isPending || !canCopy}
             onClick={batchCopyClicked}
           >
@@ -403,6 +407,7 @@ export function EntityListView<T extends EntityRow>({
           <Button
             size="sm"
             variant="destructive"
+            className="w-full sm:w-auto"
             disabled={selected.size === 0 || batch.isPending || !canDelete}
             onClick={() => {
               if (!confirm(`批量归档 ${selected.size} 个${layerActionLabel}？`)) return;
@@ -452,7 +457,7 @@ export function EntityListView<T extends EntityRow>({
         </p>
       )}
 
-      <div className="rounded-md border">
+      <div className="overflow-hidden rounded-md border">
         <Table>
           <TableHeader>
             <TableRow>
@@ -468,7 +473,7 @@ export function EntityListView<T extends EntityRow>({
                 </label>
               </TableHead>
               <TableHead className="w-12" />
-              <TableHead>名称</TableHead>
+              <TableHead className="min-w-[220px]">名称</TableHead>
               <TableHead>状态</TableHead>
               {enableBudget && <TableHead>日预算</TableHead>}
               {visibleMetricColumns.map((column) => (
@@ -480,7 +485,7 @@ export function EntityListView<T extends EntityRow>({
                   onSort={toggleSort}
                 />
               ))}
-              <TableHead className="text-right">操作</TableHead>
+              <TableHead className="whitespace-nowrap text-right">操作</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -522,17 +527,18 @@ export function EntityListView<T extends EntityRow>({
                       aria-label={`status-${row.id}`}
                     />
                   </TableCell>
-                  <TableCell className="font-medium">
+                  <TableCell className="min-w-[220px] max-w-[420px] font-medium">
                     {drill ? (
                       <Link
                         to={drill.to}
                         params={drill.params}
-                        className="text-primary hover:underline"
+                        className="block truncate text-primary hover:underline"
+                        title={row.name}
                       >
                         {row.name}
                       </Link>
                     ) : (
-                      row.name
+                      <span className="block truncate" title={row.name}>{row.name}</span>
                     )}
                   </TableCell>
                   <TableCell>
@@ -580,26 +586,28 @@ export function EntityListView<T extends EntityRow>({
                   <TableCell className="text-right tabular-nums">
                     {insight ? (insight.roi ? insight.roi.toFixed(2) : '-') : '-'}
                   </TableCell>
-                  <TableCell className="space-x-1 text-right">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={archived || batch.isPending || !canCopy}
-                      onClick={() => singleCopyClicked(row)}
-                    >
-                      复制
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="destructive"
-                      disabled={archived || deleteMut.isPending || !canDelete}
-                      onClick={() => {
-                        if (!confirm(`归档 "${row.name}"？`)) return;
-                        deleteMut.mutate(row.id);
-                      }}
-                    >
-                      归档
-                    </Button>
+                  <TableCell className="whitespace-nowrap text-right">
+                    <div className="inline-flex items-center gap-1">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={archived || batch.isPending || !canCopy}
+                        onClick={() => singleCopyClicked(row)}
+                      >
+                        复制
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        disabled={archived || deleteMut.isPending || !canDelete}
+                        onClick={() => {
+                          if (!confirm(`归档 "${row.name}"？`)) return;
+                          deleteMut.mutate(row.id);
+                        }}
+                      >
+                        归档
+                      </Button>
+                    </div>
                   </TableCell>
                 </TableRow>
               );
@@ -826,10 +834,10 @@ function SortableMetricHead({
 }) {
   const active = sort?.metric === metric;
   return (
-    <TableHead className="text-right">
+    <TableHead className="whitespace-nowrap text-right">
       <button
         type="button"
-        className="inline-flex items-center gap-1 text-right hover:text-primary"
+        className="inline-flex items-center gap-1 whitespace-nowrap text-right hover:text-primary"
         onClick={() => onSort(metric)}
       >
         <span>{label}</span>
@@ -841,7 +849,7 @@ function SortableMetricHead({
   );
 }
 
-const SUMMARY_CELL_CLASS = 'sticky bottom-0 z-20 bg-[#B9DEFF]';
+const SUMMARY_CELL_CLASS = 'sticky bottom-0 z-20 whitespace-nowrap bg-[#B9DEFF]';
 
 function SummaryRow({
   mode,
