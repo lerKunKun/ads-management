@@ -505,7 +505,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(args),
     }),
-  listTasks: (limit = 50) =>
+  listTasks: (limit = 100) =>
     call<
       Array<{
         id: string;

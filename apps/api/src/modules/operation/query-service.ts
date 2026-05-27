@@ -87,7 +87,7 @@ export async function getTask(
           dsql`${schema.operationTaskItems.status} IN ('failed','dead')`,
         ),
       )
-      .limit(50);
+      .limit(100);
   });
   const layerProgress = await readLayerProgress(principal.companyId, taskId);
 

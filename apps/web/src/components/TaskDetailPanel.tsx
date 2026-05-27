@@ -204,7 +204,7 @@ function TaskLayerItemDetails({
   pagerKey: string;
 }) {
   const toneClass = tone === 'success' ? 'text-emerald-700' : 'text-rose-700';
-  const pager = usePagination(items, 20, pagerKey);
+  const pager = usePagination(items, 100, pagerKey);
   return (
     <div className="rounded-md border bg-muted/20">
       <div className={`border-b px-3 py-2 text-sm font-medium ${count > 0 ? toneClass : 'text-muted-foreground'}`}>

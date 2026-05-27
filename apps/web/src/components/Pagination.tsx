@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 
-export const PAGE_SIZE = 20;
+export const PAGE_SIZE = 100;
 
 export function usePagination<T>(items: T[], pageSize = PAGE_SIZE, resetKey?: string | number) {
   const [page, setPage] = useState(1);

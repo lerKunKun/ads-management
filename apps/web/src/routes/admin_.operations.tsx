@@ -80,7 +80,7 @@ function BreakersSection() {
       ),
     [data, kind, search],
   );
-  const pager = usePagination(filtered, 10);
+  const pager = usePagination(filtered, 100);
 
   return (
     <section className="overflow-hidden rounded-md border bg-background">
