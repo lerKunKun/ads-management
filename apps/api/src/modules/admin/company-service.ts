@@ -43,6 +43,16 @@ function assertCompanyAccess(principal: AuthPrincipal, companyId: string) {
   }
 }
 
+function assertPlatformAdmin(principal: AuthPrincipal) {
+  if (!isPlatformAdmin(principal)) {
+    throw new HttpError(403, 403, '仅超管可以修改或删除其他用户');
+  }
+}
+
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
 async function invalidateUser(userId: string): Promise<void> {
   const stream = redis.scanStream({ match: `perm:${userId}:*`, count: 50 });
   const keys: string[] = [];
@@ -222,10 +232,11 @@ export async function createCompanyUser(
       .limit(1);
     if (!company[0]) throw new HttpError(404, 404, '公司不存在');
 
+    const email = normalizeEmail(args.email);
     const dup = await tx
       .select({ id: schema.users.id })
       .from(schema.users)
-      .where(eq(schema.users.email, args.email))
+      .where(eq(schema.users.email, email))
       .limit(1);
     if (dup[0]) throw new HttpError(409, 409, '邮箱已注册');
 
@@ -241,7 +252,7 @@ export async function createCompanyUser(
       .insert(schema.users)
       .values({
         companyId,
-        email: args.email,
+        email,
         pwdHash: await bcrypt.hash(args.password, 10),
         status: 'active',
       })
@@ -256,8 +267,9 @@ export async function updateCompanyUser(
   principal: AuthPrincipal,
   companyId: string,
   userId: string,
-  patch: { roleCode?: string; status?: 'active' | 'disabled' },
+  patch: { email?: string; roleCode?: string; status?: 'active' | 'disabled' },
 ): Promise<void> {
+  assertPlatformAdmin(principal);
   assertCompanyAccess(principal, companyId);
   if (userId === principal.userId && patch.status === 'disabled') {
     throw new HttpError(422, 422, '不能禁用自己');
@@ -279,6 +291,19 @@ export async function updateCompanyUser(
       .where(and(eq(schema.users.id, userId), eq(schema.users.companyId, companyId)))
       .limit(1);
     if (!user[0]) throw new HttpError(404, 404, '用户不存在');
+
+    if (patch.email !== undefined) {
+      const email = normalizeEmail(patch.email);
+      const dup = await tx
+        .select({ id: schema.users.id })
+        .from(schema.users)
+        .where(eq(schema.users.email, email))
+        .limit(1);
+      if (dup[0] && dup[0].id !== userId) {
+        throw new HttpError(409, 409, '邮箱已注册');
+      }
+      await tx.update(schema.users).set({ email }).where(eq(schema.users.id, userId));
+    }
 
     if (patch.status) {
       await tx
@@ -305,6 +330,45 @@ export async function updateCompanyUser(
       `);
       await tx.insert(schema.userRoles).values({ userId, roleId: role[0].id });
     }
+  });
+
+  await invalidateUser(userId);
+}
+
+export async function deleteCompanyUser(
+  principal: AuthPrincipal,
+  companyId: string,
+  userId: string,
+): Promise<void> {
+  assertPlatformAdmin(principal);
+  assertCompanyAccess(principal, companyId);
+  if (userId === principal.userId) {
+    throw new HttpError(422, 422, '不能删除自己');
+  }
+
+  await db.transaction(async (tx) => {
+    await tx.execute(dsql`SELECT set_config('app.bypass_rls', '1', true)`);
+
+    const user = await tx
+      .select({ id: schema.users.id })
+      .from(schema.users)
+      .where(and(eq(schema.users.id, userId), eq(schema.users.companyId, companyId)))
+      .limit(1);
+    if (!user[0]) throw new HttpError(404, 404, '用户不存在');
+
+    await tx
+      .update(schema.auditLogs)
+      .set({ userId: null })
+      .where(eq(schema.auditLogs.userId, userId));
+    await tx
+      .update(schema.operationTasks)
+      .set({ userId: principal.userId })
+      .where(eq(schema.operationTasks.userId, userId));
+    await tx
+      .update(schema.userResourceGrants)
+      .set({ grantedBy: principal.userId })
+      .where(eq(schema.userResourceGrants.grantedBy, userId));
+    await tx.delete(schema.users).where(eq(schema.users.id, userId));
   });
 
   await invalidateUser(userId);

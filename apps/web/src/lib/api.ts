@@ -378,11 +378,20 @@ export const api = {
     }),
   updateUser: (
     id: string,
-    patch: { roleCode?: string; status?: 'active' | 'disabled' },
+    patch: { email?: string; roleCode?: string; status?: 'active' | 'disabled' },
   ) =>
     call<null>(`/iam/users/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(patch),
+    }),
+  deleteUser: (id: string) =>
+    call<null>(`/iam/users/${id}`, {
+      method: 'DELETE',
+    }),
+  changeOwnPassword: (currentPassword: string, newPassword: string) =>
+    call<null>('/iam/me/password', {
+      method: 'POST',
+      body: JSON.stringify({ currentPassword, newPassword }),
     }),
   listRoles: () =>
     call<Array<{ id: string; code: string; name: string; scope: 'platform' | 'company' }>>(
@@ -443,11 +452,15 @@ export const api = {
   updateCompanyUser: (
     companyId: string,
     userId: string,
-    patch: { roleCode?: string; status?: 'active' | 'disabled' },
+    patch: { email?: string; roleCode?: string; status?: 'active' | 'disabled' },
   ) =>
     call<null>(`/_admin/companies/${companyId}/users/${userId}`, {
       method: 'PATCH',
       body: JSON.stringify(patch),
+    }),
+  deleteCompanyUser: (companyId: string, userId: string) =>
+    call<null>(`/_admin/companies/${companyId}/users/${userId}`, {
+      method: 'DELETE',
     }),
   listBreakers: () =>
     call<

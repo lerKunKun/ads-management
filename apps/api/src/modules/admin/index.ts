@@ -23,6 +23,7 @@ import {
 import {
   createCompany,
   createCompanyUser,
+  deleteCompanyUser,
   listCompanies,
   listCompanyUsers,
   updateCompany,
@@ -203,8 +204,32 @@ export const admin = new Elysia({ name: 'admin' }).group('', (g) =>
           userId: t.String({ format: 'uuid' }),
         }),
         body: t.Object({
+          email: t.Optional(t.String({ format: 'email' })),
           roleCode: t.Optional(t.String({ minLength: 1 })),
           status: t.Optional(t.Union([t.Literal('active'), t.Literal('disabled')])),
+        }),
+        beforeHandle: requirePermission('iam:manage'),
+      },
+    )
+    .delete(
+      '/_admin/companies/:id/users/:userId',
+      async ({ principal, params, request }) => {
+        await deleteCompanyUser(principal, params.id, params.userId);
+        await writeAudit({
+          companyId: params.id,
+          userId: principal.userId,
+          action: 'admin:company:user:delete',
+          resource: `user:${params.userId}`,
+          ...(request.headers.get('x-forwarded-for')
+            ? { ip: request.headers.get('x-forwarded-for')!.split(',')[0]!.trim() }
+            : {}),
+        });
+        return { code: 0, msg: 'ok', data: null };
+      },
+      {
+        params: t.Object({
+          id: t.String({ format: 'uuid' }),
+          userId: t.String({ format: 'uuid' }),
         }),
         beforeHandle: requirePermission('iam:manage'),
       },
