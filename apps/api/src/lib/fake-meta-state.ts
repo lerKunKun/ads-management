@@ -199,6 +199,7 @@ function fakeInsightsFor(objectId: string, preset: DatePreset): InsightsSummary 
   const orders = Math.round(clicks * cvr);
   const addToCart = Math.round(orders * (2 + (seed % 3)));
   const checkout = Math.round(orders * (1.2 + ((seed >> 12) % 8) / 10));
+  const roi = Math.round((1.2 + ((seed >>> 16) % 280) / 100) * 100) / 100;
 
   return {
     spend,
@@ -211,6 +212,7 @@ function fakeInsightsFor(objectId: string, preset: DatePreset): InsightsSummary 
     cpa: orders > 0 ? Math.round((spend / orders) * 100) / 100 : 0,
     addToCart,
     initiateCheckout: checkout,
+    roi,
   };
 }
 

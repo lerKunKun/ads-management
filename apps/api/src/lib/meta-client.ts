@@ -213,6 +213,7 @@ interface MetaInsightsRaw {
   reach?: string;
   actions?: MetaActionRow[];
   cost_per_action_type?: MetaActionRow[];
+  purchase_roas?: MetaActionRow[];
 }
 
 export interface InsightsSummary {
@@ -226,6 +227,7 @@ export interface InsightsSummary {
   cpa: number;
   addToCart: number;
   initiateCheckout: number;
+  roi: number;
 }
 
 const EMPTY_INSIGHTS: InsightsSummary = {
@@ -239,6 +241,7 @@ const EMPTY_INSIGHTS: InsightsSummary = {
   cpa: 0,
   addToCart: 0,
   initiateCheckout: 0,
+  roi: 0,
 };
 
 const ORDER_ACTION_GROUPS = [
@@ -300,6 +303,15 @@ function actionMetric(
   return 0;
 }
 
+function roasMetric(roas: MetaActionRow[] | undefined): number {
+  if (!roas) return 0;
+  for (const row of roas) {
+    const value = Number(row.value);
+    if (Number.isFinite(value) && value > 0) return value;
+  }
+  return 0;
+}
+
 function toInsightsSummary(row: MetaInsightsRaw): InsightsSummary {
   const spend = Number(row.spend ?? 0);
   const orders = actionMetric(row.actions, ORDER_ACTION_GROUPS);
@@ -314,6 +326,7 @@ function toInsightsSummary(row: MetaInsightsRaw): InsightsSummary {
     cpa: orders > 0 ? spend / orders : 0,
     addToCart: actionMetric(row.actions, ADD_TO_CART_ACTION_GROUPS),
     initiateCheckout: actionMetric(row.actions, CHECKOUT_ACTION_GROUPS),
+    roi: roasMetric(row.purchase_roas),
   };
 }
 
@@ -1906,7 +1919,7 @@ export const meta = {
     if (FAKE_MODE) return fakeMeta.getInsights(objectId, datePreset);
     const q: Record<string, string> = {
       date_preset: datePreset,
-      fields: 'spend,impressions,clicks,cpc,cpm,ctr,reach,actions,cost_per_action_type',
+      fields: 'spend,impressions,clicks,cpc,cpm,ctr,reach,actions,cost_per_action_type,purchase_roas',
     };
     const r = await graph<MetaPagedEnvelope<MetaInsightsRaw>>(`/${objectId}/insights`, token, {
       query: q,
@@ -1933,7 +1946,7 @@ export const meta = {
           : level === 'adset'
             ? 'adset_id,'
             : 'ad_id,') +
-        'spend,impressions,clicks,cpc,cpm,ctr,reach,actions,cost_per_action_type',
+        'spend,impressions,clicks,cpc,cpm,ctr,reach,actions,cost_per_action_type,purchase_roas',
       limit: '500',
     };
     const out: Record<string, InsightsSummary> = {};

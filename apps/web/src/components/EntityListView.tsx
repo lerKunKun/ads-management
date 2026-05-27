@@ -62,7 +62,7 @@ export interface EntityListViewProps<T extends EntityRow> {
 type TerminalTaskStatus = 'success' | 'failed' | 'partial' | 'cancelled';
 type TaskStatus = 'pending' | 'running' | 'paused' | TerminalTaskStatus;
 type RowPatch = Partial<Pick<EntityRow, 'status' | 'dailyBudget' | 'lifetimeBudget'>>;
-type SortMetric = 'spend' | 'orders' | 'cpa' | 'cpc' | 'addToCart' | 'initiateCheckout' | 'cpm';
+type SortMetric = 'spend' | 'orders' | 'cpa' | 'cpc' | 'addToCart' | 'initiateCheckout' | 'cpm' | 'roi';
 type SortDirection = 'asc' | 'desc';
 type SortState = { metric: SortMetric; direction: SortDirection };
 type BatchState = {
@@ -93,6 +93,8 @@ interface InsightSummaryTotal {
   addToCart: number;
   initiateCheckout: number;
   cpm: number;
+  roi: number;
+  roiCount: number;
 }
 
 const TASK_TERMINAL: TerminalTaskStatus[] = ['success', 'failed', 'partial', 'cancelled'];
@@ -106,6 +108,7 @@ const METRIC_COLUMNS: Array<{ metric: SortMetric; label: string }> = [
   { metric: 'initiateCheckout', label: '结账' },
   { metric: 'cpm', label: 'CPM' },
 ];
+const ROI_METRIC_COLUMN = { metric: 'roi', label: 'ROI' } satisfies { metric: SortMetric; label: string };
 
 function isTerminalTaskStatus(status: string): status is TerminalTaskStatus {
   return (TASK_TERMINAL as readonly string[]).includes(status);
@@ -179,6 +182,11 @@ export function EntityListView<T extends EntityRow>({
     () => summarizeInsights(summaryRows, insights),
     [insights, summaryRows],
   );
+  const visibleMetricColumns = useMemo(
+    () => (layer === 'ad' ? [...METRIC_COLUMNS, ROI_METRIC_COLUMN] : METRIC_COLUMNS),
+    [layer],
+  );
+  const tableColumnCount = 4 + (enableBudget ? 1 : 0) + visibleMetricColumns.length + 1;
 
   function patchRows(ids: string[], patch: RowPatch) {
     setRowPatches((current) => {
@@ -466,7 +474,7 @@ export function EntityListView<T extends EntityRow>({
               <TableHead>名称</TableHead>
               <TableHead>状态</TableHead>
               {enableBudget && <TableHead>日预算</TableHead>}
-              {METRIC_COLUMNS.map((column) => (
+              {visibleMetricColumns.map((column) => (
                 <SortableMetricHead
                   key={column.metric}
                   metric={column.metric}
@@ -480,13 +488,13 @@ export function EntityListView<T extends EntityRow>({
           </TableHeader>
           <TableBody>
             {isLoading && (
-              <EmptyTableRow colSpan={enableBudget ? 13 : 12} text="加载中..." />
+              <EmptyTableRow colSpan={tableColumnCount} text="加载中..." />
             )}
             {!isLoading && rows.length === 0 && (
-              <EmptyTableRow colSpan={enableBudget ? 13 : 12} text={`暂无${layerLabel}`} />
+              <EmptyTableRow colSpan={tableColumnCount} text={`暂无${layerLabel}`} />
             )}
             {!isLoading && rows.length > 0 && filteredRows.length === 0 && (
-              <EmptyTableRow colSpan={enableBudget ? 13 : 12} text="无匹配项，请清除筛选条件" />
+              <EmptyTableRow colSpan={tableColumnCount} text="无匹配项，请清除筛选条件" />
             )}
             {pager.pageItems.map((row) => {
               const insight = insights?.[row.id];
@@ -572,6 +580,11 @@ export function EntityListView<T extends EntityRow>({
                   <TableCell className="text-right tabular-nums">
                     {insight ? (insight.cpm ? insight.cpm.toFixed(2) : '-') : '-'}
                   </TableCell>
+                  {layer === 'ad' && (
+                    <TableCell className="text-right tabular-nums">
+                      {insight ? (insight.roi ? insight.roi.toFixed(2) : '-') : '-'}
+                    </TableCell>
+                  )}
                   <TableCell className="space-x-1 text-right">
                     <Button
                       size="sm"
@@ -603,6 +616,7 @@ export function EntityListView<T extends EntityRow>({
               summary={summary}
               currency={currency ?? null}
               enableBudget={enableBudget}
+              showRoi={layer === 'ad'}
             />
           </TableFooter>
         </Table>
@@ -840,11 +854,13 @@ function SummaryRow({
   summary,
   currency,
   enableBudget,
+  showRoi,
 }: {
   mode: 'selected' | 'all';
   summary: InsightSummaryTotal;
   currency: string | null;
   enableBudget?: boolean;
+  showRoi: boolean;
 }) {
   const label = mode === 'selected' ? `已选 ${summary.rows} 项` : `全部 ${summary.rows} 项`;
   return (
@@ -877,6 +893,11 @@ function SummaryRow({
       <TableCell className={`${SUMMARY_CELL_CLASS} text-right tabular-nums`}>
         {fmtSummaryDecimal(summary.cpm, summary.hasInsights && summary.impressions > 0)}
       </TableCell>
+      {showRoi && (
+        <TableCell className={`${SUMMARY_CELL_CLASS} text-right tabular-nums`}>
+          {fmtSummaryDecimal(summary.roi, summary.hasInsights && summary.roiCount > 0)}
+        </TableCell>
+      )}
       <TableCell className={`${SUMMARY_CELL_CLASS} text-right`} />
     </TableRow>
   );
@@ -999,6 +1020,8 @@ function summarizeInsights<T extends EntityRow>(
     addToCart: 0,
     initiateCheckout: 0,
     cpm: 0,
+    roi: 0,
+    roiCount: 0,
   };
   for (const row of rows) {
     const insight = insights?.[row.id];
@@ -1010,10 +1033,15 @@ function summarizeInsights<T extends EntityRow>(
     total.orders += insight.orders;
     total.addToCart += insight.addToCart;
     total.initiateCheckout += insight.initiateCheckout;
+    if (insight.roi > 0) {
+      total.roi += insight.roi;
+      total.roiCount += 1;
+    }
   }
   total.cpa = total.orders > 0 ? total.spend / total.orders : 0;
   total.cpc = total.clicks > 0 ? total.spend / total.clicks : 0;
   total.cpm = total.impressions > 0 ? (total.spend / total.impressions) * 1000 : 0;
+  total.roi = total.roiCount > 0 ? total.roi / total.roiCount : 0;
   return total;
 }
 

@@ -143,6 +143,7 @@ export interface InsightsSummary {
   cpa: number;
   addToCart: number;
   initiateCheckout: number;
+  roi: number;
 }
 
 export type DatePreset =
