@@ -369,7 +369,12 @@ export const admin = new Elysia({ name: 'admin' }).group('', (g) =>
               payload: schema.operationTasks.payload,
             })
             .from(schema.operationTasks)
-            .where(eq(schema.operationTasks.companyId, principal.companyId))
+            .where(
+              and(
+                eq(schema.operationTasks.companyId, principal.companyId),
+                eq(schema.operationTasks.userId, principal.userId),
+              ),
+            )
             .orderBy(desc(schema.operationTasks.createdAt))
             .limit(limit);
         });

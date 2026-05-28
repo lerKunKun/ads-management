@@ -593,6 +593,18 @@ function addBudgetFormValues(
   addFormValue(form, 'lifetime_budget', source.lifetime_budget);
 }
 
+function hasFormValue(value: unknown): boolean {
+  return value !== undefined && value !== null && value !== '';
+}
+
+function hasSourceBudget(source: { daily_budget?: string; lifetime_budget?: string }): boolean {
+  return hasFormValue(source.daily_budget) || hasFormValue(source.lifetime_budget);
+}
+
+function hasBudgetOverride(opts: CopyOptions): boolean {
+  return hasFormValue(opts.dailyBudget) || hasFormValue(opts.lifetimeBudget);
+}
+
 function addPositiveFormValue(form: Record<string, string>, key: string, value: unknown): void {
   if (value === undefined || value === null || value === '') return;
   const numeric = typeof value === 'number' ? value : Number(value);
@@ -880,7 +892,9 @@ function copyCampaignCreateForm(source: MetaCampaignRaw, opts: CopyOptions, isTo
     special_ad_categories: JSON.stringify(source.special_ad_categories ?? []),
   };
   addFormValue(form, 'buying_type', source.buying_type ?? 'AUCTION');
-  addFormValue(form, 'bid_strategy', source.bid_strategy);
+  if (hasSourceBudget(source) || (isTopLevel && hasBudgetOverride(opts))) {
+    addFormValue(form, 'bid_strategy', source.bid_strategy);
+  }
   addBudgetFormValues(form, source, opts, isTopLevel);
   addFormValue(form, 'start_time', copyStartTime(source.start_time, opts));
   addFormValue(form, 'stop_time', opts.endTime ?? source.stop_time);

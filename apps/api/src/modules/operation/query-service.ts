@@ -1,12 +1,25 @@
 /**
  * 任务详情查询 + 实时进度合并(Redis 进度优先,fall back DB)。
- * 跨租户/作用域守卫: 仅当 task.company_id == principal.companyId 才放行。
+ * 跨租户/个人任务守卫: 仅当 task.company_id == principal.companyId 且 task.user_id == principal.userId 才放行。
  */
-import { and, eq, sql as dsql } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql as dsql } from 'drizzle-orm';
 import { db, schema } from '../../lib/db';
 import { readProgress, setProgressStatus, type ProgressSnapshot } from '../../lib/progress';
 import { HttpError } from '../../lib/http-error';
 import type { AuthPrincipal } from '../iam/auth-service';
+
+export interface TaskSummary {
+  id: string;
+  type: string;
+  status: string;
+  total: number;
+  success: number;
+  failed: number;
+  userId: string;
+  createdAt: string;
+  updatedAt: number | null;
+  payload: unknown;
+}
 
 export interface TaskDetail extends ProgressSnapshot {
   type: string;
@@ -38,6 +51,75 @@ export interface TaskLayerProgressItem {
   detail: string | null;
 }
 
+export async function listMyTasks(
+  principal: AuthPrincipal,
+  limit: number,
+): Promise<TaskSummary[]> {
+  const cappedLimit = Math.min(Math.max(limit, 1), 200);
+  const rows = await db.transaction(async (tx) => {
+    await tx.execute(dsql`SELECT set_config('app.current_company_id', ${principal.companyId}, true)`);
+    return tx
+      .select({
+        id: schema.operationTasks.id,
+        type: schema.operationTasks.type,
+        status: schema.operationTasks.status,
+        total: schema.operationTasks.total,
+        success: schema.operationTasks.success,
+        failed: schema.operationTasks.failed,
+        userId: schema.operationTasks.userId,
+        createdAt: schema.operationTasks.createdAt,
+        payload: schema.operationTasks.payload,
+      })
+      .from(schema.operationTasks)
+      .where(
+        and(
+          eq(schema.operationTasks.companyId, principal.companyId),
+          eq(schema.operationTasks.userId, principal.userId),
+        ),
+      )
+      .orderBy(desc(schema.operationTasks.createdAt))
+      .limit(cappedLimit);
+  });
+
+  const taskIds = rows.map((row) => row.id);
+  const workflowRows = taskIds.length
+    ? await db.transaction(async (tx) => {
+        await tx.execute(dsql`SELECT set_config('app.current_company_id', ${principal.companyId}, true)`);
+        return tx
+          .select({
+            taskId: schema.operationCopyWorkflows.taskId,
+            updatedAt: dsql<Date | null>`max(${schema.operationCopyWorkflows.updatedAt})`,
+          })
+          .from(schema.operationCopyWorkflows)
+          .where(inArray(schema.operationCopyWorkflows.taskId, taskIds))
+          .groupBy(schema.operationCopyWorkflows.taskId);
+      })
+    : [];
+  const workflowUpdatedAtByTask = new Map(
+    workflowRows.map((row) => [
+      row.taskId,
+      row.updatedAt ? new Date(row.updatedAt).getTime() : null,
+    ]),
+  );
+  const progressEntries = await Promise.all(
+    rows.map(async (row) => [row.id, await readProgress(row.id)] as const),
+  );
+  const progressByTask = new Map(progressEntries);
+
+  return rows.map((row) => {
+    const snap = progressByTask.get(row.id);
+    return {
+      ...row,
+      status: snap?.status ?? row.status,
+      total: snap?.total ?? row.total,
+      success: snap?.success ?? row.success,
+      failed: snap?.failed ?? row.failed,
+      createdAt: row.createdAt.toISOString(),
+      updatedAt: snap?.updatedAt ?? workflowUpdatedAtByTask.get(row.id) ?? null,
+    };
+  });
+}
+
 export async function getTask(
   principal: AuthPrincipal,
   taskId: string,
@@ -51,6 +133,7 @@ export async function getTask(
         and(
           eq(schema.operationTasks.id, taskId),
           eq(schema.operationTasks.companyId, principal.companyId),
+          eq(schema.operationTasks.userId, principal.userId),
         ),
       )
       .limit(1);
@@ -332,6 +415,7 @@ export async function assertTaskOwned(
         and(
           eq(schema.operationTasks.id, taskId),
           eq(schema.operationTasks.companyId, principal.companyId),
+          eq(schema.operationTasks.userId, principal.userId),
         ),
       )
       .limit(1);
@@ -404,6 +488,7 @@ async function updateTaskStatus(
       SET status = ${status}::operation_status
       WHERE id = ${taskId}
         AND company_id = ${principal.companyId}
+        AND user_id = ${principal.userId}
         AND status NOT IN ('success','failed','partial','cancelled')
       RETURNING id
     `);

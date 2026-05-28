@@ -37,6 +37,9 @@ function RootLayout() {
                 <Link to="/fb-accounts" className="shrink-0 text-muted-foreground hover:text-foreground">
                   广告账户组
                 </Link>
+                <Link to="/operations" className="shrink-0 text-muted-foreground hover:text-foreground">
+                  我的任务
+                </Link>
                 {isAdmin && (
                   <Link to="/admin" className="shrink-0 text-muted-foreground hover:text-foreground">
                     管理

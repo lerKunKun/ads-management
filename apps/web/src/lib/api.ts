@@ -224,6 +224,19 @@ export type TaskStatus =
   | 'failed'
   | 'cancelled';
 
+export interface TaskSummary {
+  id: string;
+  type: string;
+  status: string;
+  total: number;
+  success: number;
+  failed: number;
+  userId: string;
+  createdAt: string;
+  updatedAt: number | null;
+  payload: unknown;
+}
+
 export const api = {
   login: (email: string, password: string) =>
     call<{ token: string; user: Omit<Me, 'scope'> }>('/iam/login', {
@@ -507,20 +520,9 @@ export const api = {
       body: JSON.stringify(args),
     }),
   listTasks: (limit = 100) =>
-    call<
-      Array<{
-        id: string;
-        type: string;
-        status: string;
-        total: number;
-        success: number;
-        failed: number;
-        userId: string;
-        createdAt: string;
-        updatedAt: number | null;
-        payload: unknown;
-      }>
-    >(`/_admin/tasks?limit=${limit}`),
+    call<TaskSummary[]>(`/_admin/tasks?limit=${limit}`),
+  myTasks: (limit = 100) =>
+    call<TaskSummary[]>(`/operations/tasks?limit=${limit}`),
   listAudit: (opts: { limit?: number; action?: string } = {}) => {
     const qp = new URLSearchParams();
     if (opts.limit) qp.set('limit', String(opts.limit));

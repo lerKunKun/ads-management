@@ -394,6 +394,15 @@ export const operation = new Elysia({ name: 'operation' })
 
       // ===== 任务详情 / SSE =====
       .get(
+        '/operations/tasks',
+        async ({ principal, query }) => {
+          const limit = Math.min(Math.max(Number(query.limit ?? '50'), 1), 200);
+          const data = await q.listMyTasks(principal, limit);
+          return { code: 0, msg: 'ok', data };
+        },
+        { query: t.Object({ limit: t.Optional(t.String()) }) },
+      )
+      .get(
         '/operations/:taskId',
         async ({ principal, params }) => {
           const data = await q.getTask(principal, params.taskId);
