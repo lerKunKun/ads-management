@@ -369,6 +369,18 @@ export const operation = new Elysia({ name: 'operation' })
           beforeHandle: requirePermission('campaign:delete'),
         },
       )
+      .get(
+        '/archives',
+        async ({ principal, query }) => {
+          const requestedLimit = Number(query.limit ?? '200');
+          const limit = Number.isFinite(requestedLimit)
+            ? Math.min(Math.max(requestedLimit, 1), 500)
+            : 200;
+          const data = await svc.listMyArchivedAds(principal, limit);
+          return { code: 0, msg: 'ok', data };
+        },
+        { query: t.Object({ limit: t.Optional(t.String()) }) },
+      )
 
       // ===== Insights (by level) =====
       .get(

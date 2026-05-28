@@ -43,6 +43,13 @@
       "when": 1779782400000,
       "tag": "0005_bind_permission_for_all_roles",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1779945600000,
+      "tag": "0006_ad_archives",
+      "breakpoints": true
     }
   ]
 }

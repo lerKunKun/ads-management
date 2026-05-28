@@ -165,6 +165,12 @@ export interface MetaAdRaw {
   updated_time?: string;
 }
 
+interface MetaCreativePostRaw {
+  effective_object_story_id?: string;
+  object_story_id?: string;
+  permalink_url?: string;
+}
+
 interface MetaObjectOwnershipRaw {
   account_id?: string;
   campaign_id?: string;
@@ -427,6 +433,13 @@ function n(v: string | number | undefined): number | undefined {
 function toActId(accountId: string | undefined): string | undefined {
   if (!accountId) return undefined;
   return accountId.startsWith('act_') ? accountId : `act_${accountId}`;
+}
+
+function postUrlFromStoryId(storyId: string | undefined): string | undefined {
+  if (!storyId) return undefined;
+  const [pageId, postId] = storyId.split('_');
+  if (pageId && postId) return `https://www.facebook.com/${pageId}/posts/${postId}`;
+  return `https://www.facebook.com/${storyId}`;
 }
 
 function pageAll<TRaw>(
@@ -1060,6 +1073,15 @@ export const meta = {
   async me(token: string): Promise<{ id: string; name: string }> {
     if (FAKE_MODE) return { id: 'mock_fb_user_1', name: 'Mock FB User' };
     return graph<{ id: string; name: string }>('/me', token, { query: { fields: 'id,name' } });
+  },
+
+  async getCreativePostUrl(token: string, creativeId: string): Promise<string | undefined> {
+    if (FAKE_MODE) return undefined;
+    const creative = await graph<MetaCreativePostRaw>(`/${creativeId}`, token, {
+      query: { fields: 'effective_object_story_id,object_story_id,permalink_url' },
+    });
+    if (creative.permalink_url?.startsWith('http')) return creative.permalink_url;
+    return postUrlFromStoryId(creative.effective_object_story_id ?? creative.object_story_id);
   },
 
   async listUserAdAccounts(token: string): Promise<

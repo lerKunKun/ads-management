@@ -37,6 +37,11 @@ import {
   upsertCampaignSnapshots,
   upsertLocalCopyPlaceholder,
 } from '../ad-object/local-store';
+import {
+  archiveAdForUser,
+  listArchivedAdsForUser,
+  type ArchivedAdDto,
+} from '../ad-object/archive-store';
 
 type CampaignStatus = 'ACTIVE' | 'PAUSED' | 'ARCHIVED';
 
@@ -507,6 +512,20 @@ export async function deleteEntity(
       throw err;
     }
   }
+  if (args.targetType === 'ad' && args.hard !== true) {
+    try {
+      await archiveAdForUser({
+        companyId: principal.companyId,
+        userId: principal.userId,
+        adAccountId: args.adAccountId,
+        adId: args.targetId,
+        token: ctx.token,
+        owner,
+      });
+    } catch (err) {
+      console.error('[archive-ad] single delete archive failed', err);
+    }
+  }
   await writeLocalBestEffort(`${args.targetType}:delete`, () => markLocalDeleted({
     companyId: principal.companyId,
     adAccountId: args.adAccountId,
@@ -522,6 +541,17 @@ export async function deleteEntity(
     resource: `${args.targetType}:${args.targetId}`,
     detail: { adAccountId: args.adAccountId, hard: args.hard === true },
     ...(args.ip ? { ip: args.ip } : {}),
+  });
+}
+
+export async function listMyArchivedAds(
+  principal: AuthPrincipal,
+  limit = 200,
+): Promise<ArchivedAdDto[]> {
+  return listArchivedAdsForUser({
+    companyId: principal.companyId,
+    userId: principal.userId,
+    limit,
   });
 }
 

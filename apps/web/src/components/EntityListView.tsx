@@ -22,7 +22,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { CopyDialog, type CopySourceSnapshot } from '@/components/CopyDialog';
+import { CopyDialog } from '@/components/CopyDialog';
 import { Pagination, usePagination } from '@/components/Pagination';
 import { SearchFilterBar, matchText } from '@/components/SearchFilterBar';
 import { metaEffectiveStatusLabel, metaEntityStatusLabel, taskStatusLabel } from '@/lib/labels';
@@ -70,7 +70,7 @@ type BatchState = {
   params: Record<string, unknown>;
   ids: string[];
 };
-type CopyOpenState = { ids: string[]; hint?: string; sources: CopySourceSnapshot[] };
+type CopyOpenState = { ids: string[]; hint?: string };
 
 interface ProgressSnap {
   taskId: string;
@@ -125,7 +125,6 @@ export function EntityListView<T extends EntityRow>({
   drillTo,
   enableBudget = true,
   currency,
-  adAccountTimezone,
   insights,
   datePreset,
   onDatePresetChange,
@@ -294,17 +293,15 @@ export function EntityListView<T extends EntityRow>({
   }
 
   function singleCopyClicked(row: T) {
-    setCopyOpen({ ids: [row.id], hint: `来源：${row.name}`, sources: [copySourceFromRow(row, layer)] });
+    setCopyOpen({ ids: [row.id], hint: `来源：${row.name}` });
   }
 
   function batchCopyClicked() {
     if (selected.size === 0) return;
     const selectedIds = Array.from(selected);
-    const sourceRows = patchedRows.filter((row) => selected.has(row.id));
     setCopyOpen({
       ids: selectedIds,
       hint: `共 ${selected.size} 个来源`,
-      sources: sourceRows.map((row) => copySourceFromRow(row, layer)),
     });
   }
 
@@ -410,11 +407,11 @@ export function EntityListView<T extends EntityRow>({
             className="w-full sm:w-auto"
             disabled={selected.size === 0 || batch.isPending || !canDelete}
             onClick={() => {
-              if (!confirm(`批量归档 ${selected.size} 个${layerActionLabel}？`)) return;
+              if (!confirm(`批量删除 ${selected.size} 个${layerActionLabel}？`)) return;
               runBatch(`${layer}:delete`, { hard: false });
             }}
           >
-            批量归档
+            批量删除
           </Button>
         </div>
       </div>
@@ -601,11 +598,11 @@ export function EntityListView<T extends EntityRow>({
                         variant="destructive"
                         disabled={archived || deleteMut.isPending || !canDelete}
                         onClick={() => {
-                          if (!confirm(`归档 "${row.name}"？`)) return;
+                          if (!confirm(`删除 "${row.name}"？`)) return;
                           deleteMut.mutate(row.id);
                         }}
                       >
-                        归档
+                        删除
                       </Button>
                     </div>
                   </TableCell>
@@ -667,9 +664,6 @@ export function EntityListView<T extends EntityRow>({
         onCancel={() => setCopyOpen(null)}
         onSubmit={doCopy}
         submitting={batch.isPending}
-        adAccountTimezone={adAccountTimezone}
-        currency={currency}
-        sources={copyOpen?.sources ?? []}
       />
 
       <TaskProgress
@@ -935,18 +929,6 @@ function deliveryState(row: EntityRow): { label: string; className: string } {
   return {
     label: metaEntityStatusLabel(row.status),
     className: 'border-muted bg-muted/40 text-muted-foreground',
-  };
-}
-
-function copySourceFromRow(row: EntityRow, layer: 'campaign' | 'adset' | 'ad'): CopySourceSnapshot {
-  const startTime =
-    layer === 'ad' ? row.adsetStartTime ?? row.startTime : row.startTime;
-  return {
-    id: row.id,
-    name: row.name,
-    ...(startTime ? { startTime } : {}),
-    ...(row.dailyBudget !== undefined ? { dailyBudget: row.dailyBudget } : {}),
-    ...(row.lifetimeBudget !== undefined ? { lifetimeBudget: row.lifetimeBudget } : {}),
   };
 }
 

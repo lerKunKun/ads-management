@@ -2,7 +2,7 @@ import { createFileRoute, redirect, Link } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo } from 'react';
 import { ArrowLeft, Pause, Play, RefreshCw, Square } from 'lucide-react';
-import { api, getToken, openTaskStream } from '@/lib/api';
+import { api, getToken, openAdminTaskStream } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { TaskDetailPanel } from '@/components/TaskDetailPanel';
 
@@ -13,7 +13,7 @@ export const Route = createFileRoute('/admin_/operations_/$taskId')({
   component: OperationTaskDetailPage,
 });
 
-type TaskDetail = Awaited<ReturnType<typeof api.taskStatus>>;
+type TaskDetail = Awaited<ReturnType<typeof api.adminTaskStatus>>;
 
 const TERMINAL = new Set(['success', 'failed', 'partial', 'cancelled']);
 
@@ -23,7 +23,7 @@ function OperationTaskDetailPage() {
   const queryKey = useMemo(() => ['admin', 'task-detail', taskId] as const, [taskId]);
   const q = useQuery({
     queryKey,
-    queryFn: () => api.taskStatus(taskId),
+    queryFn: () => api.adminTaskStatus(taskId),
     refetchInterval: (query) => {
       const status = query.state.data?.status;
       return status === 'running' || status === 'pending' ? 2000 : false;
@@ -31,15 +31,15 @@ function OperationTaskDetailPage() {
   });
   const currentStatus = q.data?.status;
   const pause = useMutation({
-    mutationFn: () => api.pauseTask(taskId),
+    mutationFn: () => api.pauseAdminTask(taskId),
     onSuccess: () => qc.invalidateQueries({ queryKey }),
   });
   const resume = useMutation({
-    mutationFn: () => api.resumeTask(taskId),
+    mutationFn: () => api.resumeAdminTask(taskId),
     onSuccess: () => qc.invalidateQueries({ queryKey }),
   });
   const stop = useMutation({
-    mutationFn: () => api.stopTask(taskId),
+    mutationFn: () => api.stopAdminTask(taskId),
     onSuccess: () => qc.invalidateQueries({ queryKey }),
   });
   const actionBusy = pause.isPending || resume.isPending || stop.isPending;
@@ -51,7 +51,7 @@ function OperationTaskDetailPage() {
   useEffect(() => {
     if (!taskId) return;
     if (currentStatus && TERMINAL.has(currentStatus)) return;
-    const stream = openTaskStream(taskId);
+    const stream = openAdminTaskStream(taskId);
     stream.addEventListener('progress', (event) => {
       try {
         const snap = JSON.parse((event as MessageEvent).data) as Pick<

@@ -38,6 +38,7 @@ import {
   markLocalStatus,
   upsertLocalCopyPlaceholder,
 } from '../../api/src/modules/ad-object/local-store';
+import { archiveAdForTaskUser } from '../../api/src/modules/ad-object/archive-store';
 import {
   RMQ,
   publishRetry,
@@ -1227,6 +1228,9 @@ async function writeLocalObjectState(
   }
 
   if (op === 'delete') {
+    if (layer === 'ad' && msg.params['hard'] !== true) {
+      await archiveBatchDeletedAdBestEffort(msg, token, owner);
+    }
     await markLocalDeleted({
       companyId: msg.companyId,
       adAccountId: msg.adAccountId,
@@ -1235,6 +1239,26 @@ async function writeLocalObjectState(
       hard: msg.params['hard'] === true,
       owner,
     });
+  }
+}
+
+async function archiveBatchDeletedAdBestEffort(
+  msg: OperationMessage,
+  token: string,
+  owner: MetaObjectOwnership,
+): Promise<void> {
+  try {
+    await archiveAdForTaskUser({
+      companyId: msg.companyId,
+      userId: msg.userId,
+      taskId: msg.taskId,
+      adAccountId: msg.adAccountId,
+      adId: msg.targetId,
+      token,
+      owner,
+    });
+  } catch (err) {
+    console.error('[archive-ad] batch delete archive failed', err);
   }
 }
 

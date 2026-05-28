@@ -171,6 +171,12 @@ CREATE POLICY p_ads_all ON ads
   FOR ALL USING (app_bypass_rls() OR company_id = app_current_company())
             WITH CHECK (app_bypass_rls() OR company_id = app_current_company());
 
+ALTER TABLE archived_ads ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS p_archived_ads_all ON archived_ads;
+CREATE POLICY p_archived_ads_all ON archived_ads
+  FOR ALL USING (app_bypass_rls() OR company_id = app_current_company())
+            WITH CHECK (app_bypass_rls() OR company_id = app_current_company());
+
 ALTER TABLE ad_account_sync_state ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS p_ad_sync_state_all ON ad_account_sync_state;
 CREATE POLICY p_ad_sync_state_all ON ad_account_sync_state

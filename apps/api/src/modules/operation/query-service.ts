@@ -1,6 +1,6 @@
 /**
  * 任务详情查询 + 实时进度合并(Redis 进度优先,fall back DB)。
- * 跨租户/个人任务守卫: 仅当 task.company_id == principal.companyId 且 task.user_id == principal.userId 才放行。
+ * 个人入口只放行自己的任务；管理入口按管理范围放行任务。
  */
 import { and, desc, eq, inArray, sql as dsql } from 'drizzle-orm';
 import { db, schema } from '../../lib/db';
@@ -10,6 +10,7 @@ import type { AuthPrincipal } from '../iam/auth-service';
 
 export interface TaskSummary {
   id: string;
+  companyId: string;
   type: string;
   status: string;
   total: number;
@@ -22,6 +23,7 @@ export interface TaskSummary {
 }
 
 export interface TaskDetail extends ProgressSnapshot {
+  companyId: string;
   type: string;
   payload: unknown;
   createdAt: string;
@@ -51,25 +53,73 @@ export interface TaskLayerProgressItem {
   detail: string | null;
 }
 
+type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+type TaskReadScope = {
+  companyId: string;
+  bypassRls?: boolean;
+};
+
+type TaskAccess = 'own' | 'admin';
+
+type TaskRow = {
+  id: string;
+  companyId: string;
+  type: string;
+  status: ProgressSnapshot['status'];
+  total: number;
+  success: number;
+  failed: number;
+  userId: string;
+  createdAt: Date;
+  payload: unknown;
+};
+
+const taskSummaryColumns = {
+  id: schema.operationTasks.id,
+  companyId: schema.operationTasks.companyId,
+  type: schema.operationTasks.type,
+  status: schema.operationTasks.status,
+  total: schema.operationTasks.total,
+  success: schema.operationTasks.success,
+  failed: schema.operationTasks.failed,
+  userId: schema.operationTasks.userId,
+  createdAt: schema.operationTasks.createdAt,
+  payload: schema.operationTasks.payload,
+};
+
+function clampTaskLimit(limit: number): number {
+  return Math.min(Math.max(limit, 1), 200);
+}
+
+function isPlatformAdmin(principal: AuthPrincipal): boolean {
+  return principal.roles.includes('PlatformAdmin');
+}
+
+function adminReadScope(principal: AuthPrincipal): TaskReadScope {
+  return {
+    companyId: principal.companyId,
+    bypassRls: isPlatformAdmin(principal),
+  };
+}
+
+async function applyTaskReadScope(tx: DbTx, scope: TaskReadScope): Promise<void> {
+  if (scope.bypassRls) {
+    await tx.execute(dsql`SELECT set_config('app.bypass_rls', '1', true)`);
+    return;
+  }
+  await tx.execute(dsql`SELECT set_config('app.current_company_id', ${scope.companyId}, true)`);
+}
+
 export async function listMyTasks(
   principal: AuthPrincipal,
   limit: number,
 ): Promise<TaskSummary[]> {
-  const cappedLimit = Math.min(Math.max(limit, 1), 200);
+  const cappedLimit = clampTaskLimit(limit);
   const rows = await db.transaction(async (tx) => {
-    await tx.execute(dsql`SELECT set_config('app.current_company_id', ${principal.companyId}, true)`);
+    await applyTaskReadScope(tx, { companyId: principal.companyId });
     return tx
-      .select({
-        id: schema.operationTasks.id,
-        type: schema.operationTasks.type,
-        status: schema.operationTasks.status,
-        total: schema.operationTasks.total,
-        success: schema.operationTasks.success,
-        failed: schema.operationTasks.failed,
-        userId: schema.operationTasks.userId,
-        createdAt: schema.operationTasks.createdAt,
-        payload: schema.operationTasks.payload,
-      })
+      .select(taskSummaryColumns)
       .from(schema.operationTasks)
       .where(
         and(
@@ -81,10 +131,43 @@ export async function listMyTasks(
       .limit(cappedLimit);
   });
 
+  return enrichTaskRows(rows, { companyId: principal.companyId });
+}
+
+export async function listAdminTasks(
+  principal: AuthPrincipal,
+  limit: number,
+): Promise<TaskSummary[]> {
+  const cappedLimit = clampTaskLimit(limit);
+  const scope = adminReadScope(principal);
+  const rows = await db.transaction(async (tx) => {
+    await applyTaskReadScope(tx, scope);
+    if (scope.bypassRls) {
+      return tx
+        .select(taskSummaryColumns)
+        .from(schema.operationTasks)
+        .orderBy(desc(schema.operationTasks.createdAt))
+        .limit(cappedLimit);
+    }
+    return tx
+      .select(taskSummaryColumns)
+      .from(schema.operationTasks)
+      .where(eq(schema.operationTasks.companyId, principal.companyId))
+      .orderBy(desc(schema.operationTasks.createdAt))
+      .limit(cappedLimit);
+  });
+
+  return enrichTaskRows(rows, scope);
+}
+
+async function enrichTaskRows(
+  rows: TaskRow[],
+  scope: TaskReadScope,
+): Promise<TaskSummary[]> {
   const taskIds = rows.map((row) => row.id);
   const workflowRows = taskIds.length
     ? await db.transaction(async (tx) => {
-        await tx.execute(dsql`SELECT set_config('app.current_company_id', ${principal.companyId}, true)`);
+        await applyTaskReadScope(tx, scope);
         return tx
           .select({
             taskId: schema.operationCopyWorkflows.taskId,
@@ -124,26 +207,27 @@ export async function getTask(
   principal: AuthPrincipal,
   taskId: string,
 ): Promise<TaskDetail> {
-  const row = await db.transaction(async (tx) => {
-    await tx.execute(dsql`SELECT set_config('app.current_company_id', ${principal.companyId}, true)`);
-    const r = await tx
-      .select()
-      .from(schema.operationTasks)
-      .where(
-        and(
-          eq(schema.operationTasks.id, taskId),
-          eq(schema.operationTasks.companyId, principal.companyId),
-          eq(schema.operationTasks.userId, principal.userId),
-        ),
-      )
-      .limit(1);
-    return r[0];
-  });
+  return getTaskDetail(principal, taskId, 'own');
+}
+
+export async function getAdminTask(
+  principal: AuthPrincipal,
+  taskId: string,
+): Promise<TaskDetail> {
+  return getTaskDetail(principal, taskId, 'admin');
+}
+
+async function getTaskDetail(
+  principal: AuthPrincipal,
+  taskId: string,
+  access: TaskAccess,
+): Promise<TaskDetail> {
+  const row = await readTaskRow(principal, taskId, access);
   if (!row) throw new HttpError(404, 404, 'task not found');
 
   // Redis 进度优先(可能比 DB 计数更新)
   const progress = await readProgress(taskId);
-  const persistedUpdatedAt = progress ? null : await readTaskWorkflowUpdatedAt(principal.companyId, taskId);
+  const persistedUpdatedAt = progress ? null : await readTaskWorkflowUpdatedAt(row.companyId, taskId);
   const snap = progress ?? {
     taskId,
     total: row.total,
@@ -154,7 +238,7 @@ export async function getTask(
   };
 
   const failures = await db.transaction(async (tx) => {
-    await tx.execute(dsql`SELECT set_config('app.current_company_id', ${principal.companyId}, true)`);
+    await applyTaskReadScope(tx, { companyId: row.companyId });
     return tx
       .select({
         id: schema.operationTaskItems.id,
@@ -172,10 +256,11 @@ export async function getTask(
       )
       .limit(100);
   });
-  const layerProgress = await readLayerProgress(principal.companyId, taskId);
+  const layerProgress = await readLayerProgress(row.companyId, taskId);
 
   return {
     ...snap,
+    companyId: row.companyId,
     type: row.type,
     payload: row.payload,
     createdAt: row.createdAt.toISOString(),
@@ -185,9 +270,48 @@ export async function getTask(
   };
 }
 
+async function readTaskRow(
+  principal: AuthPrincipal,
+  taskId: string,
+  access: TaskAccess,
+): Promise<TaskRow | undefined> {
+  return db.transaction(async (tx) => {
+    if (access === 'admin') {
+      const scope = adminReadScope(principal);
+      await applyTaskReadScope(tx, scope);
+      const where = scope.bypassRls
+        ? eq(schema.operationTasks.id, taskId)
+        : and(
+            eq(schema.operationTasks.id, taskId),
+            eq(schema.operationTasks.companyId, principal.companyId),
+          );
+      const rows = await tx
+        .select(taskSummaryColumns)
+        .from(schema.operationTasks)
+        .where(where)
+        .limit(1);
+      return rows[0];
+    }
+
+    await applyTaskReadScope(tx, { companyId: principal.companyId });
+    const rows = await tx
+      .select(taskSummaryColumns)
+      .from(schema.operationTasks)
+      .where(
+        and(
+          eq(schema.operationTasks.id, taskId),
+          eq(schema.operationTasks.companyId, principal.companyId),
+          eq(schema.operationTasks.userId, principal.userId),
+        ),
+      )
+      .limit(1);
+    return rows[0];
+  });
+}
+
 async function readTaskWorkflowUpdatedAt(companyId: string, taskId: string): Promise<number | null> {
   const rows = await db.transaction(async (tx) => {
-    await tx.execute(dsql`SELECT set_config('app.current_company_id', ${companyId}, true)`);
+    await applyTaskReadScope(tx, { companyId });
     return tx
       .select({
         updatedAt: dsql<Date | null>`max(${schema.operationCopyWorkflows.updatedAt})`,
@@ -204,7 +328,7 @@ async function readLayerProgress(companyId: string, taskId: string): Promise<Lay
   if (v2) return v2;
 
   const rows = await db.transaction(async (tx) => {
-    await tx.execute(dsql`SELECT set_config('app.current_company_id', ${companyId}, true)`);
+    await applyTaskReadScope(tx, { companyId });
     return tx.execute(dsql`
       SELECT
         target_type,
@@ -258,7 +382,7 @@ async function readLayerProgress(companyId: string, taskId: string): Promise<Lay
 
 async function readCopyV2LayerProgress(companyId: string, taskId: string): Promise<LayerProgress[] | null> {
   const rows = await db.transaction(async (tx) => {
-    await tx.execute(dsql`SELECT set_config('app.current_company_id', ${companyId}, true)`);
+    await applyTaskReadScope(tx, { companyId });
     return tx.execute(dsql`
       SELECT
         source_type,
@@ -317,7 +441,7 @@ async function readCopyV2LayerProgressItems(
   taskId: string,
 ): Promise<Array<TaskLayerProgressItem & { targetType: string }>> {
   const rows = await db.transaction(async (tx) => {
-    await tx.execute(dsql`SELECT set_config('app.current_company_id', ${companyId}, true)`);
+    await applyTaskReadScope(tx, { companyId });
     return tx.execute(dsql`
       SELECT
         id::text,
@@ -370,7 +494,7 @@ async function readLayerProgressItems(
   taskId: string,
 ): Promise<Array<TaskLayerProgressItem & { targetType: string }>> {
   const rows = await db.transaction(async (tx) => {
-    await tx.execute(dsql`SELECT set_config('app.current_company_id', ${companyId}, true)`);
+    await applyTaskReadScope(tx, { companyId });
     return tx.execute(dsql`
       SELECT id::text, target_type, target_id, status, attempts, error
       FROM operation_task_items
@@ -406,69 +530,103 @@ export async function assertTaskOwned(
   principal: AuthPrincipal,
   taskId: string,
 ): Promise<void> {
-  const r = await db.transaction(async (tx) => {
-    await tx.execute(dsql`SELECT set_config('app.current_company_id', ${principal.companyId}, true)`);
-    return tx
-      .select({ id: schema.operationTasks.id })
-      .from(schema.operationTasks)
-      .where(
-        and(
-          eq(schema.operationTasks.id, taskId),
-          eq(schema.operationTasks.companyId, principal.companyId),
-          eq(schema.operationTasks.userId, principal.userId),
-        ),
-      )
-      .limit(1);
-  });
-  if (!r[0]) throw new HttpError(404, 404, 'task not found');
+  const row = await readTaskRow(principal, taskId, 'own');
+  if (!row) throw new HttpError(404, 404, 'task not found');
+}
+
+export async function assertAdminTaskVisible(
+  principal: AuthPrincipal,
+  taskId: string,
+): Promise<void> {
+  const row = await readTaskRow(principal, taskId, 'admin');
+  if (!row) throw new HttpError(404, 404, 'task not found');
 }
 
 export async function pauseTask(principal: AuthPrincipal, taskId: string): Promise<void> {
-  if (await updateTaskStatus(principal, taskId, 'paused')) {
-    await db.transaction(async (tx) => {
-      await tx.execute(dsql`SELECT set_config('app.current_company_id', ${principal.companyId}, true)`);
-      await tx.execute(dsql`
-        UPDATE operation_copy_workflows
-        SET status = 'paused',
-            lease_owner = NULL,
-            lease_until = NULL,
-            error = 'task paused by user',
-            updated_at = now()
-        WHERE task_id = ${taskId}
-          AND status NOT IN ('success','partial','failed','canceled')
-      `);
-    });
-    await setProgressStatus(taskId, 'paused');
-  }
+  await pauseTaskWithAccess(principal, taskId, 'own', 'task paused by user');
+}
+
+export async function pauseAdminTask(principal: AuthPrincipal, taskId: string): Promise<void> {
+  await pauseTaskWithAccess(principal, taskId, 'admin', 'task paused by admin');
+}
+
+async function pauseTaskWithAccess(
+  principal: AuthPrincipal,
+  taskId: string,
+  access: TaskAccess,
+  reason: string,
+): Promise<void> {
+  const updated = await updateTaskStatus(principal, taskId, 'paused', access);
+  if (!updated) return;
+  await db.transaction(async (tx) => {
+    await applyTaskReadScope(tx, { companyId: updated.companyId });
+    await tx.execute(dsql`
+      UPDATE operation_copy_workflows
+      SET status = 'paused',
+          lease_owner = NULL,
+          lease_until = NULL,
+          error = ${reason},
+          updated_at = now()
+      WHERE task_id = ${taskId}
+        AND status NOT IN ('success','partial','failed','canceled')
+    `);
+  });
+  await setProgressStatus(taskId, 'paused');
 }
 
 export async function resumeTask(principal: AuthPrincipal, taskId: string): Promise<void> {
-  if (await updateTaskStatus(principal, taskId, 'running')) {
-    await db.transaction(async (tx) => {
-      await tx.execute(dsql`SELECT set_config('app.current_company_id', ${principal.companyId}, true)`);
-      await tx.execute(dsql`
-        UPDATE operation_copy_workflows
-        SET status = 'waiting',
-            error = NULL,
-            updated_at = now()
-        WHERE task_id = ${taskId}
-          AND status = 'paused'
-      `);
-    });
-    await setProgressStatus(taskId, 'running');
-  }
+  await resumeTaskWithAccess(principal, taskId, 'own');
+}
+
+export async function resumeAdminTask(principal: AuthPrincipal, taskId: string): Promise<void> {
+  await resumeTaskWithAccess(principal, taskId, 'admin');
+}
+
+async function resumeTaskWithAccess(
+  principal: AuthPrincipal,
+  taskId: string,
+  access: TaskAccess,
+): Promise<void> {
+  const updated = await updateTaskStatus(principal, taskId, 'running', access);
+  if (!updated) return;
+  await db.transaction(async (tx) => {
+    await applyTaskReadScope(tx, { companyId: updated.companyId });
+    await tx.execute(dsql`
+      UPDATE operation_copy_workflows
+      SET status = 'waiting',
+          error = NULL,
+          updated_at = now()
+      WHERE task_id = ${taskId}
+        AND status = 'paused'
+    `);
+  });
+  await setProgressStatus(taskId, 'running');
 }
 
 export async function stopTask(principal: AuthPrincipal, taskId: string): Promise<void> {
-  if (!await updateTaskStatus(principal, taskId, 'cancelled')) return;
+  await stopTaskWithAccess(principal, taskId, 'own', 'task cancelled by user');
+}
+
+export async function stopAdminTask(principal: AuthPrincipal, taskId: string): Promise<void> {
+  await stopTaskWithAccess(principal, taskId, 'admin', 'task cancelled by admin');
+}
+
+async function stopTaskWithAccess(
+  principal: AuthPrincipal,
+  taskId: string,
+  access: TaskAccess,
+  reason: string,
+): Promise<void> {
+  const updated = await updateTaskStatus(principal, taskId, 'cancelled', access);
+  if (!updated) return;
   await db.transaction(async (tx) => {
-    await tx.execute(dsql`SELECT set_config('app.current_company_id', ${principal.companyId}, true)`);
+    await applyTaskReadScope(tx, { companyId: updated.companyId });
     await tx.execute(dsql`
       UPDATE operation_copy_workflows
       SET status = 'canceled',
           lease_owner = NULL,
           lease_until = NULL,
-          error = 'task cancelled by user',
+          error = ${reason},
           updated_at = now()
       WHERE task_id = ${taskId}
     `);
@@ -480,22 +638,30 @@ async function updateTaskStatus(
   principal: AuthPrincipal,
   taskId: string,
   status: 'paused' | 'running' | 'cancelled',
-): Promise<boolean> {
+  access: TaskAccess,
+): Promise<{ id: string; companyId: string } | null> {
+  const scope = access === 'admin' ? adminReadScope(principal) : { companyId: principal.companyId };
+  const visibilityCondition = access === 'admin'
+    ? (scope.bypassRls ? dsql`` : dsql`AND company_id = ${principal.companyId}`)
+    : dsql`AND company_id = ${principal.companyId} AND user_id = ${principal.userId}`;
   const rows = await db.transaction(async (tx) => {
-    await tx.execute(dsql`SELECT set_config('app.current_company_id', ${principal.companyId}, true)`);
+    await applyTaskReadScope(tx, scope);
     return tx.execute(dsql`
       UPDATE operation_tasks
       SET status = ${status}::operation_status
       WHERE id = ${taskId}
-        AND company_id = ${principal.companyId}
-        AND user_id = ${principal.userId}
+        ${visibilityCondition}
         AND status NOT IN ('success','failed','partial','cancelled')
-      RETURNING id
+      RETURNING id, company_id
     `);
-  }) as unknown as Array<{ id: string }>;
+  }) as unknown as Array<{ id: string; company_id: string }>;
   if (rows.length === 0) {
-    await assertTaskOwned(principal, taskId);
-    return false;
+    if (access === 'admin') {
+      await assertAdminTaskVisible(principal, taskId);
+    } else {
+      await assertTaskOwned(principal, taskId);
+    }
+    return null;
   }
-  return true;
+  return { id: rows[0]!.id, companyId: rows[0]!.company_id };
 }

@@ -1,6 +1,7 @@
 import {
   index,
   integer,
+  jsonb,
   pgEnum,
   pgTable,
   text,
@@ -10,6 +11,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { companies } from './companies';
 import { adAccounts } from './fb';
+import { users } from './iam';
 
 export const adObjectStatus = pgEnum('ad_object_status', [
   'ACTIVE',
@@ -107,6 +109,31 @@ export const adObjects = pgTable(
     uniqCompanyMeta: uniqueIndex('ads_company_meta_idx').on(t.companyId, t.metaId),
     accountAdsetIdx: index('ads_account_adset_idx').on(t.adAccountId, t.adsetMetaId),
     accountStatusIdx: index('ads_account_status_idx').on(t.adAccountId, t.status),
+  }),
+);
+
+export const archivedAds = pgTable(
+  'archived_ads',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    companyId: uuid('company_id').notNull().references(() => companies.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    adAccountId: uuid('ad_account_id').notNull().references(() => adAccounts.id, { onDelete: 'cascade' }),
+    campaignMetaId: text('campaign_meta_id'),
+    adsetMetaId: text('adset_meta_id'),
+    adMetaId: text('ad_meta_id').notNull(),
+    adName: text('ad_name').notNull(),
+    status: adObjectStatus('status').notNull().default('ARCHIVED'),
+    effectiveStatus: text('effective_status'),
+    creativeId: text('creative_id'),
+    postUrl: text('post_url'),
+    raw: jsonb('raw').$type<Record<string, unknown>>().notNull().default({}),
+    archivedAt: timestamp('archived_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    uniqUserAd: uniqueIndex('archived_ads_user_ad_idx').on(t.companyId, t.userId, t.adMetaId),
+    userArchivedIdx: index('archived_ads_user_archived_idx').on(t.companyId, t.userId, t.archivedAt),
+    adAccountIdx: index('archived_ads_ad_account_idx').on(t.adAccountId),
   }),
 );
 

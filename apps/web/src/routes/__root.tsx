@@ -40,6 +40,9 @@ function RootLayout() {
                 <Link to="/operations" className="shrink-0 text-muted-foreground hover:text-foreground">
                   我的任务
                 </Link>
+                <Link to="/archives" className="shrink-0 text-muted-foreground hover:text-foreground">
+                  我的归档
+                </Link>
                 {isAdmin && (
                   <Link to="/admin" className="shrink-0 text-muted-foreground hover:text-foreground">
                     管理

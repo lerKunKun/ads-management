@@ -253,6 +253,7 @@ export async function batchEnqueue(
       taskId,
       itemId: it.id,
       companyId: principal.companyId,
+      userId: principal.userId,
       fbAccountId: ad.fbAccountId,
       adAccountId: it.adAccountId,
       metaActId: ad.metaActId,

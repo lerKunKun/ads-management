@@ -42,6 +42,7 @@ export interface OperationMessage {
   taskId: string;
   itemId: string;
   companyId: string;
+  userId?: string;
   fbAccountId: string;
   adAccountId: string;      // 业务 uuid (用于 shard 哈希 + DB 关联)
   metaActId: string;        // act_xxx (Meta 实际 id)

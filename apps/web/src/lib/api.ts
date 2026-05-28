@@ -132,6 +132,20 @@ export interface Ad {
   updatedTime?: string;
 }
 
+export interface ArchivedAd {
+  id: string;
+  adAccountId: string;
+  campaignMetaId: string | null;
+  adsetMetaId: string | null;
+  adMetaId: string;
+  adName: string;
+  status: 'ACTIVE' | 'PAUSED' | 'ARCHIVED' | 'DELETED';
+  effectiveStatus: string | null;
+  creativeId: string | null;
+  postUrl: string | null;
+  archivedAt: string;
+}
+
 export interface InsightsSummary {
   spend: number;
   impressions: number;
@@ -226,6 +240,7 @@ export type TaskStatus =
 
 export interface TaskSummary {
   id: string;
+  companyId: string;
   type: string;
   status: string;
   total: number;
@@ -235,6 +250,22 @@ export interface TaskSummary {
   createdAt: string;
   updatedAt: number | null;
   payload: unknown;
+}
+
+export interface TaskDetail {
+  taskId: string;
+  companyId: string;
+  total: number;
+  success: number;
+  failed: number;
+  status: TaskStatus;
+  updatedAt: number;
+  type: string;
+  payload: unknown;
+  createdAt: string;
+  userId: string;
+  layerProgress: TaskLayerProgress[];
+  failures: Array<{ id: string; targetId: string; error: string | null; attempts: number }>;
 }
 
 export const api = {
@@ -346,6 +377,7 @@ export const api = {
     ),
 
   // M3: 批量入队 + 任务查询
+  myArchives: (limit = 200) => call<ArchivedAd[]>(`/archives?limit=${limit}`),
   batchOperations: (req: {
     action:
       | 'campaign:status'
@@ -521,6 +553,14 @@ export const api = {
     }),
   listTasks: (limit = 100) =>
     call<TaskSummary[]>(`/_admin/tasks?limit=${limit}`),
+  adminTaskStatus: (taskId: string) =>
+    call<TaskDetail>(`/_admin/tasks/${taskId}`),
+  pauseAdminTask: (taskId: string) =>
+    call<null>(`/_admin/tasks/${taskId}/pause`, { method: 'POST' }),
+  resumeAdminTask: (taskId: string) =>
+    call<null>(`/_admin/tasks/${taskId}/resume`, { method: 'POST' }),
+  stopAdminTask: (taskId: string) =>
+    call<null>(`/_admin/tasks/${taskId}/stop`, { method: 'POST' }),
   myTasks: (limit = 100) =>
     call<TaskSummary[]>(`/operations/tasks?limit=${limit}`),
   listAudit: (opts: { limit?: number; action?: string } = {}) => {
@@ -541,20 +581,7 @@ export const api = {
   },
 
   taskStatus: (taskId: string) =>
-    call<{
-      taskId: string;
-      total: number;
-      success: number;
-      failed: number;
-      status: TaskStatus;
-      updatedAt: number;
-      type: string;
-      payload: unknown;
-      createdAt: string;
-      userId: string;
-      layerProgress: TaskLayerProgress[];
-      failures: Array<{ id: string; targetId: string; error: string | null; attempts: number }>;
-    }>(`/operations/${taskId}`),
+    call<TaskDetail>(`/operations/${taskId}`),
   pauseTask: (taskId: string) =>
     call<null>(`/operations/${taskId}/pause`, { method: 'POST' }),
   resumeTask: (taskId: string) =>
@@ -570,5 +597,11 @@ export function openTaskStream(taskId: string): EventSource {
   // 上线前要么走同源 cookie，要么把 SSE 端点改为支持 ?token=
   // 为兼容现在的 authGuard(只读 header),先在 vite proxy 阶段允许 ?token=
   const url = `/api/operations/${encodeURIComponent(taskId)}/stream${tok ? `?token=${encodeURIComponent(tok)}` : ''}`;
+  return new EventSource(url);
+}
+
+export function openAdminTaskStream(taskId: string): EventSource {
+  const tok = getToken();
+  const url = `/api/_admin/tasks/${encodeURIComponent(taskId)}/stream${tok ? `?token=${encodeURIComponent(tok)}` : ''}`;
   return new EventSource(url);
 }

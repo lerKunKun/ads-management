@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as OperationsRouteImport } from './routes/operations'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as FbAccountsRouteImport } from './routes/fb-accounts'
+import { Route as ArchivesRouteImport } from './routes/archives'
 import { Route as AdminRouteImport } from './routes/admin'
 import { Route as AdAccountsRouteImport } from './routes/ad-accounts'
 import { Route as IndexRouteImport } from './routes/index'
@@ -41,6 +42,11 @@ const LoginRoute = LoginRouteImport.update({
 const FbAccountsRoute = FbAccountsRouteImport.update({
   id: '/fb-accounts',
   path: '/fb-accounts',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ArchivesRoute = ArchivesRouteImport.update({
+  id: '/archives',
+  path: '/archives',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminRoute = AdminRouteImport.update({
@@ -125,6 +131,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/ad-accounts': typeof AdAccountsRoute
   '/admin': typeof AdminRoute
+  '/archives': typeof ArchivesRoute
   '/fb-accounts': typeof FbAccountsRoute
   '/login': typeof LoginRoute
   '/operations': typeof OperationsRoute
@@ -145,6 +152,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/ad-accounts': typeof AdAccountsRoute
   '/admin': typeof AdminRoute
+  '/archives': typeof ArchivesRoute
   '/fb-accounts': typeof FbAccountsRoute
   '/login': typeof LoginRoute
   '/operations': typeof OperationsRoute
@@ -166,6 +174,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/ad-accounts': typeof AdAccountsRoute
   '/admin': typeof AdminRoute
+  '/archives': typeof ArchivesRoute
   '/fb-accounts': typeof FbAccountsRoute
   '/login': typeof LoginRoute
   '/operations': typeof OperationsRoute
@@ -188,6 +197,7 @@ export interface FileRouteTypes {
     | '/'
     | '/ad-accounts'
     | '/admin'
+    | '/archives'
     | '/fb-accounts'
     | '/login'
     | '/operations'
@@ -208,6 +218,7 @@ export interface FileRouteTypes {
     | '/'
     | '/ad-accounts'
     | '/admin'
+    | '/archives'
     | '/fb-accounts'
     | '/login'
     | '/operations'
@@ -228,6 +239,7 @@ export interface FileRouteTypes {
     | '/'
     | '/ad-accounts'
     | '/admin'
+    | '/archives'
     | '/fb-accounts'
     | '/login'
     | '/operations'
@@ -249,6 +261,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AdAccountsRoute: typeof AdAccountsRoute
   AdminRoute: typeof AdminRoute
+  ArchivesRoute: typeof ArchivesRoute
   FbAccountsRoute: typeof FbAccountsRoute
   LoginRoute: typeof LoginRoute
   OperationsRoute: typeof OperationsRoute
@@ -287,6 +300,13 @@ declare module '@tanstack/react-router' {
       path: '/fb-accounts'
       fullPath: '/fb-accounts'
       preLoaderRoute: typeof FbAccountsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/archives': {
+      id: '/archives'
+      path: '/archives'
+      fullPath: '/archives'
+      preLoaderRoute: typeof ArchivesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin': {
@@ -401,6 +421,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AdAccountsRoute: AdAccountsRoute,
   AdminRoute: AdminRoute,
+  ArchivesRoute: ArchivesRoute,
   FbAccountsRoute: FbAccountsRoute,
   LoginRoute: LoginRoute,
   OperationsRoute: OperationsRoute,

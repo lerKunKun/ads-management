@@ -9,17 +9,18 @@
  *   PlatformAdmin 全局
  */
 import { Elysia, t } from 'elysia';
-import { and, desc, eq, inArray, sql as dsql } from 'drizzle-orm';
+import { and, desc, eq, sql as dsql } from 'drizzle-orm';
 import { redis } from '../../lib/redis';
 import { close as breakerClose, BreakerKey } from '../../lib/breaker';
 import { db, schema } from '../../lib/db';
-import { readProgress } from '../../lib/progress';
 import { scanTokenHealth } from '../account/service';
 import {
   syncAdAccountObjects,
   syncDueAdAccounts,
   type SyncDepth,
 } from '../ad-object/sync-service';
+import { progressStream } from '../operation/sse';
+import * as taskQuery from '../operation/query-service';
 import {
   createCompany,
   createCompanyUser,
@@ -352,74 +353,83 @@ export const admin = new Elysia({ name: 'admin' }).group('', (g) =>
       '/_admin/tasks',
       async ({ principal, query }) => {
         const limit = Math.min(Math.max(Number(query.limit ?? '50'), 1), 200);
-        const rows = await db.transaction(async (tx) => {
-          await tx.execute(
-            dsql`SELECT set_config('app.current_company_id', ${principal.companyId}, true)`,
-          );
-          return tx
-            .select({
-              id: schema.operationTasks.id,
-              type: schema.operationTasks.type,
-              status: schema.operationTasks.status,
-              total: schema.operationTasks.total,
-              success: schema.operationTasks.success,
-              failed: schema.operationTasks.failed,
-              userId: schema.operationTasks.userId,
-              createdAt: schema.operationTasks.createdAt,
-              payload: schema.operationTasks.payload,
-            })
-            .from(schema.operationTasks)
-            .where(
-              and(
-                eq(schema.operationTasks.companyId, principal.companyId),
-                eq(schema.operationTasks.userId, principal.userId),
-              ),
-            )
-            .orderBy(desc(schema.operationTasks.createdAt))
-            .limit(limit);
-        });
-        const taskIds = rows.map((row) => row.id);
-        const workflowRows = taskIds.length
-          ? await db.transaction(async (tx) => {
-              await tx.execute(
-                dsql`SELECT set_config('app.current_company_id', ${principal.companyId}, true)`,
-              );
-              return tx
-                .select({
-                  taskId: schema.operationCopyWorkflows.taskId,
-                  updatedAt: dsql<Date | null>`max(${schema.operationCopyWorkflows.updatedAt})`,
-                })
-                .from(schema.operationCopyWorkflows)
-                .where(inArray(schema.operationCopyWorkflows.taskId, taskIds))
-                .groupBy(schema.operationCopyWorkflows.taskId);
-            })
-          : [];
-        const workflowUpdatedAtByTask = new Map(
-          workflowRows.map((row) => [
-            row.taskId,
-            row.updatedAt ? new Date(row.updatedAt).getTime() : null,
-          ]),
-        );
-        const progressEntries = await Promise.all(
-          rows.map(async (row) => [row.id, await readProgress(row.id)] as const),
-        );
-        const progressByTask = new Map(progressEntries);
-        const data = rows.map((row) => {
-          const snap = progressByTask.get(row.id);
-          return {
-            ...row,
-            status: snap?.status ?? row.status,
-            total: snap?.total ?? row.total,
-            success: snap?.success ?? row.success,
-            failed: snap?.failed ?? row.failed,
-            createdAt: row.createdAt.toISOString(),
-            updatedAt: snap?.updatedAt ?? workflowUpdatedAtByTask.get(row.id) ?? null,
-          };
-        });
+        const data = await taskQuery.listAdminTasks(principal, limit);
         return { code: 0, msg: 'ok', data };
       },
       {
         query: t.Object({ limit: t.Optional(t.String()) }),
+        beforeHandle: requirePermission('iam:manage'),
+      },
+    )
+    .get(
+      '/_admin/tasks/:taskId',
+      async ({ principal, params }) => ({
+        code: 0,
+        msg: 'ok',
+        data: await taskQuery.getAdminTask(principal, params.taskId),
+      }),
+      {
+        params: t.Object({ taskId: t.String({ format: 'uuid' }) }),
+        beforeHandle: requirePermission('iam:manage'),
+      },
+    )
+    .get(
+      '/_admin/tasks/:taskId/stream',
+      async ({ principal, params, set }) => {
+        await taskQuery.assertAdminTaskVisible(principal, params.taskId);
+        set.headers['content-type'] = 'text/event-stream; charset=utf-8';
+        set.headers['cache-control'] = 'no-cache, no-transform';
+        set.headers['connection'] = 'keep-alive';
+        set.headers['x-accel-buffering'] = 'no';
+        const taskId = params.taskId;
+        return new ReadableStream({
+          async start(controller) {
+            const enc = new TextEncoder();
+            try {
+              for await (const chunk of progressStream(taskId)) {
+                controller.enqueue(enc.encode(chunk));
+              }
+            } finally {
+              controller.close();
+            }
+          },
+        });
+      },
+      {
+        params: t.Object({ taskId: t.String({ format: 'uuid' }) }),
+        beforeHandle: requirePermission('iam:manage'),
+      },
+    )
+    .post(
+      '/_admin/tasks/:taskId/pause',
+      async ({ principal, params }) => {
+        await taskQuery.pauseAdminTask(principal, params.taskId);
+        return { code: 0, msg: 'ok', data: null };
+      },
+      {
+        params: t.Object({ taskId: t.String({ format: 'uuid' }) }),
+        beforeHandle: requirePermission('iam:manage'),
+      },
+    )
+    .post(
+      '/_admin/tasks/:taskId/resume',
+      async ({ principal, params }) => {
+        await taskQuery.resumeAdminTask(principal, params.taskId);
+        return { code: 0, msg: 'ok', data: null };
+      },
+      {
+        params: t.Object({ taskId: t.String({ format: 'uuid' }) }),
+        beforeHandle: requirePermission('iam:manage'),
+      },
+    )
+    .post(
+      '/_admin/tasks/:taskId/stop',
+      async ({ principal, params }) => {
+        await taskQuery.stopAdminTask(principal, params.taskId);
+        return { code: 0, msg: 'ok', data: null };
+      },
+      {
+        params: t.Object({ taskId: t.String({ format: 'uuid' }) }),
         beforeHandle: requirePermission('iam:manage'),
       },
     )
