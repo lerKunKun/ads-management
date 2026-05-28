@@ -23,7 +23,7 @@ function FbCallback() {
     api
       .fbCallback(search.code)
       .then((r) => {
-        setMsg(`广告账户组绑定成功，同步广告账户 ${r.adAccountsSynced} 个，3 秒后跳转…`);
+        setMsg(`FB个人号绑定成功，同步广告账户 ${r.adAccountsSynced} 个，3 秒后跳转…`);
         setTimeout(() => nav({ to: '/fb-accounts' }), 3000);
       })
       .catch((e) => setMsg(`绑定失败: ${e.message}`));

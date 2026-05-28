@@ -447,7 +447,7 @@ function IamWorkspacePage() {
                     <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                       <StatusBadge status={user.status} />
                       <span>
-                        已授权广告账户组{' '}
+                        已授权FB个人号{' '}
                         {selectedUser?.id === user.id && draftReady
                           ? draftFbIds.size
                           : user.fbAccountGrantCount}
@@ -467,7 +467,7 @@ function IamWorkspacePage() {
         </Pane>
 
         <Pane
-          title="广告账户组"
+          title="FB个人号"
           subtitle={`${draftFbIds.size} / ${fbAccounts.length} 已选择`}
           actions={
             <SearchInput
@@ -524,9 +524,9 @@ function IamWorkspacePage() {
             </div>
           </div>
           {bypassScope && <BypassNotice />}
-          {resourcesQ.isLoading && <EmptyState text="广告账户组加载中" />}
+          {resourcesQ.isLoading && <EmptyState text="FB个人号加载中" />}
           {!resourcesQ.isLoading && filteredFbAccounts.length === 0 && (
-            <EmptyState text="无匹配广告账户组" />
+            <EmptyState text="无匹配FB个人号" />
           )}
           <div className="space-y-2 p-3">
             {filteredFbAccounts.map((account) => (
@@ -556,7 +556,7 @@ function IamWorkspacePage() {
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="text-xs text-muted-foreground">
                 当前显示 {filteredAdAccounts.length} 个
-                {draftFbIds.size > 0 ? `，受 ${draftFbIds.size} 个广告账户组过滤` : ''}
+                {draftFbIds.size > 0 ? `，受 ${draftFbIds.size} 个FB个人号过滤` : ''}
               </div>
               <div className="grid w-full grid-cols-3 gap-2 sm:flex sm:w-auto">
                 <Button
@@ -614,7 +614,7 @@ function IamWorkspacePage() {
               <AdAccountRow
                 key={account.id}
                 account={account}
-                fbName={fbNameById.get(account.fbAccountId) ?? '未知广告账户组'}
+                fbName={fbNameById.get(account.fbAccountId) ?? '未知FB个人号'}
                 checked={draftAdIds.has(account.id)}
                 disabled={bypassScope || busy}
                 onToggle={() => toggleResource('ad_account', account.id)}

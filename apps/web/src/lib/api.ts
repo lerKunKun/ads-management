@@ -227,6 +227,8 @@ export interface TaskLayerProgressItem {
   status: string;
   attempts: number;
   detail: string | null;
+  resultId?: string | null;
+  resultName?: string | null;
 }
 
 export type TaskStatus =

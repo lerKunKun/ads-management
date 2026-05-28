@@ -51,6 +51,8 @@ export interface TaskLayerProgressItem {
   status: string;
   attempts: number;
   detail: string | null;
+  resultId?: string | null;
+  resultName?: string | null;
 }
 
 type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -450,7 +452,8 @@ async function readCopyV2LayerProgressItems(
         new_id,
         status,
         attempt,
-        error
+        error,
+        metadata
       FROM operation_copy_steps
       WHERE task_id = ${taskId}
         AND status IN ('success','failed','unknown')
@@ -469,18 +472,21 @@ async function readCopyV2LayerProgressItems(
     status: string;
     attempt: number;
     error: string | null;
+    metadata: unknown;
   }>;
 
-  return rows.map((row) => ({
+  return enrichCopyResultNames(companyId, rows.map((row) => ({
     id: row.id,
     targetType: row.source_type,
     targetId: row.source_id,
     status: row.status,
     attempts: Number(row.attempt ?? 0),
+    ...(row.new_id ? { resultId: row.new_id } : {}),
+    ...(metadataFinalName(row.metadata) ? { resultName: metadataFinalName(row.metadata) } : {}),
     detail: row.status === 'success'
       ? (row.new_id ? `新对象 ${row.new_id}` : null)
       : row.error,
-  }));
+  })));
 }
 
 function taskLayerLabel(targetType: 'campaign' | 'adset' | 'ad'): string {
@@ -515,14 +521,132 @@ async function readLayerProgressItems(
     error: string | null;
   }>;
 
-  return rows.map((row) => ({
-    id: row.id,
-    targetType: row.target_type,
-    targetId: row.target_id,
-    status: row.status,
-    attempts: Number(row.attempts ?? 0),
-    detail: row.error,
+  return enrichCopyResultNames(companyId, rows.map((row) => {
+    const resultId = parseCopyResultNewId(row.error);
+    return {
+      id: row.id,
+      targetType: row.target_type,
+      targetId: row.target_id,
+      status: row.status,
+      attempts: Number(row.attempts ?? 0),
+      ...(resultId ? { resultId } : {}),
+      detail: row.status === 'success'
+        ? (resultId ? copyResultDetail(resultId) : row.error)
+        : row.error,
+    };
   }));
+}
+
+function parseCopyResultNewId(value: string | null): string | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== 'object') return undefined;
+    const newId = (parsed as Record<string, unknown>)['newId'];
+    return typeof newId === 'string' && newId ? newId : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function metadataFinalName(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const finalName = (value as Record<string, unknown>)['finalName'];
+  return typeof finalName === 'string' && finalName ? finalName : undefined;
+}
+
+async function enrichCopyResultNames<T extends TaskLayerProgressItem & { targetType: string }>(
+  companyId: string,
+  items: T[],
+): Promise<T[]> {
+  const resultItems = items.filter((item) => item.status === 'success' && item.resultId);
+  if (resultItems.length === 0) return items;
+
+  const names = await readLocalResultNames(companyId, resultItems);
+  return items.map((item) => {
+    if (item.status !== 'success' || !item.resultId) return item;
+    const resultName = item.resultName ?? names.get(resultNameKey(item.targetType, item.resultId));
+    return {
+      ...item,
+      ...(resultName ? { resultName } : {}),
+      detail: copyResultDetail(item.resultId, resultName) ?? item.detail,
+    };
+  });
+}
+
+async function readLocalResultNames(
+  companyId: string,
+  items: Array<TaskLayerProgressItem & { targetType: string }>,
+): Promise<Map<string, string>> {
+  const idsByType = new Map<'campaign' | 'adset' | 'ad', Set<string>>([
+    ['campaign', new Set<string>()],
+    ['adset', new Set<string>()],
+    ['ad', new Set<string>()],
+  ]);
+
+  for (const item of items) {
+    const targetType = normalizeTargetType(item.targetType);
+    if (targetType && item.resultId) idsByType.get(targetType)!.add(item.resultId);
+  }
+
+  const names = new Map<string, string>();
+  await db.transaction(async (tx) => {
+    await applyTaskReadScope(tx, { companyId });
+
+    const campaignIds = Array.from(idsByType.get('campaign')!);
+    if (campaignIds.length > 0) {
+      const rows = await tx
+        .select({ metaId: schema.adCampaigns.metaId, name: schema.adCampaigns.name })
+        .from(schema.adCampaigns)
+        .where(and(
+          eq(schema.adCampaigns.companyId, companyId),
+          inArray(schema.adCampaigns.metaId, campaignIds),
+        ));
+      for (const row of rows) names.set(resultNameKey('campaign', row.metaId), row.name);
+    }
+
+    const adsetIds = Array.from(idsByType.get('adset')!);
+    if (adsetIds.length > 0) {
+      const rows = await tx
+        .select({ metaId: schema.adSetObjects.metaId, name: schema.adSetObjects.name })
+        .from(schema.adSetObjects)
+        .where(and(
+          eq(schema.adSetObjects.companyId, companyId),
+          inArray(schema.adSetObjects.metaId, adsetIds),
+        ));
+      for (const row of rows) names.set(resultNameKey('adset', row.metaId), row.name);
+    }
+
+    const adIds = Array.from(idsByType.get('ad')!);
+    if (adIds.length > 0) {
+      const rows = await tx
+        .select({ metaId: schema.adObjects.metaId, name: schema.adObjects.name })
+        .from(schema.adObjects)
+        .where(and(
+          eq(schema.adObjects.companyId, companyId),
+          inArray(schema.adObjects.metaId, adIds),
+        ));
+      for (const row of rows) names.set(resultNameKey('ad', row.metaId), row.name);
+    }
+  });
+
+  return names;
+}
+
+function normalizeTargetType(value: string): 'campaign' | 'adset' | 'ad' | null {
+  if (value === 'campaign' || value === 'adset' || value === 'ad') return value;
+  return null;
+}
+
+function resultNameKey(targetType: string, resultId: string): string {
+  return `${targetType}:${resultId}`;
+}
+
+function copyResultDetail(resultId: string | null | undefined, resultName?: string): string | null {
+  if (resultName && resultId) return `复制结果: ${resultName} (${resultId})`;
+  if (resultName) return `复制结果: ${resultName}`;
+  if (resultId) return `复制结果: ${resultId}`;
+  return null;
 }
 
 /** 用于 SSE 端校验任务归属(不返实体) */

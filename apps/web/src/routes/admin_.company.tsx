@@ -180,7 +180,7 @@ function CompanyPage() {
       <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <Metric label="公司" value={String(companies.length)} detail="可管理公司" icon={Building2} />
         <Metric label="人员" value={String(totals.users)} detail="全部公司人员" icon={Users} />
-        <Metric label="广告账户组" value={String(totals.groups)} detail="全部账户组" icon={KeyRound} />
+        <Metric label="FB个人号" value={String(totals.groups)} detail="全部FB个人号" icon={KeyRound} />
         <Metric label="广告账户" value={String(totals.adAccounts)} detail="全部广告账户" icon={Megaphone} />
       </section>
 

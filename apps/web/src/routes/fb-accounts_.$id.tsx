@@ -91,7 +91,7 @@ function FbAccountAdAccountsPage() {
     <div>
       <div className="text-sm text-muted-foreground mb-2">
         <Link to="/fb-accounts" className="hover:text-foreground">
-          ← 广告账户组
+          ← FB个人号
         </Link>
       </div>
       <div className="mb-4 min-w-0">
@@ -106,7 +106,7 @@ function FbAccountAdAccountsPage() {
       )}
 
       <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <h2 className="font-medium">组内广告账户</h2>
+        <h2 className="font-medium">FB个人号下广告账户</h2>
         <Button size="sm" variant="outline" className="w-full sm:w-auto" onClick={() => adsQ.refetch()}>
           刷新
         </Button>
@@ -189,7 +189,7 @@ function FbAccountAdAccountsPage() {
             {!adsQ.isLoading && (adsQ.data?.length ?? 0) === 0 && (
               <TableRow>
                 <TableCell colSpan={7} className="text-muted-foreground">
-                  该广告账户组下暂无广告账户
+                  该FB个人号下暂无广告账户
                 </TableCell>
               </TableRow>
             )}

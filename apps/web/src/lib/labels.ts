@@ -1,4 +1,4 @@
-export const ACCOUNT_GROUP_LABEL = '广告账户组';
+export const ACCOUNT_GROUP_LABEL = 'FB个人号';
 
 const ACCOUNT_GROUP_STATUS: Record<string, string> = {
   active: '正常',

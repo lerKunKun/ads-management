@@ -60,9 +60,9 @@ function FbAccountsPage() {
     <div>
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
-          <h1 className="text-xl font-semibold">广告账户组</h1>
+          <h1 className="text-xl font-semibold">FB个人号</h1>
           <p className="text-sm text-muted-foreground">
-            点击账户组名称进入组内广告账户。
+            点击FB个人号名称进入其下广告账户。
           </p>
         </div>
         <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:items-center">
@@ -70,7 +70,7 @@ function FbAccountsPage() {
             刷新
           </Button>
           <Button size="sm" className="w-full sm:w-auto" onClick={bindFb}>
-            绑定广告账户组
+            绑定FB个人号
           </Button>
         </div>
       </div>
@@ -129,7 +129,7 @@ function FbAccountsPage() {
             {!isLoading && (data?.length ?? 0) === 0 && (
               <TableRow>
                 <TableCell colSpan={5} className="text-muted-foreground">
-                  尚未绑定广告账户组
+                  尚未绑定FB个人号
                 </TableCell>
               </TableRow>
             )}

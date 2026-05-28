@@ -44,7 +44,7 @@ function AdAccountCampaignsPage() {
           {summary.data?.fbAccountId && (
             <Button asChild size="sm" variant="outline" className="w-full sm:w-auto">
               <Link to="/fb-accounts/$id" params={{ id: summary.data.fbAccountId }}>
-                广告账户组
+                FB个人号
               </Link>
             </Button>
           )}

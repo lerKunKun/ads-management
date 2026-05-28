@@ -97,7 +97,7 @@ function DashboardPage() {
           icon={Building2}
         />
         <Metric
-          label="广告账户组"
+          label="FB个人号"
           value={String(fbAccounts.length)}
           detail={`正常 ${activeFb} / 异常 ${invalidFb}`}
           icon={KeyRound}
@@ -122,19 +122,19 @@ function DashboardPage() {
         <section className="rounded-md border bg-background">
           <div className="flex flex-col gap-3 border-b p-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
-              <h2 className="font-medium">可见广告账户组</h2>
+              <h2 className="font-medium">可见FB个人号</h2>
               <p className="mt-1 text-sm text-muted-foreground">
-                点击账户组查看组内广告账户，再进入广告系列、广告组和广告。
+                点击FB个人号查看其下广告账户，再进入广告系列、广告组和广告。
               </p>
             </div>
             <Button asChild size="sm" variant="outline" className="w-full sm:w-auto">
-              <Link to="/fb-accounts">全部账户组</Link>
+              <Link to="/fb-accounts">全部FB个人号</Link>
             </Button>
           </div>
           <div className="divide-y">
-            {fbQ.isLoading && <EmptyState text="广告账户组加载中..." />}
+            {fbQ.isLoading && <EmptyState text="FB个人号加载中..." />}
             {!fbQ.isLoading && recentGroups.length === 0 && (
-              <EmptyState text="当前没有可见广告账户组" />
+              <EmptyState text="当前没有可见FB个人号" />
             )}
             {recentGroups.map((group) => (
               <AdAccountGroupItem key={group.id} group={group} />

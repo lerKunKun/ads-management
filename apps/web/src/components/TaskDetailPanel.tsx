@@ -226,7 +226,7 @@ function TaskLayerItemDetails({
                 <TableRow key={item.id}>
                   <TableCell className="font-mono text-xs">{item.targetId}</TableCell>
                   <TableCell className="break-words text-xs text-muted-foreground">
-                    {item.detail ? shortDetail(item.detail) : '-'}
+                    {shortDetail(formatItemDetail(item))}
                   </TableCell>
                 </TableRow>
               ))}
@@ -243,6 +243,13 @@ function TaskLayerItemDetails({
       )}
     </div>
   );
+}
+
+function formatItemDetail(item: TaskLayerProgressItem): string {
+  if (item.resultName && item.resultId) return `复制结果: ${item.resultName} (${item.resultId})`;
+  if (item.resultName) return `复制结果: ${item.resultName}`;
+  if (item.resultId) return `复制结果: ${item.resultId}`;
+  return item.detail ?? '-';
 }
 
 function shortDetail(value: string): string {

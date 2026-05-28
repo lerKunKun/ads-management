@@ -29,13 +29,13 @@ const adminMenus: Array<{
 }> = [
   {
     title: '公司管理',
-    description: '查看当前公司、用户规模、广告账户组和广告账户资产概况。',
+    description: '查看当前公司、用户规模、FB个人号和广告账户资产概况。',
     to: '/admin/company',
     icon: Building2,
   },
   {
     title: 'IAM 权限工作台',
-    description: '按用户、广告账户组、广告账户三栏联动分配权限。',
+    description: '按用户、FB个人号、广告账户三栏联动分配权限。',
     to: '/admin/iam',
     icon: ShieldCheck,
   },
@@ -117,7 +117,7 @@ function AdminPage() {
 
       <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <Metric label="活跃用户" value={activeUsers} icon={Users} />
-        <Metric label="广告账户组" value={fbAccounts} icon={KeyRound} />
+        <Metric label="FB个人号" value={fbAccounts} icon={KeyRound} />
         <Metric label="广告账户" value={adAccounts} icon={ShieldCheck} />
         <Metric
           label="运行中任务"

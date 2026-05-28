@@ -118,6 +118,7 @@ cd "$APP_DIR"
 if [ -f "$APP_DIR/package.json" ]; then
   log "backup current version -> $BACKUP_FILE"
   tar \
+    --exclude='./.deploy' \
     --exclude='./.deploy/incoming' \
     --exclude='./.deploy/backups' \
     --exclude='./.data' \

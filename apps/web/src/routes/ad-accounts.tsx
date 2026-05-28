@@ -140,7 +140,7 @@ function AdAccountsPage() {
         filters={[
           {
             key: 'fbAccountId',
-            label: '广告账户组',
+            label: 'FB个人号',
             value: fbAccountId,
             onChange: setFbAccountId,
             options: fbOptions,
@@ -198,7 +198,7 @@ function AdAccountsPage() {
             <TableRow>
               <TableHead>名称</TableHead>
               <TableHead>Meta 账户 ID</TableHead>
-              <TableHead>广告账户组</TableHead>
+              <TableHead>FB个人号</TableHead>
               <TableHead>币种</TableHead>
               <TableHead>时区</TableHead>
               <TableHead>投放国家</TableHead>
