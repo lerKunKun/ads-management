@@ -411,7 +411,7 @@ function IamWorkspacePage() {
             <SearchInput
               value={userSearch}
               onChange={setUserSearch}
-              placeholder="搜索邮箱或角色"
+              placeholder="搜索账号或角色"
             />
           }
         >

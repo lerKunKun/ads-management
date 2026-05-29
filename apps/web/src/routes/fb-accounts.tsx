@@ -1,7 +1,8 @@
 import { createFileRoute, redirect, Link } from '@tanstack/react-router';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
-import { api, getToken } from '@/lib/api';
+import { Unlink } from 'lucide-react';
+import { api, getToken, type FbAccount } from '@/lib/api';
 import {
   Table,
   TableBody,
@@ -11,6 +12,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
+import { Dialog, DialogFooter } from '@/components/ui/dialog';
 import { SearchFilterBar, matchText } from '@/components/SearchFilterBar';
 import { Pagination, usePagination } from '@/components/Pagination';
 import { accountGroupStatusLabel } from '@/lib/labels';
@@ -29,6 +31,7 @@ const STATUS_COLOR: Record<string, string> = {
 };
 
 function FbAccountsPage() {
+  const qc = useQueryClient();
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['fb-accounts'],
     queryFn: api.fbAccounts,
@@ -36,6 +39,16 @@ function FbAccountsPage() {
 
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('');
+  const [unlinkTarget, setUnlinkTarget] = useState<FbAccount | null>(null);
+
+  const unlinkFb = useMutation({
+    mutationFn: (id: string) => api.unbindFbAccount(id),
+    onSuccess: () => {
+      setUnlinkTarget(null);
+      qc.invalidateQueries({ queryKey: ['fb-accounts'] });
+      qc.invalidateQueries({ queryKey: ['ad-accounts'] });
+    },
+  });
 
   const filtered = useMemo(() => {
     const all = data ?? [];
@@ -75,8 +88,10 @@ function FbAccountsPage() {
         </div>
       </div>
 
-      {error && (
-        <p className="text-sm text-destructive mb-2">{(error as Error).message}</p>
+      {(error || unlinkFb.error) && (
+        <p className="text-sm text-destructive mb-2">
+          {((error ?? unlinkFb.error) as Error).message}
+        </p>
       )}
 
       <div className="mb-3">
@@ -116,26 +131,27 @@ function FbAccountsPage() {
               <TableHead>状态</TableHead>
               <TableHead>广告账户数</TableHead>
               <TableHead>Token 到期</TableHead>
+              <TableHead className="text-right">操作</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {isLoading && (
               <TableRow>
-                <TableCell colSpan={5} className="text-muted-foreground">
+                <TableCell colSpan={6} className="text-muted-foreground">
                   加载中…
                 </TableCell>
               </TableRow>
             )}
             {!isLoading && (data?.length ?? 0) === 0 && (
               <TableRow>
-                <TableCell colSpan={5} className="text-muted-foreground">
+                <TableCell colSpan={6} className="text-muted-foreground">
                   尚未绑定FB个人号
                 </TableCell>
               </TableRow>
             )}
             {!isLoading && (data?.length ?? 0) > 0 && filtered.length === 0 && (
               <TableRow>
-                <TableCell colSpan={5} className="text-muted-foreground">
+                <TableCell colSpan={6} className="text-muted-foreground">
                   无匹配项
                 </TableCell>
               </TableRow>
@@ -159,6 +175,17 @@ function FbAccountsPage() {
                 <TableCell className="text-xs text-muted-foreground">
                   {f.tokenExpiresAt ? new Date(f.tokenExpiresAt).toLocaleString() : '-'}
                 </TableCell>
+                <TableCell className="text-right">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={unlinkFb.isPending}
+                    onClick={() => setUnlinkTarget(f)}
+                  >
+                    <Unlink className="mr-1 h-3 w-3" />
+                    解绑
+                  </Button>
+                </TableCell>
               </TableRow>
             ))}
           </TableBody>
@@ -170,6 +197,45 @@ function FbAccountsPage() {
           onPageChange={pager.setPage}
         />
       </div>
+      <UnbindFbAccountDialog
+        account={unlinkTarget}
+        submitting={unlinkFb.isPending}
+        onCancel={() => setUnlinkTarget(null)}
+        onConfirm={() => unlinkTarget && unlinkFb.mutate(unlinkTarget.id)}
+      />
     </div>
+  );
+}
+
+function UnbindFbAccountDialog({
+  account,
+  submitting,
+  onCancel,
+  onConfirm,
+}: {
+  account: FbAccount | null;
+  submitting: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <Dialog open={!!account} onOpenChange={(nextOpen) => !nextOpen && onCancel()} title="解绑FB个人号">
+      <div className="space-y-2 text-sm">
+        <p>
+          确定解绑 {account?.name ?? '该FB个人号'} 吗？
+        </p>
+        <p className="text-muted-foreground">
+          解绑后会从系统移除该个户及其下 {account?.adAccountCount ?? 0} 个广告账户。
+        </p>
+      </div>
+      <DialogFooter>
+        <Button variant="outline" onClick={onCancel} disabled={submitting}>
+          取消
+        </Button>
+        <Button variant="destructive" onClick={onConfirm} disabled={submitting || !account}>
+          {submitting ? '解绑中...' : '确认解绑'}
+        </Button>
+      </DialogFooter>
+    </Dialog>
   );
 }

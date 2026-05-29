@@ -270,6 +270,28 @@ export interface TaskDetail {
   failures: Array<{ id: string; targetId: string; error: string | null; attempts: number }>;
 }
 
+export type ReleaseAnnouncementStatus = 'draft' | 'published' | 'archived';
+
+export interface ReleaseAnnouncement {
+  id: string;
+  title: string;
+  version: string;
+  content: string;
+  nextUpdateAt: string | null;
+  status: ReleaseAnnouncementStatus;
+  publishedAt: string | null;
+  createdBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ReleaseAnnouncementInput {
+  title: string;
+  version: string;
+  content: string;
+  nextUpdateAt?: string;
+}
+
 export const api = {
   login: (email: string, password: string) =>
     call<{ token: string; user: Omit<Me, 'scope'> }>('/iam/login', {
@@ -282,7 +304,15 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ companyId }),
     }),
+  currentReleaseAnnouncement: () =>
+    call<ReleaseAnnouncement | null>('/announcements/current'),
+  markReleaseAnnouncementRead: (id: string) =>
+    call<null>(`/announcements/${id}/read`, { method: 'POST' }),
   fbAccounts: () => call<FbAccount[]>('/fb-accounts'),
+  unbindFbAccount: (id: string) =>
+    call<{ fbAccountId: string; adAccountsRemoved: number }>(`/fb-accounts/${id}/unbind`, {
+      method: 'POST',
+    }),
   adAccounts: (fbAccountId?: string) =>
     call<AdAccount[]>(
       `/ad-accounts${fbAccountId ? `?fb_account_id=${encodeURIComponent(fbAccountId)}` : ''}`,
@@ -297,7 +327,8 @@ export const api = {
 
   // M2: 广告账户详情 / campaign 操作
   adAccountSummary: (id: string) => call<AdAccountSummary>(`/ad-accounts/${id}/summary`),
-  campaigns: (id: string) => call<Campaign[]>(`/ad-accounts/${id}/campaigns`),
+  campaigns: (id: string, opts: { force?: boolean } = {}) =>
+    call<Campaign[]>(`/ad-accounts/${id}/campaigns${opts.force ? '?force=1' : ''}`),
   setCampaignStatus: (
     campaignId: string,
     adAccountId: string,
@@ -360,10 +391,12 @@ export const api = {
     }),
 
   // 三层 list + insights
-  adSets: (adAccountId: string, campaignId: string) =>
-    call<AdSet[]>(`/ad-accounts/${adAccountId}/campaigns/${campaignId}/adsets`),
-  ads: (adAccountId: string, adsetId: string) =>
-    call<Ad[]>(`/ad-accounts/${adAccountId}/adsets/${adsetId}/ads`),
+  adSets: (adAccountId: string, campaignId: string, opts: { force?: boolean } = {}) =>
+    call<AdSet[]>(
+      `/ad-accounts/${adAccountId}/campaigns/${campaignId}/adsets${opts.force ? '?force=1' : ''}`,
+    ),
+  ads: (adAccountId: string, adsetId: string, opts: { force?: boolean } = {}) =>
+    call<Ad[]>(`/ad-accounts/${adAccountId}/adsets/${adsetId}/ads${opts.force ? '?force=1' : ''}`),
   insightsByLevel: (
     adAccountId: string,
     level: 'campaign' | 'adset' | 'ad',
@@ -477,6 +510,30 @@ export const api = {
 
   // M4: 管理端点 (权限 iam:manage)
   listCompanies: () => call<Company[]>('/_admin/companies'),
+  listReleaseAnnouncements: () =>
+    call<ReleaseAnnouncement[]>('/_admin/release-announcements'),
+  createReleaseAnnouncement: (args: ReleaseAnnouncementInput) =>
+    call<ReleaseAnnouncement>('/_admin/release-announcements', {
+      method: 'POST',
+      body: JSON.stringify(args),
+    }),
+  updateReleaseAnnouncement: (id: string, patch: Partial<ReleaseAnnouncementInput>) =>
+    call<ReleaseAnnouncement>(`/_admin/release-announcements/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+  publishReleaseAnnouncement: (id: string) =>
+    call<ReleaseAnnouncement>(`/_admin/release-announcements/${id}/publish`, {
+      method: 'POST',
+    }),
+  archiveReleaseAnnouncement: (id: string) =>
+    call<ReleaseAnnouncement>(`/_admin/release-announcements/${id}/archive`, {
+      method: 'POST',
+    }),
+  deleteReleaseAnnouncement: (id: string) =>
+    call<null>(`/_admin/release-announcements/${id}`, {
+      method: 'DELETE',
+    }),
   createCompany: (name: string) =>
     call<{ id: string }>('/_admin/companies', {
       method: 'POST',

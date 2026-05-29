@@ -102,13 +102,18 @@ function validateOwnership(
   return owner;
 }
 
+interface ListOptions {
+  force?: boolean;
+}
+
 // =================== Campaign list / 单操作 ===================
 export async function listCampaigns(
   principal: AuthPrincipal,
   adAccountId: string,
+  options: ListOptions = {},
 ): Promise<MetaCampaign[]> {
   assertScope(principal, adAccountId);
-  const cached = await readFreshCampaigns(principal.companyId, adAccountId);
+  const cached = options.force ? null : await readFreshCampaigns(principal.companyId, adAccountId);
   if (cached) return cached;
   const ctx = await resolveAdAccount(principal.companyId, adAccountId);
   try {
@@ -221,9 +226,12 @@ export async function listAdSets(
   principal: AuthPrincipal,
   adAccountId: string,
   campaignId: string,
+  options: ListOptions = {},
 ): Promise<MetaAdSet[]> {
   assertScope(principal, adAccountId);
-  const cached = await readFreshAdSets(principal.companyId, adAccountId, campaignId);
+  const cached = options.force
+    ? null
+    : await readFreshAdSets(principal.companyId, adAccountId, campaignId);
   if (cached) return cached;
   const ctx = await resolveAdAccount(principal.companyId, adAccountId);
   await assertTargetOwnership(principal, ctx, adAccountId, 'campaign', campaignId);
@@ -336,9 +344,10 @@ export async function listAds(
   principal: AuthPrincipal,
   adAccountId: string,
   adsetId: string,
+  options: ListOptions = {},
 ): Promise<MetaAd[]> {
   assertScope(principal, adAccountId);
-  const cached = await readFreshAds(principal.companyId, adAccountId, adsetId);
+  const cached = options.force ? null : await readFreshAds(principal.companyId, adAccountId, adsetId);
   if (cached) return cached;
   const ctx = await resolveAdAccount(principal.companyId, adAccountId);
   await assertTargetOwnership(principal, ctx, adAccountId, 'adset', adsetId);

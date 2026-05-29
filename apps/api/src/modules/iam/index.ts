@@ -48,7 +48,7 @@ export const iam = new Elysia({ name: 'iam', prefix: '/iam' })
     },
     {
       body: t.Object({
-        email: t.String({ format: 'email' }),
+        email: t.String({ minLength: 1, maxLength: 254 }),
         password: t.String({ minLength: 6, maxLength: 128 }),
       }),
     },
@@ -157,7 +157,7 @@ export const iam = new Elysia({ name: 'iam', prefix: '/iam' })
         },
         {
           body: t.Object({
-            email: t.String({ format: 'email' }),
+            email: t.String({ minLength: 1, maxLength: 254 }),
             password: t.String({ minLength: 6, maxLength: 128 }),
             roleCode: t.String({ minLength: 1 }),
           }),
@@ -181,7 +181,7 @@ export const iam = new Elysia({ name: 'iam', prefix: '/iam' })
         {
           params: t.Object({ id: t.String({ format: 'uuid' }) }),
           body: t.Object({
-            email: t.Optional(t.String({ format: 'email' })),
+            email: t.Optional(t.String({ minLength: 1, maxLength: 254 })),
             roleCode: t.Optional(t.String()),
             status: t.Optional(t.Union([t.Literal('active'), t.Literal('disabled')])),
           }),

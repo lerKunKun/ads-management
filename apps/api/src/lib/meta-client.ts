@@ -632,6 +632,22 @@ function addAdSetSpendLimitFormValues(form: Record<string, string>, source: Meta
   addPositiveFormValue(form, 'lifetime_spend_cap', source.lifetime_spend_cap);
 }
 
+function normalizeAdSetTargetingForCopy(targeting: unknown): unknown {
+  if (!targeting || typeof targeting !== 'object' || Array.isArray(targeting)) {
+    return targeting;
+  }
+  const raw = targeting as Record<string, unknown>;
+  const instagramPositions = raw['instagram_positions'];
+  if (!Array.isArray(instagramPositions)) return targeting;
+  if (!instagramPositions.includes('explore_home') || instagramPositions.includes('explore')) {
+    return targeting;
+  }
+  return {
+    ...raw,
+    instagram_positions: [...instagramPositions, 'explore'],
+  };
+}
+
 function applyCopyName(name: string | undefined, opts: RenameOptions | undefined, isTopLevel: boolean): string {
   const base = name || 'Untitled';
   if (!isTopLevel && opts?.rename_strategy === 'ONLY_TOP_LEVEL_RENAME') return base;
@@ -932,7 +948,7 @@ function copyAdSetCreateForm(
   addFormValue(form, 'bid_amount', source.bid_amount);
   addBudgetFormValues(form, source, opts, isTopLevel);
   addAdSetSpendLimitFormValues(form, source);
-  addFormValue(form, 'targeting', source.targeting);
+  addFormValue(form, 'targeting', normalizeAdSetTargetingForCopy(source.targeting));
   addFormValue(form, 'promoted_object', source.promoted_object);
   addFormValue(form, 'attribution_spec', source.attribution_spec);
   addFormValue(form, 'destination_type', source.destination_type);

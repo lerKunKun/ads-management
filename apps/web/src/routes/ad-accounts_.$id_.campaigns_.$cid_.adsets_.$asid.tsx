@@ -1,5 +1,5 @@
 import { createFileRoute, redirect, Link, useNavigate } from '@tanstack/react-router';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { api, getToken, type Ad, type DatePreset } from '@/lib/api';
 import { EntityListView } from '@/components/EntityListView';
@@ -18,6 +18,7 @@ export const Route = createFileRoute(
 function AdsPage() {
   const { id, cid, asid } = Route.useParams();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [preset, setPreset] = useState<DatePreset>('yesterday');
 
   const summary = useQuery({
@@ -124,8 +125,13 @@ function AdsPage() {
         isLoading={ads.isLoading}
         error={ads.error}
         refetch={() => {
-          ads.refetch();
-          insights.refetch();
+          void queryClient
+            .fetchQuery({
+              queryKey: ['ads', id, asid],
+              queryFn: () => api.ads(id, asid, { force: true }),
+            })
+            .catch(() => undefined);
+          void insights.refetch();
         }}
         enableBudget={false}
         currency={summary.data?.currency ?? null}

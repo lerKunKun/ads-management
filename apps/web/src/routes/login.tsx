@@ -35,13 +35,14 @@ function LoginPage() {
       <h1 className="text-2xl font-semibold mb-6">登录</h1>
       <form className="space-y-3" onSubmit={onSubmit}>
         <div>
-          <label className="text-sm text-muted-foreground">邮箱</label>
+          <label className="text-sm text-muted-foreground">账号</label>
           <Input
-            type="email"
+            type="text"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             required
             autoComplete="username"
+            placeholder="手机号或邮箱"
           />
         </div>
         <div>

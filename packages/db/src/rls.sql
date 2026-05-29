@@ -189,3 +189,19 @@ DROP POLICY IF EXISTS p_audit_all ON audit_logs;
 CREATE POLICY p_audit_all ON audit_logs
   FOR ALL USING (app_bypass_rls() OR company_id = app_current_company())
             WITH CHECK (app_bypass_rls() OR company_id = app_current_company());
+
+-- ---------- release announcements ----------
+ALTER TABLE release_announcements ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS p_release_announcements_select ON release_announcements;
+CREATE POLICY p_release_announcements_select ON release_announcements
+  FOR SELECT USING (app_bypass_rls() OR status = 'published');
+DROP POLICY IF EXISTS p_release_announcements_mod ON release_announcements;
+CREATE POLICY p_release_announcements_mod ON release_announcements
+  FOR ALL USING (app_bypass_rls())
+            WITH CHECK (app_bypass_rls());
+
+ALTER TABLE release_announcement_reads ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS p_release_announcement_reads_all ON release_announcement_reads;
+CREATE POLICY p_release_announcement_reads_all ON release_announcement_reads
+  FOR ALL USING (app_bypass_rls())
+            WITH CHECK (app_bypass_rls());

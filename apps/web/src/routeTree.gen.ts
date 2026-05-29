@@ -23,6 +23,7 @@ import { Route as AdminOperationsRouteImport } from './routes/admin_.operations'
 import { Route as AdminIamRouteImport } from './routes/admin_.iam'
 import { Route as AdminCompanyRouteImport } from './routes/admin_.company'
 import { Route as AdminAuditRouteImport } from './routes/admin_.audit'
+import { Route as AdminAnnouncementsRouteImport } from './routes/admin_.announcements'
 import { Route as AdAccountsIdRouteImport } from './routes/ad-accounts_.$id'
 import { Route as OauthFbCallbackRouteImport } from './routes/oauth.fb.callback'
 import { Route as AdminOperationsTaskIdRouteImport } from './routes/admin_.operations_.$taskId'
@@ -99,6 +100,11 @@ const AdminAuditRoute = AdminAuditRouteImport.update({
   path: '/admin/audit',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminAnnouncementsRoute = AdminAnnouncementsRouteImport.update({
+  id: '/admin_/announcements',
+  path: '/admin/announcements',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AdAccountsIdRoute = AdAccountsIdRouteImport.update({
   id: '/ad-accounts_/$id',
   path: '/ad-accounts/$id',
@@ -136,6 +142,7 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/operations': typeof OperationsRoute
   '/ad-accounts/$id': typeof AdAccountsIdRoute
+  '/admin/announcements': typeof AdminAnnouncementsRoute
   '/admin/audit': typeof AdminAuditRoute
   '/admin/company': typeof AdminCompanyRoute
   '/admin/iam': typeof AdminIamRoute
@@ -157,6 +164,7 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/operations': typeof OperationsRoute
   '/ad-accounts/$id': typeof AdAccountsIdRoute
+  '/admin/announcements': typeof AdminAnnouncementsRoute
   '/admin/audit': typeof AdminAuditRoute
   '/admin/company': typeof AdminCompanyRoute
   '/admin/iam': typeof AdminIamRoute
@@ -179,6 +187,7 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/operations': typeof OperationsRoute
   '/ad-accounts_/$id': typeof AdAccountsIdRoute
+  '/admin_/announcements': typeof AdminAnnouncementsRoute
   '/admin_/audit': typeof AdminAuditRoute
   '/admin_/company': typeof AdminCompanyRoute
   '/admin_/iam': typeof AdminIamRoute
@@ -202,6 +211,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/operations'
     | '/ad-accounts/$id'
+    | '/admin/announcements'
     | '/admin/audit'
     | '/admin/company'
     | '/admin/iam'
@@ -223,6 +233,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/operations'
     | '/ad-accounts/$id'
+    | '/admin/announcements'
     | '/admin/audit'
     | '/admin/company'
     | '/admin/iam'
@@ -244,6 +255,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/operations'
     | '/ad-accounts_/$id'
+    | '/admin_/announcements'
     | '/admin_/audit'
     | '/admin_/company'
     | '/admin_/iam'
@@ -266,6 +278,7 @@ export interface RootRouteChildren {
   LoginRoute: typeof LoginRoute
   OperationsRoute: typeof OperationsRoute
   AdAccountsIdRoute: typeof AdAccountsIdRoute
+  AdminAnnouncementsRoute: typeof AdminAnnouncementsRoute
   AdminAuditRoute: typeof AdminAuditRoute
   AdminCompanyRoute: typeof AdminCompanyRoute
   AdminIamRoute: typeof AdminIamRoute
@@ -379,6 +392,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminAuditRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin_/announcements': {
+      id: '/admin_/announcements'
+      path: '/admin/announcements'
+      fullPath: '/admin/announcements'
+      preLoaderRoute: typeof AdminAnnouncementsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/ad-accounts_/$id': {
       id: '/ad-accounts_/$id'
       path: '/ad-accounts/$id'
@@ -426,6 +446,7 @@ const rootRouteChildren: RootRouteChildren = {
   LoginRoute: LoginRoute,
   OperationsRoute: OperationsRoute,
   AdAccountsIdRoute: AdAccountsIdRoute,
+  AdminAnnouncementsRoute: AdminAnnouncementsRoute,
   AdminAuditRoute: AdminAuditRoute,
   AdminCompanyRoute: AdminCompanyRoute,
   AdminIamRoute: AdminIamRoute,

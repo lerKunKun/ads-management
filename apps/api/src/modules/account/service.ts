@@ -10,6 +10,7 @@ import { env } from '../../env';
 import { notifier } from '../../lib/notifier';
 import { redis } from '../../lib/redis';
 import { BreakerKey } from '../../lib/breaker';
+import { Forbidden, NotFound } from '../../lib/http-error';
 import { writeAudit } from '../iam/auth-service';
 import type { AuthPrincipal } from '../iam/auth-service';
 
@@ -239,6 +240,134 @@ export async function bindFbAccount(args: {
     });
     return res;
   });
+}
+
+export async function unbindFbAccount(args: {
+  principal: AuthPrincipal;
+  fbAccountId: string;
+}): Promise<{ fbAccountId: string; adAccountsRemoved: number }> {
+  const { principal, fbAccountId } = args;
+  const result = await withTenant(principal.companyId, async (tx) => {
+    const fb = await tx
+      .select({
+        id: schema.fbAccounts.id,
+        fbUserId: schema.fbAccounts.fbUserId,
+        name: schema.fbAccounts.name,
+      })
+      .from(schema.fbAccounts)
+      .where(
+        and(
+          eq(schema.fbAccounts.id, fbAccountId),
+          eq(schema.fbAccounts.companyId, principal.companyId),
+        ),
+      )
+      .limit(1);
+    const row = fb[0];
+    if (!row) throw NotFound('FB个人号不存在');
+    if (!principal.scope.bypass && !principal.scope.fbAccounts.includes(fbAccountId)) {
+      throw Forbidden('无权解绑该FB个人号');
+    }
+
+    const adRows = await tx
+      .select({
+        id: schema.adAccounts.id,
+        metaActId: schema.adAccounts.metaActId,
+      })
+      .from(schema.adAccounts)
+      .where(
+        and(
+          eq(schema.adAccounts.companyId, principal.companyId),
+          eq(schema.adAccounts.fbAccountId, fbAccountId),
+        ),
+      );
+    const adAccountIds = adRows.map((ad) => ad.id);
+
+    const fbGrantUsers = await tx
+      .select({ userId: schema.userResourceGrants.userId })
+      .from(schema.userResourceGrants)
+      .where(
+        and(
+          eq(schema.userResourceGrants.resourceType, 'fb_account'),
+          eq(schema.userResourceGrants.resourceId, fbAccountId),
+        ),
+      );
+    const adGrantUsers = adAccountIds.length > 0
+      ? await tx
+        .select({ userId: schema.userResourceGrants.userId })
+        .from(schema.userResourceGrants)
+        .where(
+          and(
+            eq(schema.userResourceGrants.resourceType, 'ad_account'),
+            inArray(schema.userResourceGrants.resourceId, adAccountIds),
+          ),
+        )
+      : [];
+
+    await tx
+      .delete(schema.userResourceGrants)
+      .where(
+        and(
+          eq(schema.userResourceGrants.resourceType, 'fb_account'),
+          eq(schema.userResourceGrants.resourceId, fbAccountId),
+        ),
+      );
+    if (adAccountIds.length > 0) {
+      await tx
+        .delete(schema.userResourceGrants)
+        .where(
+          and(
+            eq(schema.userResourceGrants.resourceType, 'ad_account'),
+            inArray(schema.userResourceGrants.resourceId, adAccountIds),
+          ),
+        );
+    }
+
+    await tx
+      .delete(schema.fbAccounts)
+      .where(
+        and(
+          eq(schema.fbAccounts.id, fbAccountId),
+          eq(schema.fbAccounts.companyId, principal.companyId),
+        ),
+      );
+
+    return {
+      fbAccountId,
+      fbUserId: row.fbUserId,
+      name: row.name,
+      adAccountsRemoved: adRows.length,
+      adMetaActIds: adRows.map((ad) => ad.metaActId),
+      affectedUserIds: Array.from(
+        new Set([
+          principal.userId,
+          ...fbGrantUsers.map((grant) => grant.userId),
+          ...adGrantUsers.map((grant) => grant.userId),
+        ]),
+      ),
+    };
+  });
+
+  await Promise.all(result.affectedUserIds.map((userId) => invalidatePrincipalCache(userId)));
+  await redis.del(
+    `token:${fbAccountId}`,
+    BreakerKey.fbAccount(fbAccountId),
+    ...result.adMetaActIds.map((metaActId) => BreakerKey.adAccount(metaActId)),
+  );
+  await writeAudit({
+    companyId: principal.companyId,
+    userId: principal.userId,
+    action: 'fb_account:unbind',
+    resource: `fb_account:${fbAccountId}`,
+    detail: {
+      fbUserId: result.fbUserId,
+      name: result.name,
+      adAccountsRemoved: result.adAccountsRemoved,
+    },
+  });
+  return {
+    fbAccountId: result.fbAccountId,
+    adAccountsRemoved: result.adAccountsRemoved,
+  };
 }
 
 /**

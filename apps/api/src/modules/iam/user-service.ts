@@ -45,8 +45,8 @@ function assertPlatformAdmin(principal: AuthPrincipal) {
   }
 }
 
-function normalizeEmail(email: string): string {
-  return email.trim().toLowerCase();
+function normalizeAccount(email: string): string {
+  return email.trim();
 }
 
 async function bumpPermCache(userId: string): Promise<void> {
@@ -126,14 +126,14 @@ export async function createUser(
       dsql`SELECT set_config('app.current_company_id', ${principal.companyId}, true)`,
     );
 
-    // 邮箱唯一性
-    const email = normalizeEmail(args.email);
+    const email = normalizeAccount(args.email);
+    if (!email) throw new HttpError(422, 422, '账号不能为空');
     const dup = await tx
       .select({ id: schema.users.id })
       .from(schema.users)
       .where(eq(schema.users.email, email))
       .limit(1);
-    if (dup[0]) throw new HttpError(409, 409, '邮箱已注册');
+    if (dup[0]) throw new HttpError(409, 409, '账号已存在');
 
     const ins = await tx
       .insert(schema.users)
@@ -195,14 +195,15 @@ export async function updateUser(
     if (!u[0]) throw new HttpError(404, 404, '用户不存在');
 
     if (patch.email !== undefined) {
-      const email = normalizeEmail(patch.email);
+      const email = normalizeAccount(patch.email);
+      if (!email) throw new HttpError(422, 422, '账号不能为空');
       const dup = await tx
         .select({ id: schema.users.id })
         .from(schema.users)
         .where(eq(schema.users.email, email))
         .limit(1);
       if (dup[0] && dup[0].id !== userId) {
-        throw new HttpError(409, 409, '邮箱已注册');
+        throw new HttpError(409, 409, '账号已存在');
       }
       await tx.update(schema.users).set({ email }).where(eq(schema.users.id, userId));
     }

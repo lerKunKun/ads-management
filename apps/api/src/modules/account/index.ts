@@ -44,6 +44,17 @@ export const account = new Elysia({ name: 'account' })
         },
         { beforeHandle: requirePermission('ad_account:read') },
       )
+      .post(
+        '/fb-accounts/:id/unbind',
+        async ({ principal, params }) => {
+          const data = await svc.unbindFbAccount({ principal, fbAccountId: params.id });
+          return { code: 0, msg: 'ok', data };
+        },
+        {
+          params: t.Object({ id: t.String({ format: 'uuid' }) }),
+          beforeHandle: requirePermission('fb_account:bind'),
+        },
+      )
       // 广告账户列表(可选 ?fb_account_id= 过滤)
       .get(
         '/ad-accounts',

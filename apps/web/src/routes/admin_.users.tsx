@@ -256,7 +256,7 @@ function UsersPage() {
       <SearchFilterBar
         searchValue={search}
         onSearchChange={setSearch}
-        searchPlaceholder="搜索邮箱、公司或角色"
+        searchPlaceholder="搜索账号、公司或角色"
         filters={[
           {
             key: 'role',
@@ -458,7 +458,7 @@ function UserTableRow({
           {canModifyUser && (
             <Button size="sm" variant="outline" disabled={updating} onClick={onEditEmail}>
               <Mail className="mr-1 h-3 w-3" />
-              改邮箱
+              改账号
             </Button>
           )}
           <Button size="sm" variant="outline" disabled={switching} onClick={onIam}>
@@ -514,12 +514,13 @@ function CreateUserDialog({
           <Input value={companyName} disabled />
         </div>
         <div>
-          <label className="text-sm text-muted-foreground">邮箱</label>
+          <label className="text-sm text-muted-foreground">账号</label>
           <Input
-            type="email"
+            type="text"
             autoComplete="off"
             value={email}
             onChange={(event) => setEmail(event.target.value)}
+            placeholder="手机号或邮箱"
           />
         </div>
         <div>
@@ -579,19 +580,20 @@ function EditEmailDialog({
   }, [user]);
 
   return (
-    <Dialog open={!!user} onOpenChange={(nextOpen) => !nextOpen && onCancel()} title="更改邮箱">
+    <Dialog open={!!user} onOpenChange={(nextOpen) => !nextOpen && onCancel()} title="更改账号">
       <div className="space-y-3">
         <div>
-          <label className="text-sm text-muted-foreground">当前邮箱</label>
+          <label className="text-sm text-muted-foreground">当前账号</label>
           <Input value={user?.email ?? ''} disabled />
         </div>
         <div>
-          <label className="text-sm text-muted-foreground">新邮箱</label>
+          <label className="text-sm text-muted-foreground">新账号</label>
           <Input
-            type="email"
+            type="text"
             autoComplete="off"
             value={email}
             onChange={(event) => setEmail(event.target.value)}
+            placeholder="手机号或邮箱"
           />
         </div>
       </div>

@@ -30,10 +30,12 @@ export async function authenticate(
   email: string,
   password: string,
 ): Promise<AuthPrincipal | null> {
+  const account = email.trim();
+  if (!account) return null;
   const rows = await adminDb
     .select()
     .from(schema.users)
-    .where(eq(schema.users.email, email))
+    .where(eq(schema.users.email, account))
     .limit(1);
   const user = rows[0];
   if (!user) return null;

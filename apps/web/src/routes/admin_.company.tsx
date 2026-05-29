@@ -33,12 +33,6 @@ export const Route = createFileRoute('/admin_/company')({
   component: CompanyPage,
 });
 
-const ROLE_OPTIONS = [
-  { value: 'CompanyAdmin', label: '公司管理员' },
-  { value: 'Operator', label: '操作员' },
-  { value: 'Viewer', label: '只读' },
-];
-
 function CompanyPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
@@ -62,7 +56,6 @@ function CompanyPage() {
 
   const [createCompanyOpen, setCreateCompanyOpen] = useState(false);
   const [editCompany, setEditCompany] = useState<Company | null>(null);
-  const [createUserOpen, setCreateUserOpen] = useState(false);
 
   useEffect(() => {
     if (!me.data || companies.length === 0) return;
@@ -97,16 +90,6 @@ function CompanyPage() {
     },
   });
 
-  const createUser = useMutation({
-    mutationFn: (args: { email: string; password: string; roleCode: string }) =>
-      api.createCompanyUser(selectedCompany!.id, args),
-    onSuccess: () => {
-      setCreateUserOpen(false);
-      qc.invalidateQueries({ queryKey: ['admin', 'company-users', selectedCompany?.id ?? 'none'] });
-      qc.invalidateQueries({ queryKey: ['admin', 'companies'] });
-    },
-  });
-
   const switchCompany = useMutation({
     mutationFn: (companyId: string) => api.switchCompany(companyId),
     onSuccess: (result) => {
@@ -121,7 +104,6 @@ function CompanyPage() {
     (usersQ.error as Error | null)?.message ??
     (createCompany.error as Error | null)?.message ??
     (updateCompany.error as Error | null)?.message ??
-    (createUser.error as Error | null)?.message ??
     (switchCompany.error as Error | null)?.message;
 
   function refreshAll() {
@@ -262,10 +244,6 @@ function CompanyPage() {
               </div>
               {selectedCompany && (
                 <div className="flex flex-wrap gap-2">
-                  <Button size="sm" variant="outline" onClick={() => setCreateUserOpen(true)}>
-                    <Plus className="mr-2 h-4 w-4" />
-                    分配人员
-                  </Button>
                   <Button size="sm" onClick={() => goIam(selectedCompany.id)} disabled={switchCompany.isPending}>
                     <ShieldCheck className="mr-2 h-4 w-4" />
                     IAM 权限管理
@@ -282,7 +260,7 @@ function CompanyPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>邮箱</TableHead>
+                  <TableHead>账号</TableHead>
                   <TableHead>角色</TableHead>
                   <TableHead>状态</TableHead>
                   <TableHead>作用域</TableHead>
@@ -325,13 +303,6 @@ function CompanyPage() {
         submitting={updateCompany.isPending}
         onCancel={() => setEditCompany(null)}
         onSubmit={(name) => editCompany && updateCompany.mutate({ id: editCompany.id, name })}
-      />
-      <CreateUserDialog
-        open={createUserOpen}
-        companyName={selectedCompany?.name ?? ''}
-        submitting={createUser.isPending}
-        onCancel={() => setCreateUserOpen(false)}
-        onSubmit={(args) => createUser.mutate(args)}
       />
     </div>
   );
@@ -393,76 +364,6 @@ function CompanyDialog({
         </Button>
         <Button disabled={submitting || !name.trim()} onClick={() => onSubmit(name.trim())}>
           {submitting ? '提交中...' : submitText}
-        </Button>
-      </DialogFooter>
-    </Dialog>
-  );
-}
-
-function CreateUserDialog({
-  open,
-  companyName,
-  submitting,
-  onCancel,
-  onSubmit,
-}: {
-  open: boolean;
-  companyName: string;
-  submitting: boolean;
-  onCancel: () => void;
-  onSubmit: (args: { email: string; password: string; roleCode: string }) => void;
-}) {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [roleCode, setRoleCode] = useState('Operator');
-  useEffect(() => {
-    if (!open) return;
-    setEmail('');
-    setPassword('');
-    setRoleCode('Operator');
-  }, [open]);
-  return (
-    <Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && onCancel()} title="分配人员">
-      <p className="mb-3 text-sm text-muted-foreground">
-        新建员工并分配到 {companyName || '当前公司'}。
-      </p>
-      <div className="space-y-3">
-        <label className="space-y-1.5 text-sm">
-          <span className="text-xs text-muted-foreground">邮箱</span>
-          <Input type="email" value={email} onChange={(event) => setEmail(event.currentTarget.value)} />
-        </label>
-        <label className="space-y-1.5 text-sm">
-          <span className="text-xs text-muted-foreground">初始密码</span>
-          <Input
-            type="password"
-            value={password}
-            onChange={(event) => setPassword(event.currentTarget.value)}
-          />
-        </label>
-        <label className="space-y-1.5 text-sm">
-          <span className="text-xs text-muted-foreground">角色</span>
-          <select
-            className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-            value={roleCode}
-            onChange={(event) => setRoleCode(event.currentTarget.value)}
-          >
-            {ROLE_OPTIONS.map((role) => (
-              <option key={role.value} value={role.value}>
-                {role.label}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-      <DialogFooter>
-        <Button variant="outline" onClick={onCancel} disabled={submitting}>
-          取消
-        </Button>
-        <Button
-          disabled={submitting || !email || password.length < 6}
-          onClick={() => onSubmit({ email, password, roleCode })}
-        >
-          {submitting ? '创建中...' : '创建并分配'}
         </Button>
       </DialogFooter>
     </Dialog>

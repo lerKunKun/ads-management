@@ -30,6 +30,16 @@ import {
   updateCompany,
   updateCompanyUser,
 } from './company-service';
+import {
+  archiveReleaseAnnouncement,
+  createReleaseAnnouncement,
+  deleteReleaseAnnouncement,
+  getUnreadReleaseAnnouncement,
+  listReleaseAnnouncements,
+  markReleaseAnnouncementRead,
+  publishReleaseAnnouncement,
+  updateReleaseAnnouncement,
+} from './release-announcement-service';
 import { authGuard, requirePermission } from '../../middleware/auth';
 import type { AuthPrincipal } from '../iam/auth-service';
 import { writeAudit } from '../iam/auth-service';
@@ -90,6 +100,128 @@ async function filterByCompany(
 export const admin = new Elysia({ name: 'admin' }).group('', (g) =>
   g
     .use(authGuard)
+    .get('/announcements/current', async ({ principal }) => ({
+      code: 0,
+      msg: 'ok',
+      data: await getUnreadReleaseAnnouncement(principal),
+    }))
+    .post(
+      '/announcements/:id/read',
+      async ({ principal, params }) => {
+        await markReleaseAnnouncementRead(principal, params.id);
+        return { code: 0, msg: 'ok', data: null };
+      },
+      { params: t.Object({ id: t.String({ format: 'uuid' }) }) },
+    )
+    .get('/_admin/release-announcements', async ({ principal }) => ({
+      code: 0,
+      msg: 'ok',
+      data: await listReleaseAnnouncements(principal),
+    }))
+    .post(
+      '/_admin/release-announcements',
+      async ({ principal, body, request }) => {
+        const data = await createReleaseAnnouncement(principal, body);
+        await writeAudit({
+          companyId: principal.companyId,
+          userId: principal.userId,
+          action: 'admin:release-announcement:create',
+          resource: `release_announcement:${data.id}`,
+          detail: { title: data.title, version: data.version },
+          ...(request.headers.get('x-forwarded-for')
+            ? { ip: request.headers.get('x-forwarded-for')!.split(',')[0]!.trim() }
+            : {}),
+        });
+        return { code: 0, msg: 'ok', data };
+      },
+      {
+        body: t.Object({
+          title: t.String({ minLength: 1, maxLength: 120 }),
+          version: t.String({ minLength: 1, maxLength: 80 }),
+          content: t.String({ minLength: 1, maxLength: 4000 }),
+          nextUpdateAt: t.Optional(t.String({ maxLength: 80 })),
+        }),
+      },
+    )
+    .patch(
+      '/_admin/release-announcements/:id',
+      async ({ principal, params, body, request }) => {
+        const data = await updateReleaseAnnouncement(principal, params.id, body);
+        await writeAudit({
+          companyId: principal.companyId,
+          userId: principal.userId,
+          action: 'admin:release-announcement:update',
+          resource: `release_announcement:${data.id}`,
+          detail: body,
+          ...(request.headers.get('x-forwarded-for')
+            ? { ip: request.headers.get('x-forwarded-for')!.split(',')[0]!.trim() }
+            : {}),
+        });
+        return { code: 0, msg: 'ok', data };
+      },
+      {
+        params: t.Object({ id: t.String({ format: 'uuid' }) }),
+        body: t.Object({
+          title: t.Optional(t.String({ minLength: 1, maxLength: 120 })),
+          version: t.Optional(t.String({ minLength: 1, maxLength: 80 })),
+          content: t.Optional(t.String({ minLength: 1, maxLength: 4000 })),
+          nextUpdateAt: t.Optional(t.String({ maxLength: 80 })),
+        }),
+      },
+    )
+    .post(
+      '/_admin/release-announcements/:id/publish',
+      async ({ principal, params, request }) => {
+        const data = await publishReleaseAnnouncement(principal, params.id);
+        await writeAudit({
+          companyId: principal.companyId,
+          userId: principal.userId,
+          action: 'admin:release-announcement:publish',
+          resource: `release_announcement:${data.id}`,
+          detail: { title: data.title, version: data.version },
+          ...(request.headers.get('x-forwarded-for')
+            ? { ip: request.headers.get('x-forwarded-for')!.split(',')[0]!.trim() }
+            : {}),
+        });
+        return { code: 0, msg: 'ok', data };
+      },
+      { params: t.Object({ id: t.String({ format: 'uuid' }) }) },
+    )
+    .post(
+      '/_admin/release-announcements/:id/archive',
+      async ({ principal, params, request }) => {
+        const data = await archiveReleaseAnnouncement(principal, params.id);
+        await writeAudit({
+          companyId: principal.companyId,
+          userId: principal.userId,
+          action: 'admin:release-announcement:archive',
+          resource: `release_announcement:${data.id}`,
+          detail: { title: data.title, version: data.version },
+          ...(request.headers.get('x-forwarded-for')
+            ? { ip: request.headers.get('x-forwarded-for')!.split(',')[0]!.trim() }
+            : {}),
+        });
+        return { code: 0, msg: 'ok', data };
+      },
+      { params: t.Object({ id: t.String({ format: 'uuid' }) }) },
+    )
+    .delete(
+      '/_admin/release-announcements/:id',
+      async ({ principal, params, request }) => {
+        await deleteReleaseAnnouncement(principal, params.id);
+        await writeAudit({
+          companyId: principal.companyId,
+          userId: principal.userId,
+          action: 'admin:release-announcement:delete',
+          resource: `release_announcement:${params.id}`,
+          ...(request.headers.get('x-forwarded-for')
+            ? { ip: request.headers.get('x-forwarded-for')!.split(',')[0]!.trim() }
+            : {}),
+        });
+        return { code: 0, msg: 'ok', data: null };
+      },
+      { params: t.Object({ id: t.String({ format: 'uuid' }) }) },
+    )
     .get(
       '/_admin/companies',
       async ({ principal }) => ({
@@ -176,7 +308,7 @@ export const admin = new Elysia({ name: 'admin' }).group('', (g) =>
       {
         params: t.Object({ id: t.String({ format: 'uuid' }) }),
         body: t.Object({
-          email: t.String({ format: 'email' }),
+          email: t.String({ minLength: 1, maxLength: 254 }),
           password: t.String({ minLength: 6, maxLength: 128 }),
           roleCode: t.String({ minLength: 1 }),
         }),
@@ -205,7 +337,7 @@ export const admin = new Elysia({ name: 'admin' }).group('', (g) =>
           userId: t.String({ format: 'uuid' }),
         }),
         body: t.Object({
-          email: t.Optional(t.String({ format: 'email' })),
+          email: t.Optional(t.String({ minLength: 1, maxLength: 254 })),
           roleCode: t.Optional(t.String({ minLength: 1 })),
           status: t.Optional(t.Union([t.Literal('active'), t.Literal('disabled')])),
         }),

@@ -7,6 +7,7 @@ import {
   ClipboardList,
   KeyRound,
   LayoutDashboard,
+  Megaphone,
   ShieldCheck,
   Users,
 } from 'lucide-react';
@@ -21,11 +22,20 @@ export const Route = createFileRoute('/admin')({
   component: AdminPage,
 });
 
+type AdminMenuPath =
+  | '/admin/company'
+  | '/admin/iam'
+  | '/admin/users'
+  | '/admin/operations'
+  | '/admin/audit'
+  | '/admin/announcements';
+
 const adminMenus: Array<{
   title: string;
   description: string;
-  to: '/admin/company' | '/admin/iam' | '/admin/users' | '/admin/operations' | '/admin/audit';
+  to: AdminMenuPath;
   icon: LucideIcon;
+  platformOnly?: boolean;
 }> = [
   {
     title: '公司管理',
@@ -57,6 +67,13 @@ const adminMenus: Array<{
     to: '/admin/audit',
     icon: ClipboardList,
   },
+  {
+    title: '站内信发布',
+    description: '发布版本更新弹窗，管理更新内容和下次更新时间。',
+    to: '/admin/announcements',
+    icon: Megaphone,
+    platformOnly: true,
+  },
 ];
 
 function AdminPage() {
@@ -84,6 +101,8 @@ function AdminPage() {
     me.data?.companyName ??
     me.data?.companyId ??
     '-';
+  const isPlatformAdmin = me.data?.roles.includes('PlatformAdmin') ?? false;
+  const visibleMenus = adminMenus.filter((item) => !item.platformOnly || isPlatformAdmin);
 
   return (
     <div className="space-y-6">
@@ -128,7 +147,7 @@ function AdminPage() {
       </section>
 
       <section className="grid gap-4 md:grid-cols-2">
-        {adminMenus.map((item) => (
+        {visibleMenus.map((item) => (
           <AdminMenuCard key={item.to} item={item} />
         ))}
       </section>
@@ -183,7 +202,7 @@ function AdminMenuCard({
   item: {
     title: string;
     description: string;
-    to: '/admin/company' | '/admin/iam' | '/admin/users' | '/admin/operations' | '/admin/audit';
+    to: AdminMenuPath;
     icon: LucideIcon;
   };
 }) {

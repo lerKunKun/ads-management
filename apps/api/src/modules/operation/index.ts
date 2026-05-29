@@ -44,6 +44,10 @@ const statusOptionSchema = t.Optional(
   ]),
 );
 
+function isForceRefresh(value: string | undefined): boolean {
+  return value === '1' || value === 'true';
+}
+
 export const operation = new Elysia({ name: 'operation' })
   .get('/_operation/ping', () => ({ code: 0, msg: 'ok', data: 'operation' }))
   .group('', (g) =>
@@ -66,12 +70,15 @@ export const operation = new Elysia({ name: 'operation' })
       // ===== Campaign list / 单操作 =====
       .get(
         '/ad-accounts/:id/campaigns',
-        async ({ principal, params }) => {
-          const data = await svc.listCampaigns(principal, params.id);
+        async ({ principal, params, query }) => {
+          const data = await svc.listCampaigns(principal, params.id, {
+            force: isForceRefresh(query.force),
+          });
           return { code: 0, msg: 'ok', data };
         },
         {
           params: t.Object({ id: t.String({ format: 'uuid' }) }),
+          query: t.Object({ force: t.Optional(t.String()) }),
           beforeHandle: requirePermission('ad_account:read'),
         },
       )
@@ -177,8 +184,10 @@ export const operation = new Elysia({ name: 'operation' })
       // ===== AdSet =====
       .get(
         '/ad-accounts/:id/campaigns/:cid/adsets',
-        async ({ principal, params }) => {
-          const data = await svc.listAdSets(principal, params.id, params.cid);
+        async ({ principal, params, query }) => {
+          const data = await svc.listAdSets(principal, params.id, params.cid, {
+            force: isForceRefresh(query.force),
+          });
           return { code: 0, msg: 'ok', data };
         },
         {
@@ -186,6 +195,7 @@ export const operation = new Elysia({ name: 'operation' })
             id: t.String({ format: 'uuid' }),
             cid: t.String({ minLength: 1 }),
           }),
+          query: t.Object({ force: t.Optional(t.String()) }),
           beforeHandle: requirePermission('ad_account:read'),
         },
       )
@@ -291,8 +301,10 @@ export const operation = new Elysia({ name: 'operation' })
       // ===== Ad =====
       .get(
         '/ad-accounts/:id/adsets/:asid/ads',
-        async ({ principal, params }) => {
-          const data = await svc.listAds(principal, params.id, params.asid);
+        async ({ principal, params, query }) => {
+          const data = await svc.listAds(principal, params.id, params.asid, {
+            force: isForceRefresh(query.force),
+          });
           return { code: 0, msg: 'ok', data };
         },
         {
@@ -300,6 +312,7 @@ export const operation = new Elysia({ name: 'operation' })
             id: t.String({ format: 'uuid' }),
             asid: t.String({ minLength: 1 }),
           }),
+          query: t.Object({ force: t.Optional(t.String()) }),
           beforeHandle: requirePermission('ad_account:read'),
         },
       )

@@ -50,6 +50,13 @@
       "when": 1779945600000,
       "tag": "0006_ad_archives",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1780041600000,
+      "tag": "0007_release_announcements",
+      "breakpoints": true
     }
   ]
 }

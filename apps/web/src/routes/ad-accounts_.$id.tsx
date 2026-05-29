@@ -1,5 +1,5 @@
 import { createFileRoute, redirect, Link } from '@tanstack/react-router';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { api, getToken, type Campaign, type DatePreset } from '@/lib/api';
 import { EntityListView } from '@/components/EntityListView';
@@ -15,6 +15,7 @@ export const Route = createFileRoute('/ad-accounts_/$id')({
 
 function AdAccountCampaignsPage() {
   const { id } = Route.useParams();
+  const queryClient = useQueryClient();
   const [preset, setPreset] = useState<DatePreset>('yesterday');
 
   const summary = useQuery({
@@ -71,8 +72,13 @@ function AdAccountCampaignsPage() {
         isLoading={campaigns.isLoading}
         error={campaigns.error}
         refetch={() => {
-          campaigns.refetch();
-          insights.refetch();
+          void queryClient
+            .fetchQuery({
+              queryKey: ['campaigns', id],
+              queryFn: () => api.campaigns(id, { force: true }),
+            })
+            .catch(() => undefined);
+          void insights.refetch();
         }}
         drillTo={(row) => ({
           to: '/ad-accounts/$id/campaigns/$cid',
