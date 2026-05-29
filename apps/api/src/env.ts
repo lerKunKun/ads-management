@@ -55,6 +55,8 @@ export const env = {
   copyV2AdAccountBurst: Number(opt('COPY_V2_AD_ACCOUNT_BURST', '24')),
   copyV2InspectConcurrency: Number(opt('COPY_V2_INSPECT_CONCURRENCY', '32')),
   copyV2VerifyConcurrency: Number(opt('COPY_V2_VERIFY_CONCURRENCY', '32')),
+  copyV2VerifyAttempts: Number(opt('COPY_V2_VERIFY_ATTEMPTS', '4')),
+  copyV2VerifyRetryDelayMs: Number(opt('COPY_V2_VERIFY_RETRY_DELAY_MS', '10000')),
   copyV2DefaultStatus: opt('COPY_V2_DEFAULT_STATUS', 'PAUSED') as 'PAUSED',
   copyV2VerifyEnabled: opt('COPY_V2_VERIFY_ENABLED', '1') === '1',
   copyV2RepairEnabled: opt('COPY_V2_REPAIR_ENABLED', '1') === '1',

@@ -1311,6 +1311,54 @@ async function verifyCreatedWorkflow(
   return mismatches;
 }
 
+async function verifyCreatedWorkflowWithRetry(
+  workflowId: string,
+  token: string,
+  metaActId: string,
+  newCampaignId: string,
+  plan: CampaignCopyPlan,
+  opts: CopyOptions,
+  taskId: string,
+): Promise<FieldMismatch[]> {
+  const attempts = Math.max(1, env.copyV2VerifyAttempts);
+  const baseDelayMs = Math.max(0, env.copyV2VerifyRetryDelayMs);
+
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const mismatches = await verifyCreatedWorkflow(workflowId, token, metaActId, newCampaignId, plan, opts);
+    if (mismatches.length === 0) return [];
+    if (attempt >= attempts || !shouldRetryVerifyMismatches(mismatches)) return mismatches;
+
+    const delayMs = Math.min(30_000, baseDelayMs * attempt);
+    console.warn(
+      `[copy-v2-verify] retry workflow=${workflowId} attempt=${attempt}/${attempts} delayMs=${delayMs} mismatches=${mismatches.length}`,
+    );
+    if (delayMs > 0) await sleep(delayMs);
+    await assertTaskRunnable(taskId);
+  }
+
+  return [];
+}
+
+function shouldRetryVerifyMismatches(mismatches: FieldMismatch[]): boolean {
+  if (mismatches.length === 0) return false;
+  return mismatches.every(isEventuallyConsistentMismatch);
+}
+
+function isEventuallyConsistentMismatch(mismatch: FieldMismatch): boolean {
+  if (mismatch.type === 'workflow' && (mismatch.field === 'adset_count' || mismatch.field === 'ad_count')) {
+    const expected = Number(mismatch.expected);
+    const actual = Number(mismatch.actual);
+    return Number.isFinite(expected) && Number.isFinite(actual) && actual < expected;
+  }
+  if (
+    (mismatch.field === 'parent_campaign' || mismatch.field === 'parent_adset') &&
+    mismatch.actual === undefined
+  ) {
+    return true;
+  }
+  return false;
+}
+
 function v2CopyOptions(input: AsyncCopyInput): CopyOptions & { targetAdAccountId?: string } {
   return {
     deepCopy: false,
@@ -1476,7 +1524,15 @@ export async function executeJsonbCampaignCopyV2(
     phase = 'verify';
     await assertTaskRunnable(msg.taskId);
     await updateWorkflowState(workflow.id, plan, phase, { status: 'running', newCampaignId });
-    const verifyMismatches = await verifyCreatedWorkflow(workflow.id, token, msg.metaActId, newCampaignId, plan, opts);
+    const verifyMismatches = await verifyCreatedWorkflowWithRetry(
+      workflow.id,
+      token,
+      msg.metaActId,
+      newCampaignId,
+      plan,
+      opts,
+      msg.taskId,
+    );
     const mismatches = [...renameMismatches, ...verifyMismatches];
     if (mismatches.length > 0) {
       await updateWorkflowState(workflow.id, plan, 'verify', {
