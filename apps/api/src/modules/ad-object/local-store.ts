@@ -63,14 +63,15 @@ export async function upsertCampaignSnapshots(
   adAccountId: string,
   rows: MetaCampaign[],
 ): Promise<void> {
+  const uniqueRows = uniqueByMetaId(rows);
   await db.transaction(async (tx) => {
     await setTenant(tx, companyId);
     const now = new Date();
-    if (rows.length > 0) {
+    if (uniqueRows.length > 0) {
       await tx
         .insert(schema.adCampaigns)
         .values(
-          rows.map((row) => ({
+          uniqueRows.map((row) => ({
             companyId,
             adAccountId,
             metaId: row.id,
@@ -119,14 +120,15 @@ export async function upsertAdSetSnapshots(
   campaignId: string,
   rows: MetaAdSet[],
 ): Promise<void> {
+  const uniqueRows = uniqueByMetaId(rows);
   await db.transaction(async (tx) => {
     await setTenant(tx, companyId);
     const now = new Date();
-    if (rows.length > 0) {
+    if (uniqueRows.length > 0) {
       await tx
         .insert(schema.adSetObjects)
         .values(
-          rows.map((row) => ({
+          uniqueRows.map((row) => ({
             companyId,
             adAccountId,
             campaignMetaId: row.campaignId ?? campaignId,
@@ -179,14 +181,15 @@ export async function upsertAdSnapshots(
   adsetId: string,
   rows: MetaAd[],
 ): Promise<void> {
+  const uniqueRows = uniqueByMetaId(rows);
   await db.transaction(async (tx) => {
     await setTenant(tx, companyId);
     const now = new Date();
-    if (rows.length > 0) {
+    if (uniqueRows.length > 0) {
       await tx
         .insert(schema.adObjects)
         .values(
-          rows.map((row) => ({
+          uniqueRows.map((row) => ({
             companyId,
             adAccountId,
             campaignMetaId: row.campaignId ?? null,
@@ -221,6 +224,15 @@ export async function upsertAdSnapshots(
     }
     await markSyncSuccessTx(tx, companyId, adAccountId, 'ad', adsetId, now);
   });
+}
+
+function uniqueByMetaId<T extends { id: string }>(rows: T[]): T[] {
+  if (rows.length < 2) return rows;
+  const byId = new Map<string, T>();
+  for (const row of rows) {
+    byId.set(row.id, row);
+  }
+  return Array.from(byId.values());
 }
 
 export async function hydrateAdsWithLocalAdSetSchedule(

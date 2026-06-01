@@ -400,7 +400,7 @@ export const operation = new Elysia({ name: 'operation' })
         '/ad-accounts/:id/insights',
         async ({ principal, params, query }) => {
           const level = (query.level ?? 'campaign') as 'campaign' | 'adset' | 'ad';
-          const preset = (query.preset ?? 'yesterday') as DatePreset;
+          const preset = (query.preset ?? 'today') as DatePreset;
           const data = await svc.getInsightsByLevel(principal, params.id, level, preset, query.parentId);
           return { code: 0, msg: 'ok', data };
         },

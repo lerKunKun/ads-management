@@ -1,0 +1,379 @@
+import { useMemo, useState } from 'react';
+import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
+import { api, type Ad, type AdSet, type Campaign, type DatePreset, type InsightsSummary } from '@/lib/api';
+import { EntityListView } from '@/components/EntityListView';
+import { SelectionClearPill } from '@/components/SelectionClearPill';
+
+interface MetaAdsManagerPanelProps {
+  adAccountId: string;
+  currency: string | null;
+  timezone: string | null;
+}
+
+const DATE_PRESETS: DatePreset[] = ['today', 'yesterday', 'last_7d', 'last_30d', 'maximum'];
+type ActiveLayer = 'campaign' | 'adset' | 'ad';
+
+export function MetaAdsManagerPanel({
+  adAccountId,
+  currency,
+  timezone,
+}: MetaAdsManagerPanelProps) {
+  const queryClient = useQueryClient();
+  const [preset, setPreset] = useState<DatePreset>('today');
+  const [activeLayer, setActiveLayer] = useState<ActiveLayer>('campaign');
+  const [selectedCampaignIds, setSelectedCampaignIds] = useState<Set<string>>(() => new Set());
+  const [selectedAdsetIds, setSelectedAdsetIds] = useState<Set<string>>(() => new Set());
+  const [selectedAdIds, setSelectedAdIds] = useState<Set<string>>(() => new Set());
+
+  const campaignIds = useMemo(() => sortedIds(selectedCampaignIds), [selectedCampaignIds]);
+  const adsetIds = useMemo(() => sortedIds(selectedAdsetIds), [selectedAdsetIds]);
+  const campaignScopeKey = campaignIds.join('|');
+  const adsetScopeKey = adsetIds.join('|');
+
+  const campaigns = useQuery({
+    queryKey: ['campaigns', adAccountId],
+    queryFn: () => api.campaigns(adAccountId),
+  });
+  const campaignInsights = useQuery({
+    queryKey: ['insights', adAccountId, 'campaign', preset],
+    queryFn: () => api.insightsByLevel(adAccountId, 'campaign', preset),
+  });
+
+  const adsetQueries = useQueries({
+    queries: campaignIds.map((campaignId) => ({
+      queryKey: ['adsets', adAccountId, campaignId],
+      queryFn: () => api.adSets(adAccountId, campaignId),
+    })),
+  });
+  const adsetInsightQueries = useQueries({
+    queries: campaignIds.map((campaignId) => ({
+      queryKey: ['insights', adAccountId, 'adset', campaignId, preset],
+      queryFn: () => api.insightsByLevel(adAccountId, 'adset', preset, campaignId),
+    })),
+  });
+  const adsets = useMemo(
+    () => uniqueById(adsetQueries.flatMap((query) => query.data ?? [])),
+    [adsetQueries],
+  );
+  const adsetInsights = useMemo(
+    () => mergeInsightRecords(adsetInsightQueries.map((query) => query.data)),
+    [adsetInsightQueries],
+  );
+
+  const adQueries = useQueries({
+    queries: adsetIds.map((adsetId) => ({
+      queryKey: ['ads', adAccountId, adsetId],
+      queryFn: () => api.ads(adAccountId, adsetId),
+    })),
+  });
+  const adInsightQueries = useQueries({
+    queries: adsetIds.map((adsetId) => ({
+      queryKey: ['insights', adAccountId, 'ad', adsetId, preset],
+      queryFn: () => api.insightsByLevel(adAccountId, 'ad', preset, adsetId),
+    })),
+  });
+  const ads = useMemo(
+    () => uniqueById(adQueries.flatMap((query) => query.data ?? [])),
+    [adQueries],
+  );
+  const adInsights = useMemo(
+    () => mergeInsightRecords(adInsightQueries.map((query) => query.data)),
+    [adInsightQueries],
+  );
+
+  function onCampaignSelectionChange(next: Set<string>) {
+    setSelectedCampaignIds(next);
+    setSelectedAdsetIds(new Set());
+    setSelectedAdIds(new Set());
+  }
+
+  function onAdsetSelectionChange(next: Set<string>) {
+    setSelectedAdsetIds(next);
+    setSelectedAdIds(new Set());
+  }
+
+  function refreshCampaigns() {
+    void queryClient
+      .fetchQuery({
+        queryKey: ['campaigns', adAccountId],
+        queryFn: () => api.campaigns(adAccountId, { force: true }),
+      })
+      .catch(() => undefined);
+    void campaignInsights.refetch();
+  }
+
+  function refreshAdsets() {
+    if (campaignIds.length === 0) return;
+    void Promise.all(
+      campaignIds.map((campaignId) =>
+        queryClient.fetchQuery({
+          queryKey: ['adsets', adAccountId, campaignId],
+          queryFn: () => api.adSets(adAccountId, campaignId, { force: true }),
+        }),
+      ),
+    ).catch(() => undefined);
+    void queryClient.invalidateQueries({ queryKey: ['insights', adAccountId, 'adset'] });
+  }
+
+  function refreshAds() {
+    if (adsetIds.length === 0) return;
+    void Promise.all(
+      adsetIds.map((adsetId) =>
+        queryClient.fetchQuery({
+          queryKey: ['ads', adAccountId, adsetId],
+          queryFn: () => api.ads(adAccountId, adsetId, { force: true }),
+        }),
+      ),
+    ).catch(() => undefined);
+    void queryClient.invalidateQueries({ queryKey: ['insights', adAccountId, 'ad'] });
+  }
+
+  function clearCampaignSelection() {
+    setSelectedCampaignIds(new Set());
+    setSelectedAdsetIds(new Set());
+    setSelectedAdIds(new Set());
+  }
+
+  function clearAdsetSelection() {
+    setSelectedAdsetIds(new Set());
+    setSelectedAdIds(new Set());
+  }
+
+  function clearAdSelection() {
+    setSelectedAdIds(new Set());
+  }
+
+  function openCampaignAdsets(row: Campaign) {
+    setSelectedCampaignIds(new Set([row.id]));
+    setSelectedAdsetIds(new Set());
+    setSelectedAdIds(new Set());
+    setActiveLayer('adset');
+  }
+
+  function openAdsetAds(row: AdSet) {
+    setSelectedAdsetIds(new Set([row.id]));
+    setSelectedAdIds(new Set());
+    setActiveLayer('ad');
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="overflow-hidden rounded-md border bg-background">
+        <div className="grid gap-2 border-b bg-muted/50 p-2 lg:grid-cols-[1fr_auto] lg:items-center">
+          <div className="grid min-w-0 gap-2 md:grid-cols-3">
+            <LayerTab
+              label="广告系列"
+              active={activeLayer === 'campaign'}
+              selectedCount={selectedCampaignIds.size}
+              totalCount={campaigns.data?.length ?? 0}
+              onClick={() => setActiveLayer('campaign')}
+              onClearSelected={clearCampaignSelection}
+            />
+            <LayerTab
+              label="广告组"
+              active={activeLayer === 'adset'}
+              selectedCount={selectedAdsetIds.size}
+              totalCount={adsets.length}
+              hint={campaignIds.length > 0 ? `${campaignIds.length} 个系列内` : '先选系列'}
+              onClick={() => setActiveLayer('adset')}
+              onClearSelected={clearAdsetSelection}
+            />
+            <LayerTab
+              label="广告"
+              active={activeLayer === 'ad'}
+              selectedCount={selectedAdIds.size}
+              totalCount={ads.length}
+              hint={adsetIds.length > 0 ? `${adsetIds.length} 个广告组内` : '先选广告组'}
+              onClick={() => setActiveLayer('ad')}
+              onClearSelected={clearAdSelection}
+            />
+          </div>
+          <label className="grid gap-1 text-sm sm:flex sm:items-center sm:justify-end">
+            <span className="whitespace-nowrap text-xs text-muted-foreground">日期范围</span>
+            <select
+              className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm sm:w-auto"
+              value={preset}
+              onChange={(event) => setPreset(event.target.value as DatePreset)}
+            >
+              {DATE_PRESETS.map((item) => (
+                <option key={item} value={item}>
+                  {datePresetLabel(item)}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        <div className="p-3">
+          {activeLayer === 'campaign' && (
+            <EntityListView<Campaign>
+              layer="campaign"
+              layerLabel="广告系列"
+              adAccountId={adAccountId}
+              rows={campaigns.data ?? []}
+              isLoading={campaigns.isLoading}
+              error={campaigns.error}
+              refetch={refreshCampaigns}
+              onRowOpen={openCampaignAdsets}
+              enableBudget
+              currency={currency}
+              adAccountTimezone={timezone}
+              insights={campaignInsights.data ?? {}}
+              datePreset={preset}
+              onDatePresetChange={setPreset}
+              invalidateKey={['meta-panel-campaigns', adAccountId]}
+              selectedIds={selectedCampaignIds}
+              onSelectedIdsChange={onCampaignSelectionChange}
+              scopeLabel="选中广告系列后切到广告组"
+              showDatePreset={false}
+            />
+          )}
+
+          {activeLayer === 'adset' && (
+            <EntityListView<AdSet>
+              layer="adset"
+              layerLabel="广告组"
+              adAccountId={adAccountId}
+              rows={adsets}
+              isLoading={campaignIds.length > 0 && adsetQueries.some((query) => query.isLoading)}
+              error={firstQueryError(adsetQueries)}
+              refetch={refreshAdsets}
+              onRowOpen={openAdsetAds}
+              enableBudget
+              currency={currency}
+              adAccountTimezone={timezone}
+              insights={adsetInsights}
+              datePreset={preset}
+              onDatePresetChange={setPreset}
+              invalidateKey={['meta-panel-adsets', adAccountId, campaignScopeKey]}
+              selectedIds={selectedAdsetIds}
+              onSelectedIdsChange={onAdsetSelectionChange}
+              scopeLabel={campaignIds.length > 0 ? `来自 ${campaignIds.length} 个广告系列` : '先选择广告系列'}
+              emptyText={
+                campaignIds.length > 0
+                  ? '所选广告系列暂无广告组'
+                  : '先在广告系列表勾选一个或多个广告系列'
+              }
+              showDatePreset={false}
+            />
+          )}
+
+          {activeLayer === 'ad' && (
+            <EntityListView<Ad>
+              layer="ad"
+              layerLabel="广告"
+              adAccountId={adAccountId}
+              rows={ads}
+              isLoading={adsetIds.length > 0 && adQueries.some((query) => query.isLoading)}
+              error={firstQueryError(adQueries)}
+              refetch={refreshAds}
+              enableBudget={false}
+              currency={currency}
+              adAccountTimezone={timezone}
+              insights={adInsights}
+              datePreset={preset}
+              onDatePresetChange={setPreset}
+              invalidateKey={['meta-panel-ads', adAccountId, adsetScopeKey]}
+              selectedIds={selectedAdIds}
+              onSelectedIdsChange={setSelectedAdIds}
+              scopeLabel={adsetIds.length > 0 ? `来自 ${adsetIds.length} 个广告组` : '先选择广告组'}
+              emptyText={
+                adsetIds.length > 0
+                  ? '所选广告组暂无广告'
+                  : '先在广告组表勾选一个或多个广告组'
+              }
+              showDatePreset={false}
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LayerTab({
+  label,
+  active,
+  selectedCount,
+  totalCount,
+  hint,
+  onClick,
+  onClearSelected,
+}: {
+  label: string;
+  active: boolean;
+  selectedCount: number;
+  totalCount: number;
+  hint?: string;
+  onClick: () => void;
+  onClearSelected: () => void;
+}) {
+  return (
+    <div
+      className={[
+        'flex min-h-11 min-w-0 items-center gap-2 rounded-md border px-3 transition-colors',
+        active
+          ? 'border-primary bg-background shadow-sm'
+          : 'border-transparent bg-background/60 hover:border-input hover:bg-background',
+      ].join(' ')}
+    >
+      <button
+        type="button"
+        className="flex min-w-0 flex-1 items-center py-2 text-left"
+        onClick={onClick}
+      >
+        <span className="min-w-0">
+          <span className="block truncate font-medium">{label}</span>
+          <span className="block truncate text-xs text-muted-foreground">
+            {hint ?? `共 ${totalCount} 项`}
+          </span>
+        </span>
+      </button>
+      <SelectionClearPill
+        count={selectedCount}
+        itemLabel={label}
+        prefix="选中"
+        onClear={onClearSelected}
+        className="h-7 border-primary bg-primary text-primary-foreground hover:bg-primary/90"
+      />
+    </div>
+  );
+}
+
+function sortedIds(ids: Set<string>): string[] {
+  return Array.from(ids).sort();
+}
+
+function uniqueById<T extends { id: string }>(rows: T[]): T[] {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const row of rows) {
+    if (seen.has(row.id)) continue;
+    seen.add(row.id);
+    out.push(row);
+  }
+  return out;
+}
+
+function mergeInsightRecords(
+  records: Array<Record<string, InsightsSummary> | undefined>,
+): Record<string, InsightsSummary> {
+  const merged: Record<string, InsightsSummary> = {};
+  for (const record of records) {
+    if (!record) continue;
+    Object.assign(merged, record);
+  }
+  return merged;
+}
+
+function firstQueryError(queries: Array<{ error: unknown }>): unknown | undefined {
+  return queries.find((query) => query.error)?.error;
+}
+
+function datePresetLabel(preset: DatePreset): string {
+  if (preset === 'today') return '今天';
+  if (preset === 'yesterday') return '昨天';
+  if (preset === 'last_7d') return '近 7 天';
+  if (preset === 'last_30d') return '近 30 天';
+  return '全部';
+}

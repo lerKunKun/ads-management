@@ -194,7 +194,7 @@ async function listDueAdAccounts(args: {
   limit: number;
   staleMs: number;
 }): Promise<DueAdAccount[]> {
-  const staleBefore = new Date(Date.now() - args.staleMs);
+  const staleBefore = new Date(Date.now() - args.staleMs).toISOString();
   const rows = await db.transaction(async (tx) => {
     await tx.execute(dsql`SELECT set_config('app.bypass_rls', '1', true)`);
     const companyFilter = args.companyId
@@ -211,7 +211,7 @@ async function listDueAdAccounts(args: {
       WHERE aa.status = 'active'
         AND fb.status = 'active'
         ${companyFilter}
-        AND (ss.last_synced_at IS NULL OR ss.last_synced_at < ${staleBefore})
+        AND (ss.last_synced_at IS NULL OR ss.last_synced_at < ${staleBefore}::timestamptz)
       ORDER BY ss.last_synced_at ASC NULLS FIRST, aa.created_at ASC
       LIMIT ${args.limit}
     `);

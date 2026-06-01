@@ -19,7 +19,7 @@ function AdsPage() {
   const { id, cid, asid } = Route.useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [preset, setPreset] = useState<DatePreset>('yesterday');
+  const [preset, setPreset] = useState<DatePreset>('today');
 
   const summary = useQuery({
     queryKey: ['ad-account-summary', id],

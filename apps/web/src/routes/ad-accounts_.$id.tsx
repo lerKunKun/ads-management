@@ -1,10 +1,9 @@
 import { createFileRoute, redirect, Link } from '@tanstack/react-router';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
-import { api, getToken, type Campaign, type DatePreset } from '@/lib/api';
-import { EntityListView } from '@/components/EntityListView';
+import { useQuery } from '@tanstack/react-query';
+import { api, getToken } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { TimezoneClock } from '@/components/TimezoneClock';
+import { MetaAdsManagerPanel } from '@/components/MetaAdsManagerPanel';
 
 export const Route = createFileRoute('/ad-accounts_/$id')({
   beforeLoad: () => {
@@ -15,20 +14,10 @@ export const Route = createFileRoute('/ad-accounts_/$id')({
 
 function AdAccountCampaignsPage() {
   const { id } = Route.useParams();
-  const queryClient = useQueryClient();
-  const [preset, setPreset] = useState<DatePreset>('yesterday');
 
   const summary = useQuery({
     queryKey: ['ad-account-summary', id],
     queryFn: () => api.adAccountSummary(id),
-  });
-  const campaigns = useQuery({
-    queryKey: ['campaigns', id],
-    queryFn: () => api.campaigns(id),
-  });
-  const insights = useQuery({
-    queryKey: ['insights', id, 'campaign', preset],
-    queryFn: () => api.insightsByLevel(id, 'campaign', preset),
   });
 
   return (
@@ -64,33 +53,10 @@ function AdAccountCampaignsPage() {
         <TimezoneClock timezone={summary.data?.timezoneName ?? null} />
       </header>
 
-      <EntityListView<Campaign>
-        layer="campaign"
-        layerLabel="广告系列"
+      <MetaAdsManagerPanel
         adAccountId={id}
-        rows={campaigns.data ?? []}
-        isLoading={campaigns.isLoading}
-        error={campaigns.error}
-        refetch={() => {
-          void queryClient
-            .fetchQuery({
-              queryKey: ['campaigns', id],
-              queryFn: () => api.campaigns(id, { force: true }),
-            })
-            .catch(() => undefined);
-          void insights.refetch();
-        }}
-        drillTo={(row) => ({
-          to: '/ad-accounts/$id/campaigns/$cid',
-          params: { id, cid: row.id },
-        })}
-        enableBudget
         currency={summary.data?.currency ?? null}
-        adAccountTimezone={summary.data?.timezoneName ?? null}
-        {...(insights.data ? { insights: insights.data } : {})}
-        datePreset={preset}
-        onDatePresetChange={setPreset}
-        invalidateKey={['campaigns', id]}
+        timezone={summary.data?.timezoneName ?? null}
       />
     </div>
   );

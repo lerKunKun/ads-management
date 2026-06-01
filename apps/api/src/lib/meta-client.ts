@@ -1966,7 +1966,7 @@ export const meta = {
   async getInsights(
     token: string,
     objectId: string,
-    datePreset: DatePreset = 'yesterday',
+    datePreset: DatePreset = 'today',
   ): Promise<InsightsSummary> {
     if (FAKE_MODE) return fakeMeta.getInsights(objectId, datePreset);
     const q: Record<string, string> = {
@@ -1986,7 +1986,7 @@ export const meta = {
     token: string,
     metaActId: string,
     level: 'campaign' | 'adset' | 'ad',
-    datePreset: DatePreset = 'yesterday',
+    datePreset: DatePreset = 'today',
   ): Promise<Record<string, InsightsSummary>> {
     if (FAKE_MODE) return fakeMeta.getInsightsByChild(metaActId, level, datePreset);
     const baseQuery: Record<string, string> = {

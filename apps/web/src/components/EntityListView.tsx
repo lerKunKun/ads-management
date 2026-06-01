@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
+import { Copy, Pause, Pencil, Play, RefreshCw, Trash2 } from 'lucide-react';
 import {
   api,
   openTaskStream,
@@ -25,6 +26,7 @@ import {
 import { CopyDialog } from '@/components/CopyDialog';
 import { Pagination, usePagination } from '@/components/Pagination';
 import { SearchFilterBar, matchText } from '@/components/SearchFilterBar';
+import { SelectionClearPill } from '@/components/SelectionClearPill';
 import { metaEffectiveStatusLabel, metaEntityStatusLabel, taskStatusLabel } from '@/lib/labels';
 
 export interface EntityRow {
@@ -50,6 +52,7 @@ export interface EntityListViewProps<T extends EntityRow> {
   error?: unknown;
   refetch: () => void;
   drillTo?: (row: T) => { to: string; params: Record<string, string> };
+  onRowOpen?: (row: T) => void;
   enableBudget?: boolean;
   currency?: string | null;
   adAccountTimezone?: string | null;
@@ -57,6 +60,11 @@ export interface EntityListViewProps<T extends EntityRow> {
   datePreset: DatePreset;
   onDatePresetChange: (p: DatePreset) => void;
   invalidateKey: unknown[];
+  selectedIds?: Set<string>;
+  onSelectedIdsChange?: (ids: Set<string>) => void;
+  scopeLabel?: string;
+  emptyText?: string;
+  showDatePreset?: boolean;
 }
 
 type TerminalTaskStatus = 'success' | 'failed' | 'partial' | 'cancelled';
@@ -123,14 +131,20 @@ export function EntityListView<T extends EntityRow>({
   error,
   refetch,
   drillTo,
+  onRowOpen,
   enableBudget = true,
   currency,
   insights,
   datePreset,
   onDatePresetChange,
   invalidateKey,
+  selectedIds,
+  onSelectedIdsChange,
+  scopeLabel,
+  emptyText,
+  showDatePreset = true,
 }: EntityListViewProps<T>) {
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [internalSelected, setInternalSelected] = useState<Set<string>>(new Set());
   const [rowPatches, setRowPatches] = useState<Map<string, RowPatch>>(new Map());
   const [budgetEditing, setBudgetEditing] = useState<{ id: string; name: string; daily?: number } | null>(null);
   const [batchBudgetOpen, setBatchBudgetOpen] = useState(false);
@@ -143,11 +157,23 @@ export function EntityListView<T extends EntityRow>({
   const [sort, setSort] = useState<SortState | null>(null);
   const [activeFirst, setActiveFirst] = useState(true);
   const me = useQuery<Me>({ queryKey: ['me'], queryFn: api.me });
+  const selected = selectedIds ?? internalSelected;
+  const selectionControlled = selectedIds !== undefined;
+
+  function replaceSelected(next: Set<string>) {
+    if (!selectionControlled) setInternalSelected(next);
+    onSelectedIdsChange?.(next);
+  }
+
+  function updateSelected(producer: (current: Set<string>) => Set<string>) {
+    replaceSelected(producer(selected));
+  }
 
   const keySignature = JSON.stringify(invalidateKey);
   useEffect(() => {
     setRowPatches(new Map());
-    setSelected(new Set());
+    replaceSelected(new Set());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [keySignature]);
 
   const patchedRows = useMemo(
@@ -195,7 +221,7 @@ export function EntityListView<T extends EntityRow>({
   }
 
   function toggle(id: string) {
-    setSelected((current) => {
+    updateSelected((current) => {
       const next = new Set(current);
       if (next.has(id)) next.delete(id);
       else next.add(id);
@@ -204,7 +230,7 @@ export function EntityListView<T extends EntityRow>({
   }
 
   function toggleAll() {
-    setSelected((current) => {
+    updateSelected((current) => {
       const next = new Set(current);
       if (allSelected) {
         for (const id of allIds) next.delete(id);
@@ -278,9 +304,10 @@ export function EntityListView<T extends EntityRow>({
       const failedIds = new Set(task.failures.map((item) => item.targetId));
       applyBatchPatch(pendingBatch, pendingBatch.ids.filter((id) => !failedIds.has(id)), patchRows);
     }
-    setSelected(new Set());
+    replaceSelected(new Set());
     setTrackedTaskId(null);
     setPendingBatch(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingBatch, trackedTask.data, trackedTaskId]);
 
   function runBatch(action: string, params: Record<string, unknown>, ids = Array.from(selected)) {
@@ -317,6 +344,7 @@ export function EntityListView<T extends EntityRow>({
     value === 0 ? '-' : `${value.toFixed(2)}${currency ? ` ${currency}` : ''}`;
 
   const layerActionLabel = layer === 'campaign' ? '广告系列' : layer === 'adset' ? '广告组' : '广告';
+  const selectedCrossesFilter = selected.size > 0 && filteredRows.length !== rows.length;
   const canOperateAdAccount =
     me.data?.scope.bypass || me.data?.scope.adAccounts.includes(adAccountId) || false;
   const hasPermission = (code: string) => me.data?.permissions.includes(code) ?? false;
@@ -327,92 +355,109 @@ export function EntityListView<T extends EntityRow>({
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-start">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <h2 className="font-medium">{layerLabel}</h2>
-          {selected.size > 0 && (
-            <span className="text-sm text-muted-foreground">
-              已选 {selected.size}
-              {filteredRows.length !== rows.length ? '（跨筛选）' : ''}
+          {scopeLabel && (
+            <span className="rounded bg-muted px-2 py-1 text-xs text-muted-foreground">
+              {scopeLabel}
             </span>
           )}
+          <SelectionClearPill
+            count={selected.size}
+            itemLabel={layerActionLabel}
+            detail={selectedCrossesFilter ? '跨筛选' : undefined}
+            onClear={() => replaceSelected(new Set())}
+          />
         </div>
-        <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center sm:justify-end">
-          <label className="col-span-2 flex h-9 items-center gap-2 rounded-md border border-input bg-background px-2 text-sm sm:col-span-1">
-            <Switch
-              size="sm"
-              checked={activeFirst}
-              onCheckedChange={(next) => {
-                setActiveFirst(next);
-                pager.setPage(1);
-              }}
-              aria-label="active-first"
-            />
-            <span>启用优先</span>
-          </label>
-          <select
-            className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm sm:w-auto"
-            value={datePreset}
-            onChange={(event) => onDatePresetChange(event.target.value as DatePreset)}
-          >
-            {PRESETS.map((preset) => (
-              <option key={preset} value={preset}>
-                {presetLabel(preset)}
-              </option>
-            ))}
-          </select>
-          <Button size="sm" variant="outline" className="w-full sm:w-auto" onClick={refetch}>
-            刷新
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            className="w-full sm:w-auto"
-            disabled={selected.size === 0 || batch.isPending || !canChangeStatus}
-            onClick={() => runBatch(`${layer}:status`, { status: 'PAUSED' })}
-          >
-            批量暂停
-          </Button>
-          <Button
-            size="sm"
-            className="w-full sm:w-auto"
-            disabled={selected.size === 0 || batch.isPending || !canChangeStatus}
-            onClick={() => runBatch(`${layer}:status`, { status: 'ACTIVE' })}
-          >
-            批量启用
-          </Button>
-          {enableBudget && (
+        <div className="flex flex-col gap-2 xl:items-end">
+          <div className="flex w-full flex-wrap items-center gap-2 xl:w-auto xl:justify-end">
+            <label className="flex h-9 w-full items-center gap-2 rounded-md border border-input bg-background px-2 text-sm sm:w-auto">
+              <Switch
+                size="sm"
+                checked={activeFirst}
+                onCheckedChange={(next) => {
+                  setActiveFirst(next);
+                  pager.setPage(1);
+                }}
+                aria-label="active-first"
+              />
+              <span>启用优先</span>
+            </label>
+            {showDatePreset && (
+              <select
+                className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm sm:w-auto"
+                value={datePreset}
+                onChange={(event) => onDatePresetChange(event.target.value as DatePreset)}
+              >
+                {PRESETS.map((preset) => (
+                  <option key={preset} value={preset}>
+                    {presetLabel(preset)}
+                  </option>
+                ))}
+              </select>
+            )}
+            <Button size="sm" variant="outline" className="w-full gap-1.5 sm:w-auto" onClick={refetch}>
+              <RefreshCw className="h-4 w-4" aria-hidden="true" />
+              刷新
+            </Button>
+          </div>
+          <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center sm:justify-end">
             <Button
               size="sm"
               variant="outline"
-              className="w-full sm:w-auto"
-              disabled={selected.size === 0 || batch.isPending || !canChangeBudget}
-              onClick={() => setBatchBudgetOpen(true)}
+              className="w-full gap-1.5 sm:w-auto"
+              disabled={selected.size === 0 || batch.isPending || !canChangeStatus}
+              onClick={() => runBatch(`${layer}:status`, { status: 'PAUSED' })}
             >
-              批量改预算
+              <Pause className="h-4 w-4" aria-hidden="true" />
+              批量暂停
             </Button>
-          )}
-          <Button
-            size="sm"
-            variant="outline"
-            className="w-full sm:w-auto"
-            disabled={selected.size === 0 || batch.isPending || !canCopy}
-            onClick={batchCopyClicked}
-          >
-            批量复制
-          </Button>
-          <Button
-            size="sm"
-            variant="destructive"
-            className="w-full sm:w-auto"
-            disabled={selected.size === 0 || batch.isPending || !canDelete}
-            onClick={() => {
-              if (!confirm(`批量删除 ${selected.size} 个${layerActionLabel}？`)) return;
-              runBatch(`${layer}:delete`, { hard: false });
-            }}
-          >
-            批量删除
-          </Button>
+            <Button
+              size="sm"
+              className="w-full gap-1.5 sm:w-auto"
+              disabled={selected.size === 0 || batch.isPending || !canChangeStatus}
+              onClick={() => runBatch(`${layer}:status`, { status: 'ACTIVE' })}
+            >
+              <Play className="h-4 w-4" aria-hidden="true" />
+              批量启用
+            </Button>
+            {enableBudget && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="w-full gap-1.5 sm:w-auto"
+                disabled={selected.size === 0 || batch.isPending || !canChangeBudget}
+                onClick={() => setBatchBudgetOpen(true)}
+              >
+                <Pencil className="h-4 w-4" aria-hidden="true" />
+                批量改预算
+              </Button>
+            )}
+            <Button
+              size="sm"
+              variant="outline"
+              className="w-full gap-1.5 sm:w-auto"
+              disabled={selected.size === 0 || batch.isPending || !canCopy}
+              onClick={batchCopyClicked}
+            >
+              <Copy className="h-4 w-4" aria-hidden="true" />
+              批量复制
+            </Button>
+            <Button
+              size="sm"
+              variant="destructive"
+              className="w-full gap-1.5 sm:w-auto"
+              disabled={selected.size === 0 || batch.isPending || !canDelete}
+              onClick={() => {
+                if (!confirm(`批量删除 ${selected.size} 个${layerActionLabel}？`)) return;
+                runBatch(`${layer}:delete`, { hard: false });
+              }}
+            >
+              <Trash2 className="h-4 w-4" aria-hidden="true" />
+              批量删除
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -490,7 +535,7 @@ export function EntityListView<T extends EntityRow>({
               <EmptyTableRow colSpan={tableColumnCount} text="加载中..." />
             )}
             {!isLoading && rows.length === 0 && (
-              <EmptyTableRow colSpan={tableColumnCount} text={`暂无${layerLabel}`} />
+              <EmptyTableRow colSpan={tableColumnCount} text={emptyText ?? `暂无${layerLabel}`} />
             )}
             {!isLoading && rows.length > 0 && filteredRows.length === 0 && (
               <EmptyTableRow colSpan={tableColumnCount} text="无匹配项，请清除筛选条件" />
@@ -499,7 +544,7 @@ export function EntityListView<T extends EntityRow>({
               const insight = insights?.[row.id];
               const isSelected = selected.has(row.id);
               const archived = row.status === 'ARCHIVED' || row.status === 'DELETED';
-              const drill = drillTo?.(row);
+              const drill = onRowOpen ? undefined : drillTo?.(row);
               return (
                 <TableRow key={row.id} className={isSelected ? 'bg-muted/30' : ''}>
                   <TableCell className="w-12 px-2 text-center">
@@ -525,7 +570,16 @@ export function EntityListView<T extends EntityRow>({
                     />
                   </TableCell>
                   <TableCell className="min-w-[220px] max-w-[420px] font-medium">
-                    {drill ? (
+                    {onRowOpen ? (
+                      <button
+                        type="button"
+                        className="block max-w-full truncate text-left text-primary hover:underline"
+                        title={row.name}
+                        onClick={() => onRowOpen(row)}
+                      >
+                        {row.name}
+                      </button>
+                    ) : drill ? (
                       <Link
                         to={drill.to}
                         params={drill.params}
