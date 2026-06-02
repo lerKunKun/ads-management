@@ -11,6 +11,7 @@ interface CopyDialogProps {
   targetCount: number;
   /** 单选时显示源名;批量时显示数字 */
   hint?: string;
+  forceDeepCopy?: boolean;
   onCancel: () => void;
   onSubmit: (params: CopyParams) => void;
   submitting: boolean;
@@ -29,6 +30,7 @@ export function CopyDialog({
   layer,
   targetCount,
   hint,
+  forceDeepCopy = false,
   onCancel,
   onSubmit,
   submitting,
@@ -50,7 +52,7 @@ export function CopyDialog({
     setTestIdx('');
     setDeepCopy(true);
     setPauseAfter(false);
-  }, [open]);
+  }, [open, forceDeepCopy, layer]);
 
   function buildSuffix(): string {
     const parts: string[] = [];
@@ -69,7 +71,7 @@ export function CopyDialog({
     const params: CopyParams = {
       count,
       statusOption: pauseAfter ? 'PAUSED' : 'INHERITED_FROM_SOURCE',
-      ...(layer !== 'ad' ? { deepCopy } : {}),
+      ...(layer !== 'ad' ? { deepCopy: forceDeepCopy || deepCopy } : {}),
       ...((prefix || suffix)
         ? {
           renameOptions: {
@@ -156,7 +158,8 @@ export function CopyDialog({
             <label className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
-                checked={deepCopy}
+                checked={forceDeepCopy || deepCopy}
+                disabled={forceDeepCopy}
                 onChange={(e) => setDeepCopy(e.target.checked)}
               />
               深复制（含下级）

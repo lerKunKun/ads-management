@@ -1,7 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type Ad, type AdSet, type Campaign, type DatePreset, type InsightsSummary } from '@/lib/api';
-import { EntityListView } from '@/components/EntityListView';
+import { EntityListView, type CopySelection } from '@/components/EntityListView';
 import { SelectionClearPill } from '@/components/SelectionClearPill';
 
 interface MetaAdsManagerPanelProps {
@@ -12,6 +12,7 @@ interface MetaAdsManagerPanelProps {
 
 const DATE_PRESETS: DatePreset[] = ['today', 'yesterday', 'last_7d', 'last_30d', 'maximum'];
 type ActiveLayer = 'campaign' | 'adset' | 'ad';
+const LAYER_DEPTH: Record<ActiveLayer, number> = { campaign: 0, adset: 1, ad: 2 };
 
 export function MetaAdsManagerPanel({
   adAccountId,
@@ -24,6 +25,13 @@ export function MetaAdsManagerPanel({
   const [selectedCampaignIds, setSelectedCampaignIds] = useState<Set<string>>(() => new Set());
   const [selectedAdsetIds, setSelectedAdsetIds] = useState<Set<string>>(() => new Set());
   const [selectedAdIds, setSelectedAdIds] = useState<Set<string>>(() => new Set());
+
+  useEffect(() => {
+    setActiveLayer('campaign');
+    setSelectedCampaignIds(new Set());
+    setSelectedAdsetIds(new Set());
+    setSelectedAdIds(new Set());
+  }, [adAccountId]);
 
   const campaignIds = useMemo(() => sortedIds(selectedCampaignIds), [selectedCampaignIds]);
   const adsetIds = useMemo(() => sortedIds(selectedAdsetIds), [selectedAdsetIds]);
@@ -143,6 +151,20 @@ export function MetaAdsManagerPanel({
     setSelectedAdIds(new Set());
   }
 
+  function clearCurrentLayerSelectionOnly() {
+    if (activeLayer === 'campaign') setSelectedCampaignIds(new Set());
+    if (activeLayer === 'adset') setSelectedAdsetIds(new Set());
+    if (activeLayer === 'ad') setSelectedAdIds(new Set());
+  }
+
+  function switchLayer(nextLayer: ActiveLayer) {
+    if (nextLayer === activeLayer) return;
+    if (LAYER_DEPTH[nextLayer] < LAYER_DEPTH[activeLayer]) {
+      clearCurrentLayerSelectionOnly();
+    }
+    setActiveLayer(nextLayer);
+  }
+
   function openCampaignAdsets(row: Campaign) {
     setSelectedCampaignIds(new Set([row.id]));
     setSelectedAdsetIds(new Set());
@@ -156,6 +178,52 @@ export function MetaAdsManagerPanel({
     setActiveLayer('ad');
   }
 
+  function completeSelectedCampaignCopyIds(): string[] {
+    if (
+      selectedCampaignIds.size === 0 ||
+      selectedAdsetIds.size === 0 ||
+      selectedAdIds.size === 0
+    ) {
+      return [];
+    }
+
+    const allAdsetIds = new Set<string>();
+    for (let i = 0; i < campaignIds.length; i++) {
+      const rows = adsetQueries[i]?.data;
+      if (!rows) return [];
+      for (const row of rows) allAdsetIds.add(row.id);
+    }
+    if (allAdsetIds.size === 0 || !sameStringSet(selectedAdsetIds, allAdsetIds)) {
+      return [];
+    }
+
+    const allAdIds = new Set<string>();
+    for (let i = 0; i < adsetIds.length; i++) {
+      const rows = adQueries[i]?.data;
+      if (!rows) return [];
+      for (const row of rows) allAdIds.add(row.id);
+    }
+    if (allAdIds.size === 0 || !sameStringSet(selectedAdIds, allAdIds)) {
+      return [];
+    }
+
+    return campaignIds;
+  }
+
+  function resolvePanelBatchCopySelection(selection: CopySelection): CopySelection {
+    if (selection.layer === 'campaign') return selection;
+
+    const campaignCopyIds = completeSelectedCampaignCopyIds();
+    if (campaignCopyIds.length === 0) return selection;
+
+    return {
+      layer: 'campaign',
+      ids: campaignCopyIds,
+      hint: `完整复制 ${campaignCopyIds.length} 个广告系列（包含全部广告组和广告）`,
+      forceDeepCopy: true,
+    };
+  }
+
   return (
     <div className="space-y-3">
       <div className="overflow-hidden rounded-md border bg-background">
@@ -166,7 +234,7 @@ export function MetaAdsManagerPanel({
               active={activeLayer === 'campaign'}
               selectedCount={selectedCampaignIds.size}
               totalCount={campaigns.data?.length ?? 0}
-              onClick={() => setActiveLayer('campaign')}
+              onClick={() => switchLayer('campaign')}
               onClearSelected={clearCampaignSelection}
             />
             <LayerTab
@@ -175,7 +243,7 @@ export function MetaAdsManagerPanel({
               selectedCount={selectedAdsetIds.size}
               totalCount={adsets.length}
               hint={campaignIds.length > 0 ? `${campaignIds.length} 个系列内` : '先选系列'}
-              onClick={() => setActiveLayer('adset')}
+              onClick={() => switchLayer('adset')}
               onClearSelected={clearAdsetSelection}
             />
             <LayerTab
@@ -184,7 +252,7 @@ export function MetaAdsManagerPanel({
               selectedCount={selectedAdIds.size}
               totalCount={ads.length}
               hint={adsetIds.length > 0 ? `${adsetIds.length} 个广告组内` : '先选广告组'}
-              onClick={() => setActiveLayer('ad')}
+              onClick={() => switchLayer('ad')}
               onClearSelected={clearAdSelection}
             />
           </div>
@@ -248,6 +316,7 @@ export function MetaAdsManagerPanel({
               invalidateKey={['meta-panel-adsets', adAccountId, campaignScopeKey]}
               selectedIds={selectedAdsetIds}
               onSelectedIdsChange={onAdsetSelectionChange}
+              resolveBatchCopySelection={resolvePanelBatchCopySelection}
               scopeLabel={campaignIds.length > 0 ? `来自 ${campaignIds.length} 个广告系列` : '先选择广告系列'}
               emptyText={
                 campaignIds.length > 0
@@ -276,6 +345,7 @@ export function MetaAdsManagerPanel({
               invalidateKey={['meta-panel-ads', adAccountId, adsetScopeKey]}
               selectedIds={selectedAdIds}
               onSelectedIdsChange={setSelectedAdIds}
+              resolveBatchCopySelection={resolvePanelBatchCopySelection}
               scopeLabel={adsetIds.length > 0 ? `来自 ${adsetIds.length} 个广告组` : '先选择广告组'}
               emptyText={
                 adsetIds.length > 0
@@ -342,6 +412,14 @@ function LayerTab({
 
 function sortedIds(ids: Set<string>): string[] {
   return Array.from(ids).sort();
+}
+
+function sameStringSet(left: Set<string>, right: Set<string>): boolean {
+  if (left.size !== right.size) return false;
+  for (const value of left) {
+    if (!right.has(value)) return false;
+  }
+  return true;
 }
 
 function uniqueById<T extends { id: string }>(rows: T[]): T[] {

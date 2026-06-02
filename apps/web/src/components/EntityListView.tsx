@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { Copy, Pause, Pencil, Play, RefreshCw, Trash2 } from 'lucide-react';
@@ -43,8 +43,17 @@ export interface EntityRow {
   adsetEndTime?: string;
 }
 
+export type EntityLayer = 'campaign' | 'adset' | 'ad';
+
+export interface CopySelection {
+  layer: EntityLayer;
+  ids: string[];
+  hint?: string;
+  forceDeepCopy?: boolean;
+}
+
 export interface EntityListViewProps<T extends EntityRow> {
-  layer: 'campaign' | 'adset' | 'ad';
+  layer: EntityLayer;
   layerLabel: string;
   adAccountId: string;
   rows: T[];
@@ -62,6 +71,7 @@ export interface EntityListViewProps<T extends EntityRow> {
   invalidateKey: unknown[];
   selectedIds?: Set<string>;
   onSelectedIdsChange?: (ids: Set<string>) => void;
+  resolveBatchCopySelection?: (selection: CopySelection) => CopySelection;
   scopeLabel?: string;
   emptyText?: string;
   showDatePreset?: boolean;
@@ -77,8 +87,9 @@ type BatchState = {
   action: string;
   params: Record<string, unknown>;
   ids: string[];
+  targetLayer: EntityLayer;
 };
-type CopyOpenState = { ids: string[]; hint?: string };
+type CopyOpenState = CopySelection;
 
 interface ProgressSnap {
   taskId: string;
@@ -140,6 +151,7 @@ export function EntityListView<T extends EntityRow>({
   invalidateKey,
   selectedIds,
   onSelectedIdsChange,
+  resolveBatchCopySelection,
   scopeLabel,
   emptyText,
   showDatePreset = true,
@@ -156,6 +168,7 @@ export function EntityListView<T extends EntityRow>({
   const [statusFilter, setStatusFilter] = useState('');
   const [sort, setSort] = useState<SortState | null>(null);
   const [activeFirst, setActiveFirst] = useState(true);
+  const previousKeySignature = useRef<string | null>(null);
   const me = useQuery<Me>({ queryKey: ['me'], queryFn: api.me });
   const selected = selectedIds ?? internalSelected;
   const selectionControlled = selectedIds !== undefined;
@@ -172,7 +185,10 @@ export function EntityListView<T extends EntityRow>({
   const keySignature = JSON.stringify(invalidateKey);
   useEffect(() => {
     setRowPatches(new Map());
-    replaceSelected(new Set());
+    if (previousKeySignature.current !== null && previousKeySignature.current !== keySignature) {
+      replaceSelected(new Set());
+    }
+    previousKeySignature.current = keySignature;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [keySignature]);
 
@@ -279,7 +295,7 @@ export function EntityListView<T extends EntityRow>({
         params: req.params,
         targets: req.ids.map((id) => ({
           ad_account_id: adAccountId,
-          target_type: layer,
+          target_type: req.targetLayer,
           target_id: id,
         })),
       }),
@@ -310,9 +326,14 @@ export function EntityListView<T extends EntityRow>({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingBatch, trackedTask.data, trackedTaskId]);
 
-  function runBatch(action: string, params: Record<string, unknown>, ids = Array.from(selected)) {
+  function runBatch(
+    action: string,
+    params: Record<string, unknown>,
+    ids = Array.from(selected),
+    targetLayer: EntityLayer = layer,
+  ) {
     if (ids.length === 0) return;
-    batch.mutate({ action, params, ids });
+    batch.mutate({ action, params, ids, targetLayer });
   }
 
   function statusFromSwitch(currentStatus: T['status']): 'ACTIVE' | 'PAUSED' {
@@ -320,21 +341,28 @@ export function EntityListView<T extends EntityRow>({
   }
 
   function singleCopyClicked(row: T) {
-    setCopyOpen({ ids: [row.id], hint: `来源：${row.name}` });
+    setCopyOpen({ layer, ids: [row.id], hint: `来源：${row.name}` });
   }
 
   function batchCopyClicked() {
     if (selected.size === 0) return;
     const selectedIds = Array.from(selected);
-    setCopyOpen({
+    const copySelection: CopySelection = {
+      layer,
       ids: selectedIds,
       hint: `共 ${selected.size} 个来源`,
-    });
+    };
+    setCopyOpen(resolveBatchCopySelection?.(copySelection) ?? copySelection);
   }
 
   function doCopy(params: CopyParams) {
     if (!copyOpen) return;
-    runBatch(`${layer}:copy`, params as unknown as Record<string, unknown>, copyOpen.ids);
+    runBatch(
+      `${copyOpen.layer}:copy`,
+      params as unknown as Record<string, unknown>,
+      copyOpen.ids,
+      copyOpen.layer,
+    );
     setCopyOpen(null);
   }
 
@@ -712,9 +740,10 @@ export function EntityListView<T extends EntityRow>({
 
       <CopyDialog
         open={!!copyOpen}
-        layer={layer}
+        layer={copyOpen?.layer ?? layer}
         targetCount={copyOpen?.ids.length ?? 0}
         {...(copyOpen?.hint ? { hint: copyOpen.hint } : {})}
+        forceDeepCopy={copyOpen?.forceDeepCopy === true}
         onCancel={() => setCopyOpen(null)}
         onSubmit={doCopy}
         submitting={batch.isPending}
