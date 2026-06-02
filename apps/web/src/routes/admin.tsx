@@ -69,7 +69,7 @@ const adminMenus: Array<{
   },
   {
     title: '站内信发布',
-    description: '发布版本更新弹窗，管理更新内容和下次更新时间。',
+    description: '发布站内信，管理通知正文、标识和计划时间。',
     to: '/admin/announcements',
     icon: Megaphone,
     platformOnly: true,

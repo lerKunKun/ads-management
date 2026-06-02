@@ -35,6 +35,7 @@ import {
   createReleaseAnnouncement,
   deleteReleaseAnnouncement,
   getUnreadReleaseAnnouncement,
+  listPublishedReleaseAnnouncements,
   listReleaseAnnouncements,
   markReleaseAnnouncementRead,
   publishReleaseAnnouncement,
@@ -104,6 +105,11 @@ export const admin = new Elysia({ name: 'admin' }).group('', (g) =>
       code: 0,
       msg: 'ok',
       data: await getUnreadReleaseAnnouncement(principal),
+    }))
+    .get('/announcements', async ({ principal }) => ({
+      code: 0,
+      msg: 'ok',
+      data: await listPublishedReleaseAnnouncements(principal),
     }))
     .post(
       '/announcements/:id/read',

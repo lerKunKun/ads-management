@@ -69,6 +69,7 @@ function AnnouncementsPage() {
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['admin', 'release-announcements'] });
     qc.invalidateQueries({ queryKey: ['release-announcement', 'current'] });
+    qc.invalidateQueries({ queryKey: ['announcements', 'history'] });
   };
 
   const create = useMutation({
@@ -150,7 +151,7 @@ function AnnouncementsPage() {
             <Megaphone className="h-4 w-4" />
             <span>站内信发布</span>
           </div>
-          <h1 className="mt-1 text-xl font-semibold">版本更新弹窗</h1>
+          <h1 className="mt-1 text-xl font-semibold">站内信管理</h1>
         </div>
         <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap">
           <Button
@@ -179,7 +180,7 @@ function AnnouncementsPage() {
       <SearchFilterBar
         searchValue={search}
         onSearchChange={setSearch}
-        searchPlaceholder="搜索标题、版本或内容"
+        searchPlaceholder="搜索标题、标识或内容"
         filters={[
           {
             key: 'status',
@@ -201,10 +202,10 @@ function AnnouncementsPage() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>版本</TableHead>
+              <TableHead>标识</TableHead>
               <TableHead>标题</TableHead>
               <TableHead>状态</TableHead>
-              <TableHead>下次更新时间</TableHead>
+              <TableHead>计划时间</TableHead>
               <TableHead>发布时间</TableHead>
               <TableHead>更新时间</TableHead>
               <TableHead className="text-right">操作</TableHead>
@@ -358,11 +359,11 @@ function AnnouncementFormDialog({
     >
       <div className="space-y-3">
         <div>
-          <label className="text-sm text-muted-foreground">版本</label>
+          <label className="text-sm text-muted-foreground">站内信标识</label>
           <Input
             value={version}
             onChange={(event) => setVersion(event.target.value)}
-            placeholder="例如 v2026.05.29"
+            placeholder="例如 系统通知 / v2026.06.02"
             maxLength={80}
           />
         </div>
@@ -376,19 +377,19 @@ function AnnouncementFormDialog({
           />
         </div>
         <div>
-          <label className="text-sm text-muted-foreground">更新内容</label>
+          <label className="text-sm text-muted-foreground">站内信正文</label>
           <textarea
             value={content}
             onChange={(event) => setContent(event.target.value)}
             rows={8}
             maxLength={4000}
             className="mt-1 min-h-40 w-full rounded-md border border-input bg-background px-3 py-2 text-sm leading-6 ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-            placeholder="填写本次更新内容"
+            placeholder="填写站内信内容"
           />
           <div className="mt-1 text-right text-xs text-muted-foreground">{content.length} / 4000</div>
         </div>
         <div>
-          <label className="text-sm text-muted-foreground">下次更新时间</label>
+          <label className="text-sm text-muted-foreground">计划时间（可选）</label>
           <DateTimePicker value={nextUpdateAt} onChange={setNextUpdateAt} />
         </div>
       </div>

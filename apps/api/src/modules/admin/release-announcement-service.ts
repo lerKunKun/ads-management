@@ -155,6 +155,23 @@ export async function listReleaseAnnouncements(
   });
 }
 
+export async function listPublishedReleaseAnnouncements(
+  _principal: AuthPrincipal,
+): Promise<ReleaseAnnouncementDTO[]> {
+  return withBypass(async (tx) => {
+    const rows = await tx
+      .select()
+      .from(schema.releaseAnnouncements)
+      .where(eq(schema.releaseAnnouncements.status, 'published'))
+      .orderBy(
+        desc(schema.releaseAnnouncements.publishedAt),
+        desc(schema.releaseAnnouncements.createdAt),
+      )
+      .limit(50);
+    return rows.map(toDTO);
+  });
+}
+
 export async function createReleaseAnnouncement(
   principal: AuthPrincipal,
   input: AnnouncementInput,

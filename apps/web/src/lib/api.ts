@@ -313,6 +313,8 @@ export const api = {
     }),
   currentReleaseAnnouncement: () =>
     call<ReleaseAnnouncement | null>('/announcements/current'),
+  listPublishedAnnouncements: () =>
+    call<ReleaseAnnouncement[]>('/announcements'),
   markReleaseAnnouncementRead: (id: string) =>
     call<null>(`/announcements/${id}/read`, { method: 'POST' }),
   fbAccounts: () => call<FbAccount[]>('/fb-accounts'),
