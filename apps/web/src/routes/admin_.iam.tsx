@@ -19,7 +19,6 @@ import { accountGroupStatusLabel, adAccountStatusLabel, userStatusLabel } from '
 import {
   createFbAccountNameMap,
   filterFbNameDuplicateAdAccounts,
-  isFbNameDuplicateAdAccount,
 } from '@/lib/ad-account-display';
 
 type UserRow = Awaited<ReturnType<typeof api.listUsers>>[number];
@@ -281,28 +280,9 @@ function IamWorkspacePage() {
     setDraftScope((current) => {
       if (!selectedUser || current?.userId !== selectedUser.id) return current;
       if (resourceType === 'fb_account') {
-        const previousFbIds = new Set(current.fbAccountIds);
-        const nextFbAccountIds = updater(current.fbAccountIds);
-        const nextFbIds = new Set(nextFbAccountIds);
-        const nextAdIds = new Set(current.adAccountIds);
-
-        for (const account of rawAdAccounts) {
-          const wasSelectedGroup = previousFbIds.has(account.fbAccountId);
-          const isSelectedGroup = nextFbIds.has(account.fbAccountId);
-          if (
-            !wasSelectedGroup &&
-            isSelectedGroup &&
-            !isFbNameDuplicateAdAccount(account, fbNameById)
-          ) {
-            nextAdIds.add(account.id);
-          }
-          if (wasSelectedGroup && !isSelectedGroup) nextAdIds.delete(account.id);
-        }
-
         return {
           ...current,
-          fbAccountIds: nextFbAccountIds,
-          adAccountIds: Array.from(nextAdIds),
+          fbAccountIds: updater(current.fbAccountIds),
         };
       }
       return { ...current, adAccountIds: updater(current.adAccountIds) };
