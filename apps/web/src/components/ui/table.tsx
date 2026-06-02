@@ -1,8 +1,17 @@
 import * as React from 'react';
 import { cn } from '@/lib/utils';
 
-export const Table = ({ className, ...props }: React.HTMLAttributes<HTMLTableElement>) => (
-  <div className="relative w-full overflow-x-auto [-webkit-overflow-scrolling:touch]">
+interface TableProps extends React.HTMLAttributes<HTMLTableElement> {
+  wrapperClassName?: string;
+}
+
+export const Table = ({ className, wrapperClassName, ...props }: TableProps) => (
+  <div
+    className={cn(
+      'relative w-full overflow-x-auto [-webkit-overflow-scrolling:touch]',
+      wrapperClassName,
+    )}
+  >
     <table className={cn('w-full min-w-max caption-bottom text-sm', className)} {...props} />
   </div>
 );
