@@ -73,12 +73,40 @@ function RootLayout() {
     <div className="flex min-h-screen min-w-0 flex-col">
       <header className="border-b bg-background">
         <div className="mx-auto flex w-full max-w-screen-2xl flex-col gap-2 px-3 py-2 sm:px-4 md:h-14 md:flex-row md:items-center md:justify-between md:py-0 lg:px-6">
-          <Link to="/" className="shrink-0 font-semibold">
-            广告管理系统
-          </Link>
-          <nav className="flex min-w-0 flex-wrap items-center gap-2 overflow-visible pb-1 text-sm md:justify-end md:pb-0">
+          <div className="flex min-w-0 items-center justify-between gap-2 md:w-auto">
+            <Link to="/" className="min-w-0 truncate font-semibold">
+              广告管理系统
+            </Link>
             {hasToken && me.data && (
-              <>
+              <div className="flex shrink-0 items-center gap-1 md:hidden">
+                <AnnouncementInbox
+                  open={inboxOpen}
+                  setOpen={setInboxOpen}
+                  hasUnread={hasUnreadAnnouncement}
+                  isLoading={announcementHistory.isLoading}
+                  announcements={announcementHistory.data ?? []}
+                  unreadId={unreadAnnouncement?.id ?? null}
+                  onOpenAnnouncement={openHistoryAnnouncement}
+                  compact
+                />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 shrink-0 px-2"
+                  onClick={() => {
+                    clearToken();
+                    qc.clear();
+                    nav({ to: '/login' });
+                  }}
+                >
+                  退出
+                </Button>
+              </div>
+            )}
+          </div>
+          {hasToken && me.data && (
+            <div className="flex min-w-0 flex-col gap-2 md:flex-1 md:flex-row md:items-center md:justify-end">
+              <nav className="flex min-w-0 items-center gap-2 overflow-x-auto overflow-y-hidden pb-1 text-sm [-webkit-overflow-scrolling:touch] [scrollbar-width:none] md:justify-end md:overflow-visible md:pb-0 [&::-webkit-scrollbar]:hidden">
                 <Link to="/ad-accounts" className="shrink-0 text-muted-foreground hover:text-foreground">
                   广告账户
                 </Link>
@@ -96,62 +124,18 @@ function RootLayout() {
                     管理
                   </Link>
                 )}
-                <div className="relative shrink-0">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    className="relative h-8 gap-1.5 px-2"
-                    onClick={() => setInboxOpen((current) => !current)}
-                  >
-                    <Bell className="h-4 w-4" aria-hidden="true" />
-                    站内信
-                    {hasUnreadAnnouncement && (
-                      <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-red-500" />
-                    )}
-                  </Button>
-                  {inboxOpen && (
-                    <div className="absolute right-0 top-full z-50 mt-2 w-[min(22rem,calc(100vw-1.5rem))] overflow-hidden rounded-md border bg-background shadow-lg">
-                      <div className="flex items-center justify-between border-b px-3 py-2">
-                        <span className="text-sm font-medium">站内信历史</span>
-                        {hasUnreadAnnouncement && (
-                          <span className="rounded-full bg-red-50 px-2 py-0.5 text-xs text-red-600">
-                            有新消息
-                          </span>
-                        )}
-                      </div>
-                      <div className="max-h-96 overflow-y-auto">
-                        {announcementHistory.isLoading && (
-                          <div className="px-3 py-4 text-sm text-muted-foreground">加载中...</div>
-                        )}
-                        {!announcementHistory.isLoading && (announcementHistory.data?.length ?? 0) === 0 && (
-                          <div className="px-3 py-4 text-sm text-muted-foreground">暂无站内信</div>
-                        )}
-                        {(announcementHistory.data ?? []).map((announcement) => {
-                          const unread = announcement.id === unreadAnnouncement?.id;
-                          return (
-                            <button
-                              key={announcement.id}
-                              type="button"
-                              className="block w-full border-b px-3 py-2 text-left last:border-b-0 hover:bg-muted/50"
-                              onClick={() => openHistoryAnnouncement(announcement)}
-                            >
-                              <div className="flex min-w-0 items-center gap-2">
-                                <span className="truncate text-sm font-medium">{announcement.title}</span>
-                                {unread && <span className="h-2 w-2 shrink-0 rounded-full bg-red-500" />}
-                              </div>
-                              <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                                <span>{announcement.version}</span>
-                                <span>{formatAnnouncementDate(announcement.publishedAt)}</span>
-                              </div>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-                </div>
-                <span className="max-w-40 shrink truncate text-muted-foreground sm:max-w-56">{me.data.email}</span>
+              </nav>
+              <div className="hidden shrink-0 items-center gap-2 md:flex">
+                <AnnouncementInbox
+                  open={inboxOpen}
+                  setOpen={setInboxOpen}
+                  hasUnread={hasUnreadAnnouncement}
+                  isLoading={announcementHistory.isLoading}
+                  announcements={announcementHistory.data ?? []}
+                  unreadId={unreadAnnouncement?.id ?? null}
+                  onOpenAnnouncement={openHistoryAnnouncement}
+                />
+                <span className="max-w-40 shrink truncate text-muted-foreground lg:max-w-56">{me.data.email}</span>
                 <Button
                   variant="outline"
                   size="sm"
@@ -164,9 +148,9 @@ function RootLayout() {
                 >
                   退出
                 </Button>
-              </>
-            )}
-          </nav>
+              </div>
+            </div>
+          )}
         </div>
       </header>
       <main className="mx-auto w-full max-w-screen-2xl min-w-0 flex-1 px-3 py-4 sm:px-4 sm:py-6 lg:px-6">
@@ -209,4 +193,89 @@ function RootLayout() {
 
 function formatAnnouncementDate(value: string | null): string {
   return value ? new Date(value).toLocaleString() : '未发布';
+}
+
+function AnnouncementInbox({
+  open,
+  setOpen,
+  hasUnread,
+  isLoading,
+  announcements,
+  unreadId,
+  onOpenAnnouncement,
+  compact = false,
+}: {
+  open: boolean;
+  setOpen: (updater: boolean | ((current: boolean) => boolean)) => void;
+  hasUnread: boolean;
+  isLoading: boolean;
+  announcements: ReleaseAnnouncement[];
+  unreadId: string | null;
+  onOpenAnnouncement: (announcement: ReleaseAnnouncement) => void;
+  compact?: boolean;
+}) {
+  return (
+    <div className="relative shrink-0">
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        className={`relative h-8 gap-1.5 ${compact ? 'w-8 px-0' : 'px-2'}`}
+        onClick={() => setOpen((current) => !current)}
+        title="站内信"
+      >
+        <Bell className="h-4 w-4" aria-hidden="true" />
+        {!compact && <span>站内信</span>}
+        {hasUnread && (
+          <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-red-500" />
+        )}
+      </Button>
+      {open && (
+        <div
+          className={
+            compact
+              ? 'fixed left-3 right-3 top-14 z-50 overflow-hidden rounded-md border bg-background shadow-lg'
+              : 'absolute right-0 top-full z-50 mt-2 w-[min(22rem,calc(100vw-1.5rem))] overflow-hidden rounded-md border bg-background shadow-lg'
+          }
+        >
+          <div className="flex items-center justify-between border-b px-3 py-2">
+            <span className="text-sm font-medium">站内信历史</span>
+            {hasUnread && (
+              <span className="rounded-full bg-red-50 px-2 py-0.5 text-xs text-red-600">
+                有新消息
+              </span>
+            )}
+          </div>
+          <div className="max-h-96 overflow-y-auto">
+            {isLoading && (
+              <div className="px-3 py-4 text-sm text-muted-foreground">加载中...</div>
+            )}
+            {!isLoading && announcements.length === 0 && (
+              <div className="px-3 py-4 text-sm text-muted-foreground">暂无站内信</div>
+            )}
+            {announcements.map((announcement) => {
+              const unread = announcement.id === unreadId;
+              return (
+                <button
+                  key={announcement.id}
+                  type="button"
+                  className="block w-full border-b px-3 py-2 text-left last:border-b-0 hover:bg-muted/50"
+                  onClick={() => onOpenAnnouncement(announcement)}
+                >
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="truncate text-sm font-medium">{announcement.title}</span>
+                    {unread && <span className="h-2 w-2 shrink-0 rounded-full bg-red-500" />}
+                  </div>
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                    <span>{announcement.version}</span>
+                    <span>{formatAnnouncementDate(announcement.publishedAt)}</span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
