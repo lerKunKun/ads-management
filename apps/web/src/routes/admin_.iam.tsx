@@ -16,6 +16,11 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import { accountGroupStatusLabel, adAccountStatusLabel, userStatusLabel } from '@/lib/labels';
+import {
+  createFbAccountNameMap,
+  filterFbNameDuplicateAdAccounts,
+  isFbNameDuplicateAdAccount,
+} from '@/lib/ad-account-display';
 
 type UserRow = Awaited<ReturnType<typeof api.listUsers>>[number];
 type Grant = Awaited<ReturnType<typeof api.listGrants>>[number];
@@ -169,12 +174,22 @@ function IamWorkspacePage() {
   );
 
   const fbAccounts = resourcesQ.data?.fbAccounts ?? [];
-  const adAccounts = resourcesQ.data?.adAccounts ?? [];
+  const rawAdAccounts = resourcesQ.data?.adAccounts ?? [];
   const fbNameById = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const account of fbAccounts) map.set(account.id, account.name);
-    return map;
+    return createFbAccountNameMap(fbAccounts);
   }, [fbAccounts]);
+  const adAccounts = useMemo(
+    () => filterFbNameDuplicateAdAccounts(rawAdAccounts, fbNameById),
+    [fbNameById, rawAdAccounts],
+  );
+  const visibleAdAccountIds = useMemo(
+    () => new Set(adAccounts.map((account) => account.id)),
+    [adAccounts],
+  );
+  const visibleDraftAdCount = useMemo(
+    () => Array.from(draftAdIds).filter((id) => visibleAdAccountIds.has(id)).length,
+    [draftAdIds, visibleAdAccountIds],
+  );
 
   const filteredUsers = useMemo(
     () =>
@@ -271,10 +286,16 @@ function IamWorkspacePage() {
         const nextFbIds = new Set(nextFbAccountIds);
         const nextAdIds = new Set(current.adAccountIds);
 
-        for (const account of adAccounts) {
+        for (const account of rawAdAccounts) {
           const wasSelectedGroup = previousFbIds.has(account.fbAccountId);
           const isSelectedGroup = nextFbIds.has(account.fbAccountId);
-          if (!wasSelectedGroup && isSelectedGroup) nextAdIds.add(account.id);
+          if (
+            !wasSelectedGroup &&
+            isSelectedGroup &&
+            !isFbNameDuplicateAdAccount(account, fbNameById)
+          ) {
+            nextAdIds.add(account.id);
+          }
           if (wasSelectedGroup && !isSelectedGroup) nextAdIds.delete(account.id);
         }
 
@@ -543,7 +564,7 @@ function IamWorkspacePage() {
 
         <Pane
           title="广告账户"
-          subtitle={`${draftAdIds.size} / ${adAccounts.length} 已选择`}
+          subtitle={`${visibleDraftAdCount} / ${adAccounts.length} 已选择`}
           actions={
             <SearchInput
               value={adSearch}

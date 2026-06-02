@@ -17,6 +17,10 @@ import { PAGE_SIZE, PAGE_SIZE_OPTIONS, Pagination, usePagination } from '@/compo
 import { SelectionClearPill } from '@/components/SelectionClearPill';
 import { accountGroupStatusLabel, adAccountStatusLabel } from '@/lib/labels';
 import {
+  createFbAccountNameMap,
+  filterFbNameDuplicateAdAccounts,
+} from '@/lib/ad-account-display';
+import {
   ACCOUNT_METRIC_COLUMN_COUNT,
   AccountMetricCells,
   AccountMetricHeaders,
@@ -59,6 +63,14 @@ function FbAccountAdAccountsPage() {
   });
 
   const fb = fbQ.data?.find((f) => f.id === id);
+  const fbNameById = useMemo(
+    () => createFbAccountNameMap(fbQ.data ?? []),
+    [fbQ.data],
+  );
+  const visibleAccounts = useMemo(
+    () => filterFbNameDuplicateAdAccounts(adsQ.data ?? [], fbNameById),
+    [adsQ.data, fbNameById],
+  );
 
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('');
@@ -71,40 +83,39 @@ function FbAccountAdAccountsPage() {
 
   const currencyOptions = useMemo(() => {
     const set = new Set<string>();
-    (adsQ.data ?? []).forEach((a) => {
+    visibleAccounts.forEach((a) => {
       if (a.currency) set.add(a.currency);
     });
     return [
       { value: '', label: '全部' },
       ...Array.from(set).sort().map((c) => ({ value: c, label: c })),
     ];
-  }, [adsQ.data]);
+  }, [visibleAccounts]);
 
   const timezoneOptions = useMemo(() => {
     const set = new Set<string>();
-    (adsQ.data ?? []).forEach((a) => {
+    visibleAccounts.forEach((a) => {
       if (a.timezoneName) set.add(a.timezoneName);
     });
     return [
       { value: '', label: '全部' },
       ...Array.from(set).sort().map((value) => ({ value, label: value })),
     ];
-  }, [adsQ.data]);
+  }, [visibleAccounts]);
 
   const countryOptions = useMemo(() => {
     const set = new Set<string>();
-    (adsQ.data ?? []).forEach((a) => {
+    visibleAccounts.forEach((a) => {
       if (a.businessCountryCode) set.add(a.businessCountryCode);
     });
     return [
       { value: '', label: '全部' },
       ...Array.from(set).sort().map((value) => ({ value, label: countryLabel(value) })),
     ];
-  }, [adsQ.data]);
+  }, [visibleAccounts]);
 
   const filtered = useMemo(() => {
-    const all = adsQ.data ?? [];
-    return all.filter(
+    return visibleAccounts.filter(
       (a) =>
         (matchText(a.name, search) || matchText(a.metaActId, search)) &&
         (!status || a.status === status) &&
@@ -112,8 +123,8 @@ function FbAccountAdAccountsPage() {
         (!timezone || a.timezoneName === timezone) &&
         (!country || a.businessCountryCode === country),
     );
-  }, [adsQ.data, country, currency, search, status, timezone]);
-  const allAccounts = adsQ.data ?? [];
+  }, [country, currency, search, status, timezone, visibleAccounts]);
+  const allAccounts = visibleAccounts;
   const selectedRows = useMemo(
     () => allAccounts.filter((account) => selectedIds.has(account.id)),
     [allAccounts, selectedIds],
