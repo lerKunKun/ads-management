@@ -400,8 +400,12 @@ export const operation = new Elysia({ name: 'operation' })
         '/ad-accounts/:id/insights',
         async ({ principal, params, query }) => {
           const level = (query.level ?? 'campaign') as 'campaign' | 'adset' | 'ad';
-          const preset = (query.preset ?? 'today') as DatePreset;
-          const data = await svc.getInsightsByLevel(principal, params.id, level, preset, query.parentId);
+          const dateSpec = svc.parseInsightsDateSpec({
+            ...(query.preset ? { preset: query.preset as DatePreset } : {}),
+            ...(query.since ? { since: query.since } : {}),
+            ...(query.until ? { until: query.until } : {}),
+          });
+          const data = await svc.getInsightsByLevel(principal, params.id, level, dateSpec, query.parentId);
           return { code: 0, msg: 'ok', data };
         },
         {
@@ -411,6 +415,8 @@ export const operation = new Elysia({ name: 'operation' })
               t.Union([t.Literal('campaign'), t.Literal('adset'), t.Literal('ad')]),
             ),
             preset: t.Optional(datePresetSchema),
+            since: t.Optional(t.String()),
+            until: t.Optional(t.String()),
             parentId: t.Optional(t.String({ minLength: 1 })),
           }),
           beforeHandle: requirePermission('ad_account:read'),

@@ -14,6 +14,8 @@ import {
   type MetaAd,
   type InsightsSummary,
   type DatePreset,
+  type InsightsDateSpec,
+  type InsightsDateRange,
   type MetaObjectOwnership,
 } from '../../lib/meta-client';
 import { FAKE_MODE, fakeMeta } from '../../lib/fake-meta-state';
@@ -569,12 +571,12 @@ export async function getInsightsByLevel(
   principal: AuthPrincipal,
   adAccountId: string,
   level: 'campaign' | 'adset' | 'ad',
-  datePreset: DatePreset,
+  dateSpec: InsightsDateSpec,
   parentId?: string,
 ): Promise<Record<string, InsightsSummary>> {
   assertScope(principal, adAccountId);
   const localMock = await resolveLocalMockAdAccount(principal.companyId, adAccountId);
-  if (localMock) return getLocalMockInsightsByLevel(localMock, level, datePreset, parentId);
+  if (localMock) return getLocalMockInsightsByLevel(localMock, level, dateSpec, parentId);
   const ctx = await resolveAdAccount(principal.companyId, adAccountId);
   try {
     const objectId = await resolveInsightsObjectId(
@@ -584,7 +586,7 @@ export async function getInsightsByLevel(
       level,
       parentId,
     );
-    return await meta.getInsightsByChild(ctx.token, objectId, level, datePreset);
+    return await meta.getInsightsByChild(ctx.token, objectId, level, dateSpec);
   } catch (err) {
     await handleMetaError(err, principal.companyId, ctx.fbAccountId);
     throw err;
@@ -610,23 +612,61 @@ async function resolveInsightsObjectId(
 function getLocalMockInsightsByLevel(
   metaActId: string,
   level: 'campaign' | 'adset' | 'ad',
-  datePreset: DatePreset,
+  dateSpec: InsightsDateSpec,
   parentId?: string,
 ): Record<string, InsightsSummary> {
   if (!parentId || level === 'campaign') {
-    return fakeMeta.getInsightsByChild(metaActId, level, datePreset);
+    return fakeMeta.getInsightsByChild(metaActId, level, dateSpec);
   }
   const out: Record<string, InsightsSummary> = {};
   if (level === 'adset') {
     for (const adset of fakeMeta.listAdSets(parentId)) {
-      out[adset.id] = fakeMeta.getInsights(adset.id, datePreset);
+      out[adset.id] = fakeMeta.getInsights(adset.id, dateSpec);
     }
     return out;
   }
   for (const ad of fakeMeta.listAds(parentId)) {
-    out[ad.id] = fakeMeta.getInsights(ad.id, datePreset);
+    out[ad.id] = fakeMeta.getInsights(ad.id, dateSpec);
   }
   return out;
+}
+
+export function parseInsightsDateSpec(args: {
+  preset?: DatePreset;
+  since?: string;
+  until?: string;
+}): InsightsDateSpec {
+  const hasSince = !!args.since;
+  const hasUntil = !!args.until;
+  if (hasSince || hasUntil) {
+    if (!args.since || !args.until) {
+      throw new HttpError(422, 422, 'since 与 until 必须同时传');
+    }
+    const range: InsightsDateRange = {
+      since: assertIsoDate(args.since, 'since'),
+      until: assertIsoDate(args.until, 'until'),
+    };
+    if (range.since > range.until) {
+      throw new HttpError(422, 422, 'since 不能晚于 until');
+    }
+    return range;
+  }
+  return args.preset ?? 'today';
+}
+
+function assertIsoDate(value: string, field: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    throw new HttpError(422, 422, `${field} 必须为 YYYY-MM-DD`);
+  }
+  const ms = Date.parse(`${value}T00:00:00Z`);
+  if (!Number.isFinite(ms)) {
+    throw new HttpError(422, 422, `${field} 日期无效`);
+  }
+  const normalized = new Date(ms).toISOString().slice(0, 10);
+  if (normalized !== value) {
+    throw new HttpError(422, 422, `${field} 日期无效`);
+  }
+  return value;
 }
 
 async function resolveLocalMockAdAccount(

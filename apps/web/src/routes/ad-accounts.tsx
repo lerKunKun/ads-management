@@ -7,13 +7,39 @@ import {
   Table,
   TableBody,
   TableCell,
+  TableFooter,
   TableHead,
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { Pagination, usePagination } from '@/components/Pagination';
+import { PAGE_SIZE, PAGE_SIZE_OPTIONS, Pagination, usePagination } from '@/components/Pagination';
 import { SearchFilterBar, matchText } from '@/components/SearchFilterBar';
+import { SelectionClearPill } from '@/components/SelectionClearPill';
 import { adAccountStatusLabel } from '@/lib/labels';
+import {
+  ACCOUNT_METRIC_COLUMN_COUNT,
+  AccountMetricCells,
+  AccountMetricHeaders,
+  nextAccountMetricSort,
+  sortAdAccountsByMetric,
+  summarizeAdAccountMetricTotals,
+  useAdAccountInsightTotals,
+  type AccountMetric,
+  type AccountMetricSortState,
+} from '@/components/AdAccountMetricColumns';
+
+const ACCOUNT_TABLE_CLASS = 'min-w-[1160px] table-fixed text-sm lg:min-w-0';
+const ACCOUNT_TABLE_WRAPPER_CLASS = 'max-h-[calc(100svh-300px)] overflow-x-auto overflow-y-auto overscroll-contain lg:max-h-[calc(100vh-260px)] lg:overflow-x-hidden';
+const SUMMARY_CELL_CLASS = 'sticky bottom-0 z-20 bg-[#B9DEFF]';
+const SELECT_COL_CLASS = 'w-11 px-2 py-2.5 text-center';
+const NAME_COL_CLASS = 'w-64 px-2.5 py-2.5 lg:w-auto';
+const META_COL_CLASS = 'w-36 px-2 py-2.5';
+const FB_COL_CLASS = 'w-40 px-2 py-2.5';
+const SHORT_COL_CLASS = 'w-20 px-2 py-2.5';
+const STATUS_COL_CLASS = 'w-24 px-2 py-2.5';
+const SYNC_COL_CLASS = 'w-36 px-2 py-2.5';
+const AD_ACCOUNTS_SUMMARY_PREFIX_COLS = 6;
+const AD_ACCOUNTS_TOTAL_COLS = 7 + ACCOUNT_METRIC_COLUMN_COUNT;
 
 export const Route = createFileRoute('/ad-accounts')({
   beforeLoad: () => {
@@ -38,6 +64,9 @@ function AdAccountsPage() {
   const [currency, setCurrency] = useState('');
   const [timezone, setTimezone] = useState('');
   const [country, setCountry] = useState('');
+  const [metricSort, setMetricSort] = useState<AccountMetricSortState | null>(null);
+  const [pageSize, setPageSize] = useState(PAGE_SIZE);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
 
   const fbById = useMemo(
     () => new Map((fbQ.data ?? []).map((account) => [account.id, account])),
@@ -103,7 +132,54 @@ function AdAccountsPage() {
         (!country || account.businessCountryCode === country),
     );
   }, [adsQ.data, country, currency, fbAccountId, search, status, timezone]);
-  const pager = usePagination(filtered);
+  const allAccounts = adsQ.data ?? [];
+  const selectedRows = useMemo(
+    () => allAccounts.filter((account) => selectedIds.has(account.id)),
+    [allAccounts, selectedIds],
+  );
+  const metricAccounts = useMemo(
+    () => uniqueById([...filtered, ...selectedRows]),
+    [filtered, selectedRows],
+  );
+  const accountMetrics = useAdAccountInsightTotals(metricAccounts);
+  const sorted = sortAdAccountsByMetric(filtered, accountMetrics, metricSort);
+  const pager = usePagination(sorted, pageSize);
+  const pageIds = useMemo(() => pager.pageItems.map((account) => account.id), [pager.pageItems]);
+  const pageSelected = pageIds.length > 0 && pageIds.every((id) => selectedIds.has(id));
+  const summaryRows = selectedIds.size > 0 ? selectedRows : pager.pageItems;
+  const summary = summarizeAdAccountMetricTotals(summaryRows, accountMetrics);
+  const summaryCurrency = commonCurrency(summaryRows);
+
+  function toggleMetricSort(metric: AccountMetric) {
+    setMetricSort((current) => nextAccountMetricSort(current, metric));
+    pager.setPage(1);
+  }
+
+  function changePageSize(nextPageSize: number) {
+    setPageSize(nextPageSize);
+    pager.setPage(1);
+  }
+
+  function toggleSelected(id: string) {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function togglePageSelected() {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (pageSelected) {
+        for (const id of pageIds) next.delete(id);
+      } else {
+        for (const id of pageIds) next.add(id);
+      }
+      return next;
+    });
+  }
 
   return (
     <div className="space-y-4">
@@ -114,6 +190,11 @@ function AdAccountsPage() {
             点击广告账户名称进入广告系列，再逐级进入广告组和广告。
           </p>
         </div>
+        <SelectionClearPill
+          count={selectedIds.size}
+          itemLabel="广告账户"
+          onClear={() => setSelectedIds(new Set())}
+        />
         <Button
           variant="outline"
           size="sm"
@@ -193,17 +274,27 @@ function AdAccountsPage() {
       />
 
       <div className="overflow-hidden rounded-md border bg-background">
-        <Table>
-          <TableHeader>
+        <Table className={ACCOUNT_TABLE_CLASS} wrapperClassName={ACCOUNT_TABLE_WRAPPER_CLASS}>
+          <TableHeader className="sticky top-0 z-40 bg-background">
             <TableRow>
-              <TableHead>名称</TableHead>
-              <TableHead>Meta 账户 ID</TableHead>
-              <TableHead>FB个人号</TableHead>
-              <TableHead>币种</TableHead>
-              <TableHead>时区</TableHead>
-              <TableHead>投放国家</TableHead>
-              <TableHead>状态</TableHead>
-              <TableHead>最后同步</TableHead>
+              <TableHead className={SELECT_COL_CLASS}>
+                <label className="flex min-h-10 cursor-pointer items-center justify-center">
+                  <input
+                    type="checkbox"
+                    className="h-5 w-5 cursor-pointer accent-primary"
+                    checked={pageSelected}
+                    onChange={togglePageSelected}
+                    aria-label="选择本页广告账户"
+                  />
+                </label>
+              </TableHead>
+              <TableHead className={NAME_COL_CLASS}>名称</TableHead>
+              <TableHead className={META_COL_CLASS}>Meta 账户 ID</TableHead>
+              <TableHead className={FB_COL_CLASS}>FB个人号</TableHead>
+              <TableHead className={SHORT_COL_CLASS}>币种</TableHead>
+              <TableHead className={STATUS_COL_CLASS}>状态</TableHead>
+              <AccountMetricHeaders sort={metricSort} onSort={toggleMetricSort} />
+              <TableHead className={SYNC_COL_CLASS}>最后同步</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -218,22 +309,37 @@ function AdAccountsPage() {
               const fb = fbById.get(account.fbAccountId);
               return (
                 <TableRow key={account.id}>
-                  <TableCell className="font-medium">
+                  <TableCell data-label="选择" className={SELECT_COL_CLASS}>
+                    <label className="flex min-h-10 cursor-pointer items-center justify-center">
+                      <input
+                        type="checkbox"
+                        className="h-5 w-5 cursor-pointer accent-primary"
+                        checked={selectedIds.has(account.id)}
+                        onChange={() => toggleSelected(account.id)}
+                        aria-label={`选择${account.name}`}
+                      />
+                    </label>
+                  </TableCell>
+                  <TableCell data-label="名称" className={`${NAME_COL_CLASS} font-medium`}>
                     <Link
                       to="/ad-accounts/$id"
                       params={{ id: account.id }}
-                      className="text-primary hover:underline"
+                      className="block whitespace-normal break-words text-primary hover:underline"
+                      title={account.name}
                     >
                       {account.name}
                     </Link>
                   </TableCell>
-                  <TableCell className="font-mono text-xs">{account.metaActId}</TableCell>
-                  <TableCell>
+                  <TableCell data-label="Meta 账户 ID" className={`${META_COL_CLASS} break-all font-mono text-xs sm:text-sm`} title={account.metaActId}>
+                    {account.metaActId}
+                  </TableCell>
+                  <TableCell data-label="FB个人号" className={FB_COL_CLASS}>
                     {fb ? (
                       <Link
                         to="/fb-accounts/$id"
                         params={{ id: fb.id }}
-                        className="text-primary hover:underline"
+                        className="block whitespace-normal break-words text-primary hover:underline"
+                        title={fb.name}
                       >
                         {fb.name}
                       </Link>
@@ -241,25 +347,35 @@ function AdAccountsPage() {
                       <span className="text-muted-foreground">-</span>
                     )}
                   </TableCell>
-                  <TableCell>{account.currency ?? '-'}</TableCell>
-                  <TableCell>{account.timezoneName ?? '-'}</TableCell>
-                  <TableCell>{countryLabel(account.businessCountryCode)}</TableCell>
-                  <TableCell className={statusClass(account.status)}>
+                  <TableCell data-label="币种" className={SHORT_COL_CLASS}>{account.currency ?? '-'}</TableCell>
+                  <TableCell data-label="状态" className={`${STATUS_COL_CLASS} ${statusClass(account.status)}`}>
                     {adAccountStatusLabel(account.status)}
                   </TableCell>
-                  <TableCell className="text-xs text-muted-foreground">
+                  <AccountMetricCells total={accountMetrics.get(account.id)} currency={account.currency} />
+                  <TableCell data-label="最后同步" className={`${SYNC_COL_CLASS} whitespace-normal text-xs text-muted-foreground`}>
                     {account.lastSyncedAt ? new Date(account.lastSyncedAt).toLocaleString() : '-'}
                   </TableCell>
                 </TableRow>
               );
             })}
           </TableBody>
+          <TableFooter className="sticky bottom-0 z-30">
+            <AdAccountSummaryRow
+              prefixColSpan={AD_ACCOUNTS_SUMMARY_PREFIX_COLS}
+              label={selectedIds.size > 0 ? `已选 ${summaryRows.length} 项` : `本页 ${summaryRows.length} 项`}
+              total={summary}
+              currency={summaryCurrency}
+            />
+          </TableFooter>
         </Table>
         <Pagination
           page={pager.page}
           pageCount={pager.pageCount}
-          total={filtered.length}
+          total={sorted.length}
+          pageSize={pager.pageSize}
+          pageSizeOptions={PAGE_SIZE_OPTIONS}
           onPageChange={pager.setPage}
+          onPageSizeChange={changePageSize}
         />
       </div>
     </div>
@@ -269,11 +385,49 @@ function AdAccountsPage() {
 function EmptyRow({ text }: { text: string }) {
   return (
     <TableRow>
-      <TableCell colSpan={8} className="text-muted-foreground">
+      <TableCell colSpan={AD_ACCOUNTS_TOTAL_COLS} className="text-muted-foreground">
         {text}
       </TableCell>
     </TableRow>
   );
+}
+
+function AdAccountSummaryRow({
+  prefixColSpan,
+  label,
+  total,
+  currency,
+}: {
+  prefixColSpan: number;
+  label: string;
+  total: ReturnType<typeof summarizeAdAccountMetricTotals>;
+  currency: string | null;
+}) {
+  return (
+    <TableRow className="border-t bg-[#B9DEFF] hover:bg-[#B9DEFF]">
+      <TableCell colSpan={prefixColSpan} className={`${SUMMARY_CELL_CLASS} px-2 py-2 font-semibold`}>
+        汇总（{label}）
+      </TableCell>
+      <AccountMetricCells total={total} currency={currency} cellClassName={SUMMARY_CELL_CLASS} />
+      <TableCell className={`${SUMMARY_CELL_CLASS} ${SYNC_COL_CLASS}`} />
+    </TableRow>
+  );
+}
+
+function uniqueById<T extends { id: string }>(items: T[]): T[] {
+  const seen = new Set<string>();
+  const result: T[] = [];
+  for (const item of items) {
+    if (seen.has(item.id)) continue;
+    seen.add(item.id);
+    result.push(item);
+  }
+  return result;
+}
+
+function commonCurrency(accounts: Array<{ currency?: string | null }>): string | null {
+  const currencies = new Set(accounts.map((account) => account.currency).filter(Boolean));
+  return currencies.size === 1 ? Array.from(currencies)[0]! : null;
 }
 
 function statusClass(status: string): string {

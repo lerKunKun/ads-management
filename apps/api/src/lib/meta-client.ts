@@ -128,6 +128,7 @@ export interface MetaAdSetRaw {
   billing_event?: string;
   bid_strategy?: string;
   bid_amount?: number | string;
+  bid_constraints?: Record<string, unknown> | string;
   targeting?: unknown;
   promoted_object?: unknown;
   attribution_spec?: unknown;
@@ -204,6 +205,13 @@ export type DatePreset =
   | 'last_30d'
   | 'maximum';
 
+export interface InsightsDateRange {
+  since: string;
+  until: string;
+}
+
+export type InsightsDateSpec = DatePreset | InsightsDateRange;
+
 interface MetaActionRow {
   action_type: string;
   value: string;
@@ -249,6 +257,16 @@ const EMPTY_INSIGHTS: InsightsSummary = {
   initiateCheckout: 0,
   roi: 0,
 };
+
+function insightsDateQuery(dateSpec: InsightsDateSpec): Record<string, string> {
+  if (typeof dateSpec === 'string') return { date_preset: dateSpec };
+  return {
+    time_range: JSON.stringify({
+      since: dateSpec.since,
+      until: dateSpec.until,
+    }),
+  };
+}
 
 const ORDER_ACTION_GROUPS = [
   ['omni_purchase'],
@@ -632,6 +650,13 @@ function addAdSetSpendLimitFormValues(form: Record<string, string>, source: Meta
   addPositiveFormValue(form, 'lifetime_spend_cap', source.lifetime_spend_cap);
 }
 
+function addBidConstraintsFormValue(form: Record<string, string>, source: MetaAdSetRaw): void {
+  const constraints = source.bid_constraints;
+  if (constraints === undefined || constraints === null || constraints === '') return;
+  if (typeof constraints === 'object' && Object.keys(constraints).length === 0) return;
+  addFormValue(form, 'bid_constraints', constraints);
+}
+
 function normalizeAdSetTargetingForCopy(targeting: unknown): unknown {
   if (!targeting || typeof targeting !== 'object' || Array.isArray(targeting)) {
     return targeting;
@@ -946,6 +971,7 @@ function copyAdSetCreateForm(
   addFormValue(form, 'optimization_goal', source.optimization_goal);
   addFormValue(form, 'bid_strategy', source.bid_strategy);
   addFormValue(form, 'bid_amount', source.bid_amount);
+  addBidConstraintsFormValue(form, source);
   addBudgetFormValues(form, source, opts, isTopLevel);
   addAdSetSpendLimitFormValues(form, source);
   addFormValue(form, 'targeting', normalizeAdSetTargetingForCopy(source.targeting));
@@ -993,7 +1019,7 @@ async function readAdSetForCopy(token: string, adsetId: string): Promise<MetaAdS
   return graph<MetaAdSetRaw>(`/${adsetId}`, token, {
     query: {
       fields:
-        'id,name,status,campaign_id,daily_budget,lifetime_budget,daily_min_spend_target,daily_spend_cap,lifetime_min_spend_target,lifetime_spend_cap,optimization_goal,billing_event,bid_strategy,bid_amount,targeting,promoted_object,attribution_spec,destination_type,start_time,end_time',
+        'id,name,status,campaign_id,daily_budget,lifetime_budget,daily_min_spend_target,daily_spend_cap,lifetime_min_spend_target,lifetime_spend_cap,optimization_goal,billing_event,bid_strategy,bid_amount,bid_constraints,targeting,promoted_object,attribution_spec,destination_type,start_time,end_time',
     },
   });
 }
@@ -1016,7 +1042,7 @@ async function listAdSetsForCopy(
   do {
     const q: Record<string, string> = {
       fields:
-        'id,name,status,campaign_id,daily_budget,lifetime_budget,daily_min_spend_target,daily_spend_cap,lifetime_min_spend_target,lifetime_spend_cap,optimization_goal,billing_event,bid_strategy,bid_amount,targeting,promoted_object,attribution_spec,destination_type,start_time,end_time',
+        'id,name,status,campaign_id,daily_budget,lifetime_budget,daily_min_spend_target,daily_spend_cap,lifetime_min_spend_target,lifetime_spend_cap,optimization_goal,billing_event,bid_strategy,bid_amount,bid_constraints,targeting,promoted_object,attribution_spec,destination_type,start_time,end_time',
       limit: '100',
     };
     if (after) q['after'] = after;
@@ -1966,11 +1992,11 @@ export const meta = {
   async getInsights(
     token: string,
     objectId: string,
-    datePreset: DatePreset = 'today',
+    dateSpec: InsightsDateSpec = 'today',
   ): Promise<InsightsSummary> {
-    if (FAKE_MODE) return fakeMeta.getInsights(objectId, datePreset);
+    if (FAKE_MODE) return fakeMeta.getInsights(objectId, dateSpec);
     const q: Record<string, string> = {
-      date_preset: datePreset,
+      ...insightsDateQuery(dateSpec),
       fields: 'spend,impressions,clicks,cpc,cpm,ctr,reach,actions,cost_per_action_type,purchase_roas',
     };
     const r = await graph<MetaPagedEnvelope<MetaInsightsRaw>>(`/${objectId}/insights`, token, {
@@ -1986,11 +2012,11 @@ export const meta = {
     token: string,
     metaActId: string,
     level: 'campaign' | 'adset' | 'ad',
-    datePreset: DatePreset = 'today',
+    dateSpec: InsightsDateSpec = 'today',
   ): Promise<Record<string, InsightsSummary>> {
-    if (FAKE_MODE) return fakeMeta.getInsightsByChild(metaActId, level, datePreset);
+    if (FAKE_MODE) return fakeMeta.getInsightsByChild(metaActId, level, dateSpec);
     const baseQuery: Record<string, string> = {
-      date_preset: datePreset,
+      ...insightsDateQuery(dateSpec),
       level,
       fields:
         (level === 'campaign'

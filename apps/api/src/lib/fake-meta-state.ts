@@ -10,6 +10,7 @@ import type {
   InsightsSummary,
   RenameOptions,
   DatePreset,
+  InsightsDateSpec,
   EntityStatus,
 } from './meta-client';
 
@@ -184,14 +185,22 @@ const DATE_MULT: Record<DatePreset, number> = {
   maximum: 120,
 };
 
-function fakeInsightsFor(objectId: string, preset: DatePreset): InsightsSummary {
+function dateMultiplier(dateSpec: InsightsDateSpec): number {
+  if (typeof dateSpec === 'string') return DATE_MULT[dateSpec] ?? 7;
+  const sinceMs = Date.parse(`${dateSpec.since}T00:00:00Z`);
+  const untilMs = Date.parse(`${dateSpec.until}T00:00:00Z`);
+  if (!Number.isFinite(sinceMs) || !Number.isFinite(untilMs) || untilMs < sinceMs) return 1;
+  return Math.max(1, Math.floor((untilMs - sinceMs) / 86400000) + 1);
+}
+
+function fakeInsightsFor(objectId: string, dateSpec: InsightsDateSpec): InsightsSummary {
   const seed = fnv1a(objectId);
   // JS >> 是 sign-preserving; 用 >>> 保证无符号
   const baseSpendDaily = 5 + (seed % 4500) / 100; // 5.00..50.00
   const baseImprDaily = 1000 + (seed % 19000);
   const baseClickRate = 0.015 + ((seed >>> 4) % 50) / 1000; // 1.5%..6.5%
   const cvr = 0.01 + ((seed >>> 8) % 30) / 1000; // 1%..4%
-  const mult = DATE_MULT[preset] ?? 7;
+  const mult = dateMultiplier(dateSpec);
 
   const spend = Math.round(baseSpendDaily * mult * 100) / 100;
   const impressions = Math.round(baseImprDaily * mult);
@@ -377,31 +386,31 @@ export const fakeMeta = {
     }
   },
 
-  getInsights(objectId: string, preset: DatePreset): InsightsSummary {
-    return fakeInsightsFor(objectId, preset);
+  getInsights(objectId: string, dateSpec: InsightsDateSpec): InsightsSummary {
+    return fakeInsightsFor(objectId, dateSpec);
   },
 
   getInsightsByChild(
     metaActId: string,
     level: 'campaign' | 'adset' | 'ad',
-    preset: DatePreset,
+    dateSpec: InsightsDateSpec,
   ): Record<string, InsightsSummary> {
     const out: Record<string, InsightsSummary> = {};
     const camps = ensureCampaigns(metaActId);
     if (level === 'campaign') {
-      for (const c of camps) out[c.id] = fakeInsightsFor(c.id, preset);
+      for (const c of camps) out[c.id] = fakeInsightsFor(c.id, dateSpec);
       return out;
     }
     if (level === 'adset') {
       for (const c of camps) {
-        for (const s of ensureAdSets(c.id)) out[s.id] = fakeInsightsFor(s.id, preset);
+        for (const s of ensureAdSets(c.id)) out[s.id] = fakeInsightsFor(s.id, dateSpec);
       }
       return out;
     }
     // ad
     for (const c of camps) {
       for (const s of ensureAdSets(c.id)) {
-        for (const a of ensureAds(s.id)) out[a.id] = fakeInsightsFor(a.id, preset);
+        for (const a of ensureAds(s.id)) out[a.id] = fakeInsightsFor(a.id, dateSpec);
       }
     }
     return out;

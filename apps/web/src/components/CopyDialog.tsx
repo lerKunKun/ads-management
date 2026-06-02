@@ -42,6 +42,7 @@ export function CopyDialog({
   const [testIdx, setTestIdx] = useState('');
   const [deepCopy, setDeepCopy] = useState(true);
   const [pauseAfter, setPauseAfter] = useState(false);
+  const [confirmParams, setConfirmParams] = useState<CopyParams | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -52,6 +53,7 @@ export function CopyDialog({
     setTestIdx('');
     setDeepCopy(true);
     setPauseAfter(false);
+    setConfirmParams(null);
   }, [open, forceDeepCopy, layer]);
 
   function buildSuffix(): string {
@@ -82,119 +84,159 @@ export function CopyDialog({
         }
         : {}),
     };
-    onSubmit(params);
+    setConfirmParams(params);
   }
 
   const layerName =
     layer === 'campaign' ? '广告系列' : layer === 'adset' ? '广告组' : '广告';
+  const confirmCount = confirmParams?.count ?? 1;
+  const confirmTotal = targetCount * confirmCount;
+  const confirmDeepCopy = layer !== 'ad' && confirmParams?.deepCopy === true;
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(o) => !o && !submitting && onCancel()}
-      title={`复制 ${layerName}${targetCount > 1 ? ` ×${targetCount}` : ''}`}
-    >
-      {hint && <p className="mb-2 break-words text-xs text-muted-foreground">{hint}</p>}
+    <>
+      <Dialog
+        open={open}
+        onOpenChange={(o) => !o && !submitting && !confirmParams && onCancel()}
+        title={`复制 ${layerName}${targetCount > 1 ? ` ×${targetCount}` : ''}`}
+      >
+        {hint && <p className="mb-2 break-words text-xs text-muted-foreground">{hint}</p>}
 
-      <div className="space-y-3">
-        <div>
-          <label className="text-sm text-muted-foreground">每个源复制 N 份</label>
-          <Input
-            type="number"
-            min={1}
-            value={count}
-            onChange={(e) => setCount(Math.max(1, Number(e.target.value) || 1))}
-          />
-          {count > 1 && (
-            <p className="text-xs text-muted-foreground mt-1">
-              N 份会自动加 -01 / -02 / … 后缀,避免名字冲突。共产生{' '}
-              <b>{targetCount * count}</b> 个新{layerName}。
-            </p>
-          )}
-        </div>
-
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="space-y-3">
           <div>
-            <label className="text-sm text-muted-foreground">前缀</label>
+            <label className="text-sm text-muted-foreground">每个源复制 N 份</label>
             <Input
-              placeholder="如 ABTest_"
-              value={prefix}
-              onChange={(e) => setPrefix(e.target.value)}
+              type="number"
+              min={1}
+              value={count}
+              onChange={(e) => setCount(Math.max(1, Number(e.target.value) || 1))}
             />
+            {count > 1 && (
+              <p className="text-xs text-muted-foreground mt-1">
+                N 份会自动加 -01 / -02 / … 后缀,避免名字冲突。共产生{' '}
+                <b>{targetCount * count}</b> 个新{layerName}。
+              </p>
+            )}
           </div>
-          <div>
-            <label className="text-sm text-muted-foreground">国家后缀</label>
-            <Input
-              placeholder="US / SEA"
-              value={country}
-              onChange={(e) => setCountry(e.target.value)}
-            />
-          </div>
-        </div>
 
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div>
-            <label className="flex items-center gap-2 text-sm text-muted-foreground mt-2">
-              <input
-                type="checkbox"
-                checked={dateSuffix}
-                onChange={(e) => setDateSuffix(e.target.checked)}
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className="text-sm text-muted-foreground">前缀</label>
+              <Input
+                placeholder="如 ABTest_"
+                value={prefix}
+                onChange={(e) => setPrefix(e.target.value)}
               />
-              日期后缀 ({formatYMD(new Date())})
-            </label>
+            </div>
+            <div>
+              <label className="text-sm text-muted-foreground">国家后缀</label>
+              <Input
+                placeholder="US / SEA"
+                value={country}
+                onChange={(e) => setCountry(e.target.value)}
+              />
+            </div>
           </div>
-          <div>
-            <label className="text-sm text-muted-foreground">测试编号</label>
-            <Input
-              placeholder="如 v1"
-              value={testIdx}
-              onChange={(e) => setTestIdx(e.target.value)}
-            />
-          </div>
-        </div>
 
-        <div className="flex flex-wrap items-center gap-3 pt-1">
-          {layer !== 'ad' && (
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className="flex items-center gap-2 text-sm text-muted-foreground mt-2">
+                <input
+                  type="checkbox"
+                  checked={dateSuffix}
+                  onChange={(e) => setDateSuffix(e.target.checked)}
+                />
+                日期后缀 ({formatYMD(new Date())})
+              </label>
+            </div>
+            <div>
+              <label className="text-sm text-muted-foreground">测试编号</label>
+              <Input
+                placeholder="如 v1"
+                value={testIdx}
+                onChange={(e) => setTestIdx(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3 pt-1">
+            {layer !== 'ad' && (
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={forceDeepCopy || deepCopy}
+                  disabled={forceDeepCopy}
+                  onChange={(e) => setDeepCopy(e.target.checked)}
+                />
+                深复制（含下级）
+              </label>
+            )}
             <label className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
-                checked={forceDeepCopy || deepCopy}
-                disabled={forceDeepCopy}
-                onChange={(e) => setDeepCopy(e.target.checked)}
+                checked={pauseAfter}
+                onChange={(e) => setPauseAfter(e.target.checked)}
               />
-              深复制（含下级）
+              复制后保持暂停
             </label>
-          )}
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={pauseAfter}
-              onChange={(e) => setPauseAfter(e.target.checked)}
-            />
-            复制后保持暂停
-          </label>
+          </div>
+
+          <div className="rounded-md bg-muted/50 p-2 text-xs">
+            <span className="text-muted-foreground">预览名:</span>{' '}
+            <span className="break-all font-mono">
+              {prefix || ''}
+              <span className="text-muted-foreground">{`{原${layerName}名}`}</span>
+              {buildSuffix()}
+              {count > 1 ? <span className="text-emerald-600">-01..-{String(count).padStart(2, '0')}</span> : ''}
+            </span>
+          </div>
         </div>
 
-        <div className="rounded-md bg-muted/50 p-2 text-xs">
-          <span className="text-muted-foreground">预览名:</span>{' '}
-          <span className="break-all font-mono">
-            {prefix || ''}
-            <span className="text-muted-foreground">{`{原${layerName}名}`}</span>
-            {buildSuffix()}
-            {count > 1 ? <span className="text-emerald-600">-01..-{String(count).padStart(2, '0')}</span> : ''}
-          </span>
-        </div>
-      </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onCancel} disabled={submitting || !!confirmParams}>
+            取消
+          </Button>
+          <Button onClick={handleSubmit} disabled={submitting || !!confirmParams}>
+            {submitting ? '提交中…' : '开始复制'}
+          </Button>
+        </DialogFooter>
+      </Dialog>
 
-      <DialogFooter>
-        <Button variant="outline" onClick={onCancel} disabled={submitting}>
-          取消
-        </Button>
-        <Button onClick={handleSubmit} disabled={submitting}>
-          {submitting ? '提交中…' : '开始复制'}
-        </Button>
-      </DialogFooter>
-    </Dialog>
+      <Dialog
+        open={!!confirmParams}
+        onOpenChange={(o) => !o && !submitting && setConfirmParams(null)}
+        title="确认复制"
+      >
+        <div className="space-y-3 text-sm">
+          <p>请确认本次复制范围，确认后会立即提交任务。</p>
+          <div className="rounded-md border bg-muted/40 p-3">
+            <div className="grid gap-1">
+              <div>复制层级：{layerName}</div>
+              <div>源对象：{targetCount} 个</div>
+              <div>每个源复制：{confirmCount} 份</div>
+              <div>预计创建顶层对象：{confirmTotal} 个</div>
+              {confirmDeepCopy && <div>深复制：会同时复制下级对象</div>}
+              {confirmParams?.statusOption === 'PAUSED' && <div>复制后状态：保持暂停</div>}
+            </div>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setConfirmParams(null)} disabled={submitting}>
+            返回修改
+          </Button>
+          <Button
+            onClick={() => {
+              if (!confirmParams) return;
+              onSubmit(confirmParams);
+              setConfirmParams(null);
+            }}
+            disabled={submitting}
+          >
+            确认复制
+          </Button>
+        </DialogFooter>
+      </Dialog>
+    </>
   );
 }
 

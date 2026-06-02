@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogFooter } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
+import { Tooltip } from '@/components/ui/tooltip';
 import {
   Table,
   TableBody,
@@ -24,7 +25,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { CopyDialog } from '@/components/CopyDialog';
-import { Pagination, usePagination } from '@/components/Pagination';
+import { PAGE_SIZE, PAGE_SIZE_OPTIONS, Pagination, usePagination } from '@/components/Pagination';
 import { SearchFilterBar, matchText } from '@/components/SearchFilterBar';
 import { SelectionClearPill } from '@/components/SelectionClearPill';
 import { metaEffectiveStatusLabel, metaEntityStatusLabel, taskStatusLabel } from '@/lib/labels';
@@ -128,6 +129,19 @@ const METRIC_COLUMNS: Array<{ metric: SortMetric; label: string }> = [
   { metric: 'cpm', label: 'CPM' },
   { metric: 'roi', label: 'ROI' },
 ];
+const ENTITY_TABLE_CLASS = 'min-w-[1220px] table-fixed text-sm lg:min-w-0';
+const ENTITY_TABLE_WRAPPER_CLASS = 'max-h-[calc(100svh-320px)] overflow-x-auto overflow-y-auto overscroll-contain lg:max-h-[calc(100vh-260px)] lg:overflow-x-hidden';
+const SELECT_COL_CLASS = 'w-11 px-2 py-2.5 text-center';
+const SWITCH_COL_CLASS = 'w-12 px-2 py-2.5';
+const NAME_COL_CLASS = 'w-72 px-2.5 py-2.5 lg:w-auto';
+const STATUS_COL_CLASS = 'w-28 px-2 py-2.5';
+const BUDGET_COL_CLASS = 'w-28 px-2 py-2.5';
+const ACTION_COL_CLASS = 'w-36 px-2 py-2.5 text-right';
+const AD_ERROR_STATUS_FILTER = 'group:AD_ERROR';
+const NO_ADS_STATUS_FILTER = 'group:NO_ADS';
+const CONFIGURED_STATUS_FILTER_PREFIX = 'configured:';
+const EFFECTIVE_STATUS_FILTER_PREFIX = 'effective:';
+const CONFIGURED_STATUS_OPTIONS = ['ACTIVE', 'PAUSED', 'ARCHIVED', 'DELETED'];
 
 function isTerminalTaskStatus(status: string): status is TerminalTaskStatus {
   return (TASK_TERMINAL as readonly string[]).includes(status);
@@ -168,6 +182,7 @@ export function EntityListView<T extends EntityRow>({
   const [statusFilter, setStatusFilter] = useState('');
   const [sort, setSort] = useState<SortState | null>(null);
   const [activeFirst, setActiveFirst] = useState(true);
+  const [pageSize, setPageSize] = useState(PAGE_SIZE);
   const previousKeySignature = useRef<string | null>(null);
   const me = useQuery<Me>({ queryKey: ['me'], queryFn: api.me });
   const selected = selectedIds ?? internalSelected;
@@ -196,13 +211,17 @@ export function EntityListView<T extends EntityRow>({
     () => rows.map((row) => applyPatch(row, rowPatches.get(row.id))),
     [rows, rowPatches],
   );
+  const statusFilterOptions = useMemo(
+    () => buildStatusFilterOptions(patchedRows),
+    [patchedRows],
+  );
 
   const filteredRows = useMemo(
     () =>
       patchedRows.filter(
         (row) =>
           matchText(row.name, search) &&
-          (!statusFilter || row.status === statusFilter),
+          matchesStatusFilter(row, statusFilter),
       ),
     [patchedRows, search, statusFilter],
   );
@@ -212,13 +231,13 @@ export function EntityListView<T extends EntityRow>({
     [activeFirst, filteredRows, insights, sort],
   );
 
-  const pager = usePagination(sortedRows);
+  const pager = usePagination(sortedRows, pageSize);
   const allIds = useMemo(() => pager.pageItems.map((row) => row.id), [pager.pageItems]);
   const allSelected = allIds.length > 0 && allIds.every((id) => selected.has(id));
   const summaryRows = useMemo(() => {
-    if (selected.size === 0) return sortedRows;
+    if (selected.size === 0) return pager.pageItems;
     return patchedRows.filter((row) => selected.has(row.id));
-  }, [patchedRows, selected, sortedRows]);
+  }, [pager.pageItems, patchedRows, selected]);
   const summary = useMemo(
     () => summarizeInsights(summaryRows, insights),
     [insights, summaryRows],
@@ -262,6 +281,11 @@ export function EntityListView<T extends EntityRow>({
       if (current?.metric !== metric) return { metric, direction: 'desc' };
       return { metric, direction: current.direction === 'desc' ? 'asc' : 'desc' };
     });
+    pager.setPage(1);
+  }
+
+  function changePageSize(nextPageSize: number) {
+    setPageSize(nextPageSize);
     pager.setPage(1);
   }
 
@@ -462,16 +486,21 @@ export function EntityListView<T extends EntityRow>({
                 批量改预算
               </Button>
             )}
-            <Button
-              size="sm"
-              variant="outline"
-              className="w-full gap-1.5 sm:w-auto"
-              disabled={selected.size === 0 || batch.isPending || !canCopy}
-              onClick={batchCopyClicked}
+            <Tooltip
+              className="w-full sm:w-auto"
+              content={`默认复制当前表已选中的${layerActionLabel}；如果三层选择构成完整系列结构，会在弹窗中显示为系列深复制。提交前需要确认。`}
             >
-              <Copy className="h-4 w-4" aria-hidden="true" />
-              批量复制
-            </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="w-full gap-1.5 sm:w-auto"
+                disabled={selected.size === 0 || batch.isPending || !canCopy}
+                onClick={batchCopyClicked}
+              >
+                <Copy className="h-4 w-4" aria-hidden="true" />
+                批量复制
+              </Button>
+            </Tooltip>
             <Button
               size="sm"
               variant="destructive"
@@ -499,13 +528,7 @@ export function EntityListView<T extends EntityRow>({
             label: '状态',
             value: statusFilter,
             onChange: setStatusFilter,
-            options: [
-              { value: '', label: '全部' },
-              { value: 'ACTIVE', label: metaEntityStatusLabel('ACTIVE') },
-              { value: 'PAUSED', label: metaEntityStatusLabel('PAUSED') },
-              { value: 'ARCHIVED', label: metaEntityStatusLabel('ARCHIVED') },
-              { value: 'DELETED', label: metaEntityStatusLabel('DELETED') },
-            ],
+            options: statusFilterOptions,
           },
         ]}
         total={rows.length}
@@ -528,10 +551,10 @@ export function EntityListView<T extends EntityRow>({
       )}
 
       <div className="overflow-hidden rounded-md border">
-        <Table>
-          <TableHeader>
+        <Table className={ENTITY_TABLE_CLASS} wrapperClassName={ENTITY_TABLE_WRAPPER_CLASS}>
+          <TableHeader className="sticky top-0 z-40 bg-background">
             <TableRow>
-              <TableHead className="w-12 px-2 text-center">
+              <TableHead className={SELECT_COL_CLASS}>
                 <label className="flex min-h-10 cursor-pointer items-center justify-center">
                   <input
                     type="checkbox"
@@ -542,10 +565,10 @@ export function EntityListView<T extends EntityRow>({
                   />
                 </label>
               </TableHead>
-              <TableHead className="w-12" />
-              <TableHead className="min-w-[220px]">名称</TableHead>
-              <TableHead>状态</TableHead>
-              {enableBudget && <TableHead>日预算</TableHead>}
+              <TableHead className={SWITCH_COL_CLASS} />
+              <TableHead className={NAME_COL_CLASS}>名称</TableHead>
+              <TableHead className={STATUS_COL_CLASS}>状态</TableHead>
+              {enableBudget && <TableHead className={BUDGET_COL_CLASS}>日预算</TableHead>}
               {visibleMetricColumns.map((column) => (
                 <SortableMetricHead
                   key={column.metric}
@@ -555,7 +578,7 @@ export function EntityListView<T extends EntityRow>({
                   onSort={toggleSort}
                 />
               ))}
-              <TableHead className="whitespace-nowrap text-right">操作</TableHead>
+              <TableHead className={`${ACTION_COL_CLASS} whitespace-nowrap`}>操作</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -575,7 +598,7 @@ export function EntityListView<T extends EntityRow>({
               const drill = onRowOpen ? undefined : drillTo?.(row);
               return (
                 <TableRow key={row.id} className={isSelected ? 'bg-muted/30' : ''}>
-                  <TableCell className="w-12 px-2 text-center">
+                  <TableCell data-label="选择" className={SELECT_COL_CLASS}>
                     <label className="flex min-h-10 cursor-pointer items-center justify-center">
                       <input
                         type="checkbox"
@@ -586,7 +609,7 @@ export function EntityListView<T extends EntityRow>({
                       />
                     </label>
                   </TableCell>
-                  <TableCell>
+                  <TableCell data-label="开关" className={SWITCH_COL_CLASS}>
                     <Switch
                       size="sm"
                       checked={row.status === 'ACTIVE'}
@@ -597,11 +620,11 @@ export function EntityListView<T extends EntityRow>({
                       aria-label={`status-${row.id}`}
                     />
                   </TableCell>
-                  <TableCell className="min-w-[220px] max-w-[420px] font-medium">
+                  <TableCell data-label="名称" className={`${NAME_COL_CLASS} font-medium`}>
                     {onRowOpen ? (
                       <button
                         type="button"
-                        className="block max-w-full truncate text-left text-primary hover:underline"
+                        className="block max-w-full whitespace-normal break-words text-left text-primary hover:underline"
                         title={row.name}
                         onClick={() => onRowOpen(row)}
                       >
@@ -611,20 +634,20 @@ export function EntityListView<T extends EntityRow>({
                       <Link
                         to={drill.to}
                         params={drill.params}
-                        className="block truncate text-primary hover:underline"
+                        className="block whitespace-normal break-words text-primary hover:underline"
                         title={row.name}
                       >
                         {row.name}
                       </Link>
                     ) : (
-                      <span className="block truncate" title={row.name}>{row.name}</span>
+                      <span className="block whitespace-normal break-words" title={row.name}>{row.name}</span>
                     )}
                   </TableCell>
-                  <TableCell>
+                  <TableCell data-label="状态" className={STATUS_COL_CLASS}>
                     <DeliveryStatusBadge row={row} />
                   </TableCell>
                   {enableBudget && (
-                    <TableCell>
+                    <TableCell data-label="日预算" className={BUDGET_COL_CLASS}>
                       <button
                         type="button"
                         onClick={() =>
@@ -635,49 +658,53 @@ export function EntityListView<T extends EntityRow>({
                           })
                         }
                         disabled={archived || !canChangeBudget}
-                        className="text-left hover:underline disabled:opacity-50"
+                        className="block max-w-full whitespace-normal break-words text-left hover:underline disabled:opacity-50"
                       >
                         {fmtBudget(row.dailyBudget)}
                       </button>
                     </TableCell>
                   )}
-                  <TableCell className="text-right tabular-nums">
+                  <TableCell data-label={metricLabel('spend')} className={metricCellClass('spend')}>
                     {insight ? fmtMoney(insight.spend) : '-'}
                   </TableCell>
-                  <TableCell className="text-right tabular-nums">
+                  <TableCell data-label={metricLabel('orders')} className={metricCellClass('orders')}>
                     {insight ? insight.orders || '-' : '-'}
                   </TableCell>
-                  <TableCell className="text-right tabular-nums">
+                  <TableCell data-label={metricLabel('cpa')} className={metricCellClass('cpa')}>
                     {insight ? (insight.cpa ? fmtMoney(insight.cpa) : '-') : '-'}
                   </TableCell>
-                  <TableCell className="text-right tabular-nums">
+                  <TableCell data-label={metricLabel('cpc')} className={metricCellClass('cpc')}>
                     {insight ? (insight.cpc ? insight.cpc.toFixed(2) : '-') : '-'}
                   </TableCell>
-                  <TableCell className="text-right tabular-nums">
+                  <TableCell data-label={metricLabel('addToCart')} className={metricCellClass('addToCart')}>
                     {insight ? insight.addToCart || '-' : '-'}
                   </TableCell>
-                  <TableCell className="text-right tabular-nums">
+                  <TableCell data-label={metricLabel('initiateCheckout')} className={metricCellClass('initiateCheckout')}>
                     {insight ? insight.initiateCheckout || '-' : '-'}
                   </TableCell>
-                  <TableCell className="text-right tabular-nums">
+                  <TableCell data-label={metricLabel('cpm')} className={metricCellClass('cpm')}>
                     {insight ? (insight.cpm ? insight.cpm.toFixed(2) : '-') : '-'}
                   </TableCell>
-                  <TableCell className="text-right tabular-nums">
+                  <TableCell data-label={metricLabel('roi')} className={metricCellClass('roi')}>
                     {insight ? (insight.roi ? insight.roi.toFixed(2) : '-') : '-'}
                   </TableCell>
-                  <TableCell className="whitespace-nowrap text-right">
+                  <TableCell data-label="操作" className={`${ACTION_COL_CLASS} whitespace-nowrap`}>
                     <div className="inline-flex items-center gap-1">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={archived || batch.isPending || !canCopy}
-                        onClick={() => singleCopyClicked(row)}
-                      >
-                        复制
-                      </Button>
+                      <Tooltip content={`只复制这一行${layerActionLabel}，不使用表格已勾选的其他对象。`}>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-9 px-2.5 text-sm"
+                          disabled={archived || batch.isPending || !canCopy}
+                          onClick={() => singleCopyClicked(row)}
+                        >
+                          复制
+                        </Button>
+                      </Tooltip>
                       <Button
                         size="sm"
                         variant="destructive"
+                        className="h-9 px-2.5 text-sm"
                         disabled={archived || deleteMut.isPending || !canDelete}
                         onClick={() => {
                           if (!confirm(`删除 "${row.name}"？`)) return;
@@ -692,9 +719,9 @@ export function EntityListView<T extends EntityRow>({
               );
             })}
           </TableBody>
-          <TableFooter>
+          <TableFooter className="sticky bottom-0 z-30">
             <SummaryRow
-              mode={selected.size > 0 ? 'selected' : 'all'}
+              mode={selected.size > 0 ? 'selected' : 'page'}
               summary={summary}
               currency={currency ?? null}
               enableBudget={enableBudget}
@@ -705,7 +732,10 @@ export function EntityListView<T extends EntityRow>({
           page={pager.page}
           pageCount={pager.pageCount}
           total={sortedRows.length}
+          pageSize={pager.pageSize}
+          pageSizeOptions={PAGE_SIZE_OPTIONS}
           onPageChange={pager.setPage}
+          onPageSizeChange={changePageSize}
         />
       </div>
 
@@ -898,6 +928,87 @@ function EmptyTableRow({ colSpan, text }: { colSpan: number; text: string }) {
   );
 }
 
+function buildStatusFilterOptions(rows: EntityRow[]): Array<{ value: string; label: string }> {
+  const options: Array<{ value: string; label: string }> = [{ value: '', label: '全部' }];
+  const seenValues = new Set(options.map((option) => option.value));
+
+  for (const status of CONFIGURED_STATUS_OPTIONS) {
+    addStatusFilterOption(options, seenValues, {
+      value: `${CONFIGURED_STATUS_FILTER_PREFIX}${status}`,
+      label: metaEntityStatusLabel(status),
+    });
+  }
+
+  addStatusFilterOption(options, seenValues, {
+    value: AD_ERROR_STATUS_FILTER,
+    label: '广告错误',
+  });
+  addStatusFilterOption(options, seenValues, {
+    value: NO_ADS_STATUS_FILTER,
+    label: '无广告',
+  });
+
+  const effectiveStatuses = Array.from(
+    new Set(rows.map((row) => normalizeStatus(row.effectiveStatus)).filter(Boolean)),
+  ).sort();
+  for (const status of effectiveStatuses) {
+    if (isAdErrorEffectiveStatus(status) || isNoAdsEffectiveStatus(status)) continue;
+    addStatusFilterOption(options, seenValues, {
+      value: `${EFFECTIVE_STATUS_FILTER_PREFIX}${status}`,
+      label: metaEffectiveStatusLabel(status),
+    });
+  }
+
+  return options;
+}
+
+function addStatusFilterOption(
+  options: Array<{ value: string; label: string }>,
+  seenValues: Set<string>,
+  option: { value: string; label: string },
+) {
+  if (seenValues.has(option.value)) return;
+  seenValues.add(option.value);
+  options.push(option);
+}
+
+function matchesStatusFilter(row: EntityRow, filter: string): boolean {
+  if (!filter) return true;
+  const effectiveStatus = normalizeStatus(row.effectiveStatus);
+
+  if (filter.startsWith(CONFIGURED_STATUS_FILTER_PREFIX)) {
+    return row.status === filter.slice(CONFIGURED_STATUS_FILTER_PREFIX.length);
+  }
+  if (filter.startsWith(EFFECTIVE_STATUS_FILTER_PREFIX)) {
+    return effectiveStatus === filter.slice(EFFECTIVE_STATUS_FILTER_PREFIX.length);
+  }
+  if (filter === AD_ERROR_STATUS_FILTER) {
+    return isAdErrorEffectiveStatus(effectiveStatus);
+  }
+  if (filter === NO_ADS_STATUS_FILTER) {
+    return isNoAdsEffectiveStatus(effectiveStatus);
+  }
+
+  return row.status === filter || effectiveStatus === filter;
+}
+
+function normalizeStatus(status: string | null | undefined): string {
+  return (status ?? '').trim().toUpperCase();
+}
+
+function isAdErrorEffectiveStatus(status: string): boolean {
+  return status === 'WITH_ISSUES' || status.includes('ISSUE') || status.includes('ERROR');
+}
+
+function isNoAdsEffectiveStatus(status: string): boolean {
+  return (
+    status === 'NO_ADS' ||
+    status.includes('NO_ADS') ||
+    status.includes('HAS_NO_ADS') ||
+    status.includes('NO_ACTIVE_ADS')
+  );
+}
+
 function SortableMetricHead({
   metric,
   label,
@@ -911,10 +1022,10 @@ function SortableMetricHead({
 }) {
   const active = sort?.metric === metric;
   return (
-    <TableHead className="whitespace-nowrap text-right">
+    <TableHead className={`${metricCellClass(metric)} whitespace-nowrap`}>
       <button
         type="button"
-        className="inline-flex items-center gap-1 whitespace-nowrap text-right hover:text-primary"
+        className="inline-flex min-w-0 items-center justify-end gap-1 whitespace-nowrap text-right hover:text-primary"
         onClick={() => onSort(metric)}
       >
         <span>{label}</span>
@@ -926,6 +1037,20 @@ function SortableMetricHead({
   );
 }
 
+function metricCellClass(metric: SortMetric): string {
+  const width =
+    metric === 'spend' || metric === 'cpa'
+      ? 'w-24'
+      : metric === 'cpc' || metric === 'cpm'
+        ? 'w-20'
+        : 'w-16';
+  return `${width} overflow-hidden px-2 py-2.5 text-right tabular-nums`;
+}
+
+function metricLabel(metric: SortMetric): string {
+  return METRIC_COLUMNS.find((column) => column.metric === metric)?.label ?? metric;
+}
+
 const SUMMARY_CELL_CLASS = 'sticky bottom-0 z-20 whitespace-nowrap bg-[#B9DEFF]';
 
 function SummaryRow({
@@ -934,46 +1059,46 @@ function SummaryRow({
   currency,
   enableBudget,
 }: {
-  mode: 'selected' | 'all';
+  mode: 'selected' | 'page';
   summary: InsightSummaryTotal;
   currency: string | null;
   enableBudget?: boolean;
 }) {
-  const label = mode === 'selected' ? `已选 ${summary.rows} 项` : `全部 ${summary.rows} 项`;
+  const label = mode === 'selected' ? `已选 ${summary.rows} 项` : `本页 ${summary.rows} 项`;
   return (
     <TableRow className="border-t bg-[#B9DEFF] hover:bg-[#B9DEFF]">
-      <TableCell className={`${SUMMARY_CELL_CLASS} w-12 px-2`} />
-      <TableCell className={`${SUMMARY_CELL_CLASS} w-12`} />
-      <TableCell className={`${SUMMARY_CELL_CLASS} font-semibold`}>
+      <TableCell className={`${SUMMARY_CELL_CLASS} ${SELECT_COL_CLASS}`} />
+      <TableCell className={`${SUMMARY_CELL_CLASS} ${SWITCH_COL_CLASS}`} />
+      <TableCell className={`${SUMMARY_CELL_CLASS} ${NAME_COL_CLASS} truncate font-semibold`}>
         汇总（{label}）
       </TableCell>
-      <TableCell className={SUMMARY_CELL_CLASS} />
-      {enableBudget && <TableCell className={SUMMARY_CELL_CLASS} />}
-      <TableCell className={`${SUMMARY_CELL_CLASS} text-right tabular-nums`}>
+      <TableCell className={`${SUMMARY_CELL_CLASS} ${STATUS_COL_CLASS}`} />
+      {enableBudget && <TableCell className={`${SUMMARY_CELL_CLASS} ${BUDGET_COL_CLASS}`} />}
+      <TableCell data-label={metricLabel('spend')} className={`${SUMMARY_CELL_CLASS} ${metricCellClass('spend')}`}>
         {fmtSummaryMoney(summary.spend, currency, summary.hasInsights)}
       </TableCell>
-      <TableCell className={`${SUMMARY_CELL_CLASS} text-right tabular-nums`}>
+      <TableCell data-label={metricLabel('orders')} className={`${SUMMARY_CELL_CLASS} ${metricCellClass('orders')}`}>
         {fmtSummaryNumber(summary.orders, summary.hasInsights)}
       </TableCell>
-      <TableCell className={`${SUMMARY_CELL_CLASS} text-right tabular-nums`}>
+      <TableCell data-label={metricLabel('cpa')} className={`${SUMMARY_CELL_CLASS} ${metricCellClass('cpa')}`}>
         {fmtSummaryMoney(summary.cpa, currency, summary.hasInsights && summary.orders > 0)}
       </TableCell>
-      <TableCell className={`${SUMMARY_CELL_CLASS} text-right tabular-nums`}>
+      <TableCell data-label={metricLabel('cpc')} className={`${SUMMARY_CELL_CLASS} ${metricCellClass('cpc')}`}>
         {fmtSummaryDecimal(summary.cpc, summary.hasInsights && summary.clicks > 0)}
       </TableCell>
-      <TableCell className={`${SUMMARY_CELL_CLASS} text-right tabular-nums`}>
+      <TableCell data-label={metricLabel('addToCart')} className={`${SUMMARY_CELL_CLASS} ${metricCellClass('addToCart')}`}>
         {fmtSummaryNumber(summary.addToCart, summary.hasInsights)}
       </TableCell>
-      <TableCell className={`${SUMMARY_CELL_CLASS} text-right tabular-nums`}>
+      <TableCell data-label={metricLabel('initiateCheckout')} className={`${SUMMARY_CELL_CLASS} ${metricCellClass('initiateCheckout')}`}>
         {fmtSummaryNumber(summary.initiateCheckout, summary.hasInsights)}
       </TableCell>
-      <TableCell className={`${SUMMARY_CELL_CLASS} text-right tabular-nums`}>
+      <TableCell data-label={metricLabel('cpm')} className={`${SUMMARY_CELL_CLASS} ${metricCellClass('cpm')}`}>
         {fmtSummaryDecimal(summary.cpm, summary.hasInsights && summary.impressions > 0)}
       </TableCell>
-      <TableCell className={`${SUMMARY_CELL_CLASS} text-right tabular-nums`}>
+      <TableCell data-label={metricLabel('roi')} className={`${SUMMARY_CELL_CLASS} ${metricCellClass('roi')}`}>
         {fmtSummaryDecimal(summary.roi, summary.hasInsights && summary.roiCount > 0)}
       </TableCell>
-      <TableCell className={`${SUMMARY_CELL_CLASS} text-right`} />
+      <TableCell className={`${SUMMARY_CELL_CLASS} ${ACTION_COL_CLASS}`} />
     </TableRow>
   );
 }
@@ -981,8 +1106,8 @@ function SummaryRow({
 function DeliveryStatusBadge({ row }: { row: EntityRow }) {
   const state = deliveryState(row);
   return (
-    <span className={`inline-flex min-w-[92px] items-center justify-center rounded border px-2 py-1 text-xs ${state.className}`}>
-      {state.label}
+    <span className={`inline-flex w-full min-w-0 items-center justify-end rounded border px-2 py-1 text-xs sm:justify-center sm:text-sm ${state.className}`}>
+      <span className="whitespace-normal break-words">{state.label}</span>
     </span>
   );
 }

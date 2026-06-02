@@ -1121,6 +1121,7 @@ function verifyAdSetFields(
     'billing_event',
     'bid_strategy',
     'bid_amount',
+    'bid_constraints',
   ] as const) {
     pushMismatch(mismatches, {
       type: 'adset',

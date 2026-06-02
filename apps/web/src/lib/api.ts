@@ -167,6 +167,13 @@ export type DatePreset =
   | 'last_30d'
   | 'maximum';
 
+export interface CustomDateRange {
+  since: string;
+  until: string;
+}
+
+export type InsightsDateSpec = DatePreset | CustomDateRange;
+
 export interface RenameOptions {
   rename_strategy?: 'DEEP_COPY_RENAME' | 'NO_RENAME' | 'ONLY_TOP_LEVEL_RENAME';
   rename_prefix?: string;
@@ -400,16 +407,20 @@ export const api = {
   insightsByLevel: (
     adAccountId: string,
     level: 'campaign' | 'adset' | 'ad',
-    preset: DatePreset,
+    dateSpec: InsightsDateSpec,
     parentId?: string,
-  ) =>
-    call<Record<string, InsightsSummary>>(
-      `/ad-accounts/${adAccountId}/insights?${new URLSearchParams({
-        level,
-        preset,
-        ...(parentId ? { parentId } : {}),
-      }).toString()}`,
-    ),
+  ) => {
+    const query: Record<string, string> = { level };
+    const dateParams =
+      typeof dateSpec === 'string'
+        ? { preset: dateSpec }
+        : { since: dateSpec.since, until: dateSpec.until };
+    Object.assign(query, dateParams);
+    if (parentId) query['parentId'] = parentId;
+    return call<Record<string, InsightsSummary>>(
+      `/ad-accounts/${adAccountId}/insights?${new URLSearchParams(query).toString()}`,
+    );
+  },
 
   // M3: 批量入队 + 任务查询
   myArchives: (limit = 200) => call<ArchivedAd[]>(`/archives?limit=${limit}`),

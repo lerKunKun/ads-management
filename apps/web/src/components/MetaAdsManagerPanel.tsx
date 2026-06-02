@@ -1,7 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, type Ad, type AdSet, type Campaign, type DatePreset, type InsightsSummary } from '@/lib/api';
+import {
+  api,
+  type Ad,
+  type AdSet,
+  type Campaign,
+  type InsightsDateSpec,
+  type InsightsSummary,
+} from '@/lib/api';
 import { EntityListView, type CopySelection } from '@/components/EntityListView';
+import { DateRangePicker, type DateRangePickerValue } from '@/components/DateRangePicker';
 import { SelectionClearPill } from '@/components/SelectionClearPill';
 
 interface MetaAdsManagerPanelProps {
@@ -10,7 +18,6 @@ interface MetaAdsManagerPanelProps {
   timezone: string | null;
 }
 
-const DATE_PRESETS: DatePreset[] = ['today', 'yesterday', 'last_7d', 'last_30d', 'maximum'];
 type ActiveLayer = 'campaign' | 'adset' | 'ad';
 const LAYER_DEPTH: Record<ActiveLayer, number> = { campaign: 0, adset: 1, ad: 2 };
 
@@ -20,7 +27,10 @@ export function MetaAdsManagerPanel({
   timezone,
 }: MetaAdsManagerPanelProps) {
   const queryClient = useQueryClient();
-  const [preset, setPreset] = useState<DatePreset>('today');
+  const [dateSelection, setDateSelection] = useState<DateRangePickerValue>(() => {
+    const today = formatDateInput(new Date());
+    return { mode: 'today', since: today, until: today };
+  });
   const [activeLayer, setActiveLayer] = useState<ActiveLayer>('campaign');
   const [selectedCampaignIds, setSelectedCampaignIds] = useState<Set<string>>(() => new Set());
   const [selectedAdsetIds, setSelectedAdsetIds] = useState<Set<string>>(() => new Set());
@@ -37,14 +47,25 @@ export function MetaAdsManagerPanel({
   const adsetIds = useMemo(() => sortedIds(selectedAdsetIds), [selectedAdsetIds]);
   const campaignScopeKey = campaignIds.join('|');
   const adsetScopeKey = adsetIds.join('|');
+  const insightsDateSpec = useMemo<InsightsDateSpec>(
+    () =>
+      dateSelection.mode === 'custom'
+        ? { since: dateSelection.since, until: dateSelection.until }
+        : dateSelection.mode,
+    [dateSelection],
+  );
+  const insightsDateKey =
+    typeof insightsDateSpec === 'string'
+      ? insightsDateSpec
+      : `${insightsDateSpec.since}_${insightsDateSpec.until}`;
 
   const campaigns = useQuery({
     queryKey: ['campaigns', adAccountId],
     queryFn: () => api.campaigns(adAccountId),
   });
   const campaignInsights = useQuery({
-    queryKey: ['insights', adAccountId, 'campaign', preset],
-    queryFn: () => api.insightsByLevel(adAccountId, 'campaign', preset),
+    queryKey: ['insights', adAccountId, 'campaign', insightsDateKey],
+    queryFn: () => api.insightsByLevel(adAccountId, 'campaign', insightsDateSpec),
   });
 
   const adsetQueries = useQueries({
@@ -55,8 +76,8 @@ export function MetaAdsManagerPanel({
   });
   const adsetInsightQueries = useQueries({
     queries: campaignIds.map((campaignId) => ({
-      queryKey: ['insights', adAccountId, 'adset', campaignId, preset],
-      queryFn: () => api.insightsByLevel(adAccountId, 'adset', preset, campaignId),
+      queryKey: ['insights', adAccountId, 'adset', campaignId, insightsDateKey],
+      queryFn: () => api.insightsByLevel(adAccountId, 'adset', insightsDateSpec, campaignId),
     })),
   });
   const adsets = useMemo(
@@ -76,8 +97,8 @@ export function MetaAdsManagerPanel({
   });
   const adInsightQueries = useQueries({
     queries: adsetIds.map((adsetId) => ({
-      queryKey: ['insights', adAccountId, 'ad', adsetId, preset],
-      queryFn: () => api.insightsByLevel(adAccountId, 'ad', preset, adsetId),
+      queryKey: ['insights', adAccountId, 'ad', adsetId, insightsDateKey],
+      queryFn: () => api.insightsByLevel(adAccountId, 'ad', insightsDateSpec, adsetId),
     })),
   });
   const ads = useMemo(
@@ -256,20 +277,10 @@ export function MetaAdsManagerPanel({
               onClearSelected={clearAdSelection}
             />
           </div>
-          <label className="grid gap-1 text-sm sm:flex sm:items-center sm:justify-end">
+          <div className="grid gap-1 text-sm sm:flex sm:items-center sm:justify-end">
             <span className="whitespace-nowrap text-xs text-muted-foreground">日期范围</span>
-            <select
-              className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm sm:w-auto"
-              value={preset}
-              onChange={(event) => setPreset(event.target.value as DatePreset)}
-            >
-              {DATE_PRESETS.map((item) => (
-                <option key={item} value={item}>
-                  {datePresetLabel(item)}
-                </option>
-              ))}
-            </select>
-          </label>
+            <DateRangePicker value={dateSelection} onChange={setDateSelection} />
+          </div>
         </div>
 
         <div className="p-3">
@@ -287,8 +298,8 @@ export function MetaAdsManagerPanel({
               currency={currency}
               adAccountTimezone={timezone}
               insights={campaignInsights.data ?? {}}
-              datePreset={preset}
-              onDatePresetChange={setPreset}
+              datePreset={dateSelection.mode === 'custom' ? 'today' : dateSelection.mode}
+              onDatePresetChange={(next) => setDateSelection((current) => ({ ...current, mode: next }))}
               invalidateKey={['meta-panel-campaigns', adAccountId]}
               selectedIds={selectedCampaignIds}
               onSelectedIdsChange={onCampaignSelectionChange}
@@ -311,8 +322,8 @@ export function MetaAdsManagerPanel({
               currency={currency}
               adAccountTimezone={timezone}
               insights={adsetInsights}
-              datePreset={preset}
-              onDatePresetChange={setPreset}
+              datePreset={dateSelection.mode === 'custom' ? 'today' : dateSelection.mode}
+              onDatePresetChange={(next) => setDateSelection((current) => ({ ...current, mode: next }))}
               invalidateKey={['meta-panel-adsets', adAccountId, campaignScopeKey]}
               selectedIds={selectedAdsetIds}
               onSelectedIdsChange={onAdsetSelectionChange}
@@ -340,8 +351,8 @@ export function MetaAdsManagerPanel({
               currency={currency}
               adAccountTimezone={timezone}
               insights={adInsights}
-              datePreset={preset}
-              onDatePresetChange={setPreset}
+              datePreset={dateSelection.mode === 'custom' ? 'today' : dateSelection.mode}
+              onDatePresetChange={(next) => setDateSelection((current) => ({ ...current, mode: next }))}
               invalidateKey={['meta-panel-ads', adAccountId, adsetScopeKey]}
               selectedIds={selectedAdIds}
               onSelectedIdsChange={setSelectedAdIds}
@@ -414,6 +425,11 @@ function sortedIds(ids: Set<string>): string[] {
   return Array.from(ids).sort();
 }
 
+function formatDateInput(date: Date): string {
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
 function sameStringSet(left: Set<string>, right: Set<string>): boolean {
   if (left.size !== right.size) return false;
   for (const value of left) {
@@ -446,12 +462,4 @@ function mergeInsightRecords(
 
 function firstQueryError(queries: Array<{ error: unknown }>): unknown | undefined {
   return queries.find((query) => query.error)?.error;
-}
-
-function datePresetLabel(preset: DatePreset): string {
-  if (preset === 'today') return '今天';
-  if (preset === 'yesterday') return '昨天';
-  if (preset === 'last_7d') return '近 7 天';
-  if (preset === 'last_30d') return '近 30 天';
-  return '全部';
 }
