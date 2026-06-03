@@ -1,5 +1,5 @@
 import { useQueries } from '@tanstack/react-query';
-import { api, type InsightsSummary } from '@/lib/api';
+import { api, type InsightsDateSpec, type InsightsSummary } from '@/lib/api';
 import { TableCell, TableHead } from '@/components/ui/table';
 
 export type AccountMetric = 'spend' | 'orders' | 'cpa' | 'cpc' | 'addToCart' | 'initiateCheckout' | 'cpm' | 'roi';
@@ -36,11 +36,13 @@ const ACCOUNT_METRIC_CELL_BASE = 'overflow-hidden px-2 py-2.5 text-right tabular
 
 export function useAdAccountInsightTotals(
   accounts: Array<{ id: string }>,
+  dateSpec: InsightsDateSpec,
 ): Map<string, AccountMetricTotal> {
+  const dateKey = insightsDateKey(dateSpec);
   const queries = useQueries({
     queries: accounts.map((account) => ({
-      queryKey: ['ad-account-total-insights', account.id, 'maximum'],
-      queryFn: () => api.insightsByLevel(account.id, 'campaign', 'maximum'),
+      queryKey: ['ad-account-total-insights', account.id, dateKey],
+      queryFn: () => api.insightsByLevel(account.id, 'campaign', dateSpec),
       staleTime: 5 * 60 * 1000,
       retry: 1,
     })),
@@ -52,6 +54,12 @@ export function useAdAccountInsightTotals(
     if (data) totals.set(account.id, summarizeAccountInsights(data));
   });
   return totals;
+}
+
+function insightsDateKey(dateSpec: InsightsDateSpec): string {
+  return typeof dateSpec === 'string'
+    ? dateSpec
+    : `${dateSpec.since}_${dateSpec.until}`;
 }
 
 export function nextAccountMetricSort(
@@ -99,9 +107,9 @@ export function summarizeAdAccountMetricTotals<T extends { id: string }>(
     total.orders += item.orders;
     total.addToCart += item.addToCart;
     total.initiateCheckout += item.initiateCheckout;
-    if (item.roiCount > 0) {
-      total.roi += item.roi * item.roiCount;
-      total.roiCount += item.roiCount;
+    if (item.roiCount > 0 && item.spend > 0) {
+      total.roi += item.roi * item.spend;
+      total.roiCount += item.spend;
     }
   }
 
@@ -193,9 +201,9 @@ function summarizeAccountInsights(rows: Record<string, InsightsSummary>): Accoun
     total.orders += row.orders;
     total.addToCart += row.addToCart;
     total.initiateCheckout += row.initiateCheckout;
-    if (row.roi > 0) {
-      total.roi += row.roi;
-      total.roiCount += 1;
+    if (row.roi > 0 && row.spend > 0) {
+      total.roi += row.roi * row.spend;
+      total.roiCount += row.spend;
     }
   }
   total.cpa = total.orders > 0 ? total.spend / total.orders : 0;

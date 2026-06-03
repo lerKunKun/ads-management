@@ -1,7 +1,7 @@
 import { createFileRoute, redirect, Link } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
-import { api, getToken } from '@/lib/api';
+import { api, getToken, type InsightsDateSpec } from '@/lib/api';
 import {
   Table,
   TableBody,
@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/button';
 import { SearchFilterBar, matchText } from '@/components/SearchFilterBar';
 import { PAGE_SIZE, PAGE_SIZE_OPTIONS, Pagination, usePagination } from '@/components/Pagination';
 import { SelectionClearPill } from '@/components/SelectionClearPill';
+import { DateRangePicker, type DateRangePickerValue } from '@/components/DateRangePicker';
 import { accountGroupStatusLabel, adAccountStatusLabel } from '@/lib/labels';
 import {
   createFbAccountNameMap,
@@ -80,6 +81,11 @@ function FbAccountAdAccountsPage() {
   const [metricSort, setMetricSort] = useState<AccountMetricSortState | null>(null);
   const [pageSize, setPageSize] = useState(PAGE_SIZE);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [dateSelection, setDateSelection] = useState<DateRangePickerValue>(initialDateSelection);
+  const insightsDateSpec = useMemo<InsightsDateSpec>(
+    () => toInsightsDateSpec(dateSelection),
+    [dateSelection],
+  );
 
   const currencyOptions = useMemo(() => {
     const set = new Set<string>();
@@ -124,21 +130,13 @@ function FbAccountAdAccountsPage() {
         (!country || a.businessCountryCode === country),
     );
   }, [country, currency, search, status, timezone, visibleAccounts]);
-  const allAccounts = visibleAccounts;
-  const selectedRows = useMemo(
-    () => allAccounts.filter((account) => selectedIds.has(account.id)),
-    [allAccounts, selectedIds],
-  );
-  const metricAccounts = useMemo(
-    () => uniqueById([...filtered, ...selectedRows]),
-    [filtered, selectedRows],
-  );
-  const accountMetrics = useAdAccountInsightTotals(metricAccounts);
+  const metricAccounts = filtered;
+  const accountMetrics = useAdAccountInsightTotals(metricAccounts, insightsDateSpec);
   const sorted = sortAdAccountsByMetric(filtered, accountMetrics, metricSort);
   const pager = usePagination(sorted, pageSize);
   const pageIds = useMemo(() => pager.pageItems.map((account) => account.id), [pager.pageItems]);
   const pageSelected = pageIds.length > 0 && pageIds.every((accountId) => selectedIds.has(accountId));
-  const summaryRows = selectedIds.size > 0 ? selectedRows : pager.pageItems;
+  const summaryRows = filtered;
   const summary = summarizeAdAccountMetricTotals(summaryRows, accountMetrics);
   const summaryCurrency = commonCurrency(summaryRows);
 
@@ -200,9 +198,15 @@ function FbAccountAdAccountsPage() {
             onClear={() => setSelectedIds(new Set())}
           />
         </div>
-        <Button size="sm" variant="outline" className="w-full sm:w-auto" onClick={() => adsQ.refetch()}>
-          刷新
-        </Button>
+        <div className="grid w-full gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center sm:justify-end">
+          <div className="grid gap-1 text-sm sm:flex sm:items-center sm:justify-end">
+            <span className="whitespace-nowrap text-xs text-muted-foreground">日期范围</span>
+            <DateRangePicker value={dateSelection} onChange={setDateSelection} />
+          </div>
+          <Button size="sm" variant="outline" className="w-full sm:w-auto" onClick={() => adsQ.refetch()}>
+            刷新
+          </Button>
+        </div>
       </div>
 
       <div className="mb-3">
@@ -352,7 +356,7 @@ function FbAccountAdAccountsPage() {
           <TableFooter className="sticky bottom-0 z-30">
             <AdAccountSummaryRow
               prefixColSpan={FB_AD_ACCOUNTS_SUMMARY_PREFIX_COLS}
-              label={selectedIds.size > 0 ? `已选 ${summaryRows.length} 项` : `本页 ${summaryRows.length} 项`}
+              label={`个号数据 ${summaryRows.length} 项`}
               total={summary}
               currency={summaryCurrency}
             />
@@ -377,6 +381,20 @@ function countryLabel(code: string | null | undefined): string {
   return code.toUpperCase();
 }
 
+function initialDateSelection(): DateRangePickerValue {
+  const today = formatDateInput(new Date());
+  return { mode: 'today', since: today, until: today };
+}
+
+function toInsightsDateSpec(value: DateRangePickerValue): InsightsDateSpec {
+  return value.mode === 'custom' ? { since: value.since, until: value.until } : value.mode;
+}
+
+function formatDateInput(date: Date): string {
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
 function AdAccountSummaryRow({
   prefixColSpan,
   label,
@@ -397,17 +415,6 @@ function AdAccountSummaryRow({
       <TableCell className={`${SUMMARY_CELL_CLASS} ${SYNC_COL_CLASS}`} />
     </TableRow>
   );
-}
-
-function uniqueById<T extends { id: string }>(items: T[]): T[] {
-  const seen = new Set<string>();
-  const result: T[] = [];
-  for (const item of items) {
-    if (seen.has(item.id)) continue;
-    seen.add(item.id);
-    result.push(item);
-  }
-  return result;
 }
 
 function commonCurrency(accounts: Array<{ currency?: string | null }>): string | null {

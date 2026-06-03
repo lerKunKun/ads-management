@@ -76,6 +76,10 @@ export interface EntityListViewProps<T extends EntityRow> {
   scopeLabel?: string;
   emptyText?: string;
   showDatePreset?: boolean;
+  summaryOverride?: {
+    label: string;
+    summary: InsightSummaryTotal;
+  };
 }
 
 type TerminalTaskStatus = 'success' | 'failed' | 'partial' | 'cancelled';
@@ -101,7 +105,7 @@ interface ProgressSnap {
   updatedAt?: number;
 }
 
-interface InsightSummaryTotal {
+export interface InsightSummaryTotal {
   rows: number;
   hasInsights: boolean;
   spend: number;
@@ -169,6 +173,7 @@ export function EntityListView<T extends EntityRow>({
   scopeLabel,
   emptyText,
   showDatePreset = true,
+  summaryOverride,
 }: EntityListViewProps<T>) {
   const [internalSelected, setInternalSelected] = useState<Set<string>>(new Set());
   const [rowPatches, setRowPatches] = useState<Map<string, RowPatch>>(new Map());
@@ -242,6 +247,10 @@ export function EntityListView<T extends EntityRow>({
     () => summarizeInsights(summaryRows, insights),
     [insights, summaryRows],
   );
+  const footerSummary = summaryOverride?.summary ?? summary;
+  const footerSummaryLabel =
+    summaryOverride?.label ??
+    (selected.size > 0 ? `已选 ${summary.rows} 项` : `本页 ${summary.rows} 项`);
   const visibleMetricColumns = METRIC_COLUMNS;
   const tableColumnCount = 4 + (enableBudget ? 1 : 0) + visibleMetricColumns.length + 1;
 
@@ -721,8 +730,8 @@ export function EntityListView<T extends EntityRow>({
           </TableBody>
           <TableFooter className="sticky bottom-0 z-30">
             <SummaryRow
-              mode={selected.size > 0 ? 'selected' : 'page'}
-              summary={summary}
+              label={footerSummaryLabel}
+              summary={footerSummary}
               currency={currency ?? null}
               enableBudget={enableBudget}
             />
@@ -1054,17 +1063,16 @@ function metricLabel(metric: SortMetric): string {
 const SUMMARY_CELL_CLASS = 'sticky bottom-0 z-20 whitespace-nowrap bg-[#B9DEFF]';
 
 function SummaryRow({
-  mode,
+  label,
   summary,
   currency,
   enableBudget,
 }: {
-  mode: 'selected' | 'page';
+  label: string;
   summary: InsightSummaryTotal;
   currency: string | null;
   enableBudget?: boolean;
 }) {
-  const label = mode === 'selected' ? `已选 ${summary.rows} 项` : `本页 ${summary.rows} 项`;
   return (
     <TableRow className="border-t bg-[#B9DEFF] hover:bg-[#B9DEFF]">
       <TableCell className={`${SUMMARY_CELL_CLASS} ${SELECT_COL_CLASS}`} />
@@ -1192,12 +1200,31 @@ function metricValue(insight: InsightsSummary, metric: SortMetric): number {
   return insight[metric];
 }
 
+export function summarizeInsightValues(
+  insights: Record<string, InsightsSummary> | undefined,
+): InsightSummaryTotal {
+  const values = Object.values(insights ?? {});
+  const total = emptyInsightSummaryTotal(values.length);
+  for (const insight of values) addInsightToSummary(total, insight);
+  return finalizeInsightSummary(total);
+}
+
 function summarizeInsights<T extends EntityRow>(
   rows: T[],
   insights: Record<string, InsightsSummary> | undefined,
 ): InsightSummaryTotal {
-  const total: InsightSummaryTotal = {
-    rows: rows.length,
+  const total = emptyInsightSummaryTotal(rows.length);
+  for (const row of rows) {
+    const insight = insights?.[row.id];
+    if (!insight) continue;
+    addInsightToSummary(total, insight);
+  }
+  return finalizeInsightSummary(total);
+}
+
+function emptyInsightSummaryTotal(rows: number): InsightSummaryTotal {
+  return {
+    rows,
     hasInsights: false,
     spend: 0,
     impressions: 0,
@@ -1211,21 +1238,23 @@ function summarizeInsights<T extends EntityRow>(
     roi: 0,
     roiCount: 0,
   };
-  for (const row of rows) {
-    const insight = insights?.[row.id];
-    if (!insight) continue;
-    total.hasInsights = true;
-    total.spend += insight.spend;
-    total.impressions += insight.impressions;
-    total.clicks += insight.clicks;
-    total.orders += insight.orders;
-    total.addToCart += insight.addToCart;
-    total.initiateCheckout += insight.initiateCheckout;
-    if (insight.roi > 0) {
-      total.roi += insight.roi;
-      total.roiCount += 1;
-    }
+}
+
+function addInsightToSummary(total: InsightSummaryTotal, insight: InsightsSummary) {
+  total.hasInsights = true;
+  total.spend += insight.spend;
+  total.impressions += insight.impressions;
+  total.clicks += insight.clicks;
+  total.orders += insight.orders;
+  total.addToCart += insight.addToCart;
+  total.initiateCheckout += insight.initiateCheckout;
+  if (insight.roi > 0 && insight.spend > 0) {
+    total.roi += insight.roi * insight.spend;
+    total.roiCount += insight.spend;
   }
+}
+
+function finalizeInsightSummary(total: InsightSummaryTotal): InsightSummaryTotal {
   total.cpa = total.orders > 0 ? total.spend / total.orders : 0;
   total.cpc = total.clicks > 0 ? total.spend / total.clicks : 0;
   total.cpm = total.impressions > 0 ? (total.spend / total.impressions) * 1000 : 0;

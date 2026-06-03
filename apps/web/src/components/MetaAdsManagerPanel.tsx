@@ -8,7 +8,11 @@ import {
   type InsightsDateSpec,
   type InsightsSummary,
 } from '@/lib/api';
-import { EntityListView, type CopySelection } from '@/components/EntityListView';
+import {
+  EntityListView,
+  summarizeInsightValues,
+  type CopySelection,
+} from '@/components/EntityListView';
 import { DateRangePicker, type DateRangePickerValue } from '@/components/DateRangePicker';
 import { SelectionClearPill } from '@/components/SelectionClearPill';
 
@@ -67,6 +71,10 @@ export function MetaAdsManagerPanel({
     queryKey: ['insights', adAccountId, 'campaign', insightsDateKey],
     queryFn: () => api.insightsByLevel(adAccountId, 'campaign', insightsDateSpec),
   });
+  const adAccountSummary = useMemo(
+    () => summarizeInsightValues(campaignInsights.data),
+    [campaignInsights.data],
+  );
 
   const adsetQueries = useQueries({
     queries: campaignIds.map((campaignId) => ({
@@ -305,6 +313,7 @@ export function MetaAdsManagerPanel({
               onSelectedIdsChange={onCampaignSelectionChange}
               scopeLabel="选中广告系列后切到广告组"
               showDatePreset={false}
+              summaryOverride={{ label: '广告账户数据', summary: adAccountSummary }}
             />
           )}
 
@@ -335,6 +344,7 @@ export function MetaAdsManagerPanel({
                   : '先在广告系列表勾选一个或多个广告系列'
               }
               showDatePreset={false}
+              summaryOverride={{ label: '广告账户数据', summary: adAccountSummary }}
             />
           )}
 
@@ -364,6 +374,7 @@ export function MetaAdsManagerPanel({
                   : '先在广告组表勾选一个或多个广告组'
               }
               showDatePreset={false}
+              summaryOverride={{ label: '广告账户数据', summary: adAccountSummary }}
             />
           )}
         </div>
