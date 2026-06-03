@@ -85,6 +85,7 @@ export async function upsertCampaignSnapshots(
             stopTime: parseMetaDate(row.stopTime),
             metaCreatedTime: parseMetaDate(row.createdTime),
             metaUpdatedTime: parseMetaDate(row.updatedTime),
+            archivedAt: archivedAtFromStatus(row.status, row.effectiveStatus, now),
             lastSyncedAt: now,
             syncHash: syncHash(row),
             updatedAt: now,
@@ -104,6 +105,7 @@ export async function upsertCampaignSnapshots(
             stopTime: dsql`excluded.stop_time`,
             metaCreatedTime: dsql`excluded.meta_created_time`,
             metaUpdatedTime: dsql`excluded.meta_updated_time`,
+            archivedAt: archivedAtUpdateSql(schema.adCampaigns.archivedAt),
             lastSyncedAt: dsql`excluded.last_synced_at`,
             syncHash: dsql`excluded.sync_hash`,
             updatedAt: now,
@@ -144,6 +146,7 @@ export async function upsertAdSetSnapshots(
             startTime: parseMetaDate(row.startTime),
             endTime: parseMetaDate(row.endTime),
             metaUpdatedTime: parseMetaDate(row.updatedTime),
+            archivedAt: archivedAtFromStatus(row.status, row.effectiveStatus, now),
             lastSyncedAt: now,
             syncHash: syncHash(row),
             updatedAt: now,
@@ -165,6 +168,7 @@ export async function upsertAdSetSnapshots(
             startTime: dsql`excluded.start_time`,
             endTime: dsql`excluded.end_time`,
             metaUpdatedTime: dsql`excluded.meta_updated_time`,
+            archivedAt: archivedAtUpdateSql(schema.adSetObjects.archivedAt),
             lastSyncedAt: dsql`excluded.last_synced_at`,
             syncHash: dsql`excluded.sync_hash`,
             updatedAt: now,
@@ -200,6 +204,7 @@ export async function upsertAdSnapshots(
             effectiveStatus: row.effectiveStatus ?? null,
             creativeId: row.creativeId ?? null,
             metaUpdatedTime: parseMetaDate(row.updatedTime),
+            archivedAt: archivedAtFromStatus(row.status, row.effectiveStatus, now),
             lastSyncedAt: now,
             syncHash: syncHash(row),
             updatedAt: now,
@@ -216,6 +221,7 @@ export async function upsertAdSnapshots(
             effectiveStatus: dsql`excluded.effective_status`,
             creativeId: dsql`excluded.creative_id`,
             metaUpdatedTime: dsql`excluded.meta_updated_time`,
+            archivedAt: archivedAtUpdateSql(schema.adObjects.archivedAt),
             lastSyncedAt: dsql`excluded.last_synced_at`,
             syncHash: dsql`excluded.sync_hash`,
             updatedAt: now,
@@ -354,6 +360,7 @@ export async function markLocalStatus(args: {
           name: args.targetId,
           status: args.status,
           effectiveStatus: args.status,
+          archivedAt: archivedAtFromStatus(args.status, args.status, now),
           lastSyncedAt: now,
           updatedAt: now,
         })
@@ -362,6 +369,7 @@ export async function markLocalStatus(args: {
           set: {
             status: args.status,
             effectiveStatus: args.status,
+            archivedAt: archivedAtFromStatus(args.status, args.status, now),
             lastSyncedAt: now,
             updatedAt: now,
           },
@@ -379,6 +387,7 @@ export async function markLocalStatus(args: {
           name: args.targetId,
           status: args.status,
           effectiveStatus: args.status,
+          archivedAt: archivedAtFromStatus(args.status, args.status, now),
           lastSyncedAt: now,
           updatedAt: now,
         })
@@ -387,6 +396,7 @@ export async function markLocalStatus(args: {
           set: {
             status: args.status,
             effectiveStatus: args.status,
+            archivedAt: archivedAtFromStatus(args.status, args.status, now),
             lastSyncedAt: now,
             updatedAt: now,
           },
@@ -404,6 +414,7 @@ export async function markLocalStatus(args: {
         name: args.targetId,
         status: args.status,
         effectiveStatus: args.status,
+        archivedAt: archivedAtFromStatus(args.status, args.status, now),
         lastSyncedAt: now,
         updatedAt: now,
       })
@@ -412,6 +423,7 @@ export async function markLocalStatus(args: {
         set: {
           status: args.status,
           effectiveStatus: args.status,
+          archivedAt: archivedAtFromStatus(args.status, args.status, now),
           lastSyncedAt: now,
           updatedAt: now,
         },
@@ -937,6 +949,33 @@ function parseMetaDate(value: string | undefined): Date | null {
   if (!value) return null;
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function archivedAtFromStatus(
+  status: string | null | undefined,
+  effectiveStatus: string | null | undefined,
+  now: Date,
+): Date | null {
+  return isArchivedOrDeletedStatus(status) || isArchivedOrDeletedStatus(effectiveStatus) ? now : null;
+}
+
+function archivedAtUpdateSql(
+  currentArchivedAt:
+    | typeof schema.adCampaigns.archivedAt
+    | typeof schema.adSetObjects.archivedAt
+    | typeof schema.adObjects.archivedAt,
+) {
+  return dsql`CASE
+    WHEN excluded.status IN ('ARCHIVED', 'DELETED')
+      OR excluded.effective_status IN ('ARCHIVED', 'DELETED')
+    THEN COALESCE(${currentArchivedAt}, excluded.archived_at, now())
+    ELSE NULL
+  END`;
+}
+
+function isArchivedOrDeletedStatus(status: string | null | undefined): boolean {
+  const normalized = (status ?? '').trim().toUpperCase();
+  return normalized === 'ARCHIVED' || normalized === 'DELETED';
 }
 
 function syncHash(value: unknown): string {

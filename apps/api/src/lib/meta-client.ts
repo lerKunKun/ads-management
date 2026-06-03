@@ -79,6 +79,45 @@ const ACCT_STATUS_MAP: Record<number, 'active' | 'disabled' | 'closed' | 'pendin
 // ===== Campaign / AdSet / Ad =====
 export type EntityStatus = 'ACTIVE' | 'PAUSED' | 'ARCHIVED' | 'DELETED';
 
+const META_COMMON_EFFECTIVE_STATUS_FILTER = [
+  'ACTIVE',
+  'PAUSED',
+  'ARCHIVED',
+  'IN_PROCESS',
+  'WITH_ISSUES',
+  'PENDING_REVIEW',
+  'DISAPPROVED',
+  'PREAPPROVED',
+  'PENDING_BILLING_INFO',
+  'CAMPAIGN_PAUSED',
+];
+const META_CAMPAIGN_EFFECTIVE_STATUS_FILTER = [
+  ...META_COMMON_EFFECTIVE_STATUS_FILTER,
+  'ADSET_PAUSED',
+];
+const META_ADSET_EFFECTIVE_STATUS_FILTER = [
+  ...META_COMMON_EFFECTIVE_STATUS_FILTER,
+  'ADSET_PAUSED',
+  'ADSET_HAS_NO_ADS',
+  'ADSET_HAS_NO_ACTIVE_ADS',
+];
+const META_AD_EFFECTIVE_STATUS_FILTER = [
+  ...META_COMMON_EFFECTIVE_STATUS_FILTER,
+  'ADSET_PAUSED',
+  'AD_PAUSED',
+  'AD_HAS_NO_CREATIVE',
+];
+
+function effectiveStatusFilterForLevel(level: 'campaign' | 'adset' | 'ad'): string[] {
+  if (level === 'campaign') return META_CAMPAIGN_EFFECTIVE_STATUS_FILTER;
+  if (level === 'adset') return META_ADSET_EFFECTIVE_STATUS_FILTER;
+  return META_AD_EFFECTIVE_STATUS_FILTER;
+}
+
+function effectiveStatusQueryForLevel(level: 'campaign' | 'adset' | 'ad'): string {
+  return JSON.stringify(effectiveStatusFilterForLevel(level));
+}
+
 export interface MetaCampaignRaw {
   id: string;
   name?: string;
@@ -268,6 +307,16 @@ function insightsDateQuery(dateSpec: InsightsDateSpec): Record<string, string> {
   };
 }
 
+function insightsStatusFiltering(level: 'campaign' | 'adset' | 'ad'): string {
+  return JSON.stringify([
+    {
+      field: `${level}.effective_status`,
+      operator: 'IN',
+      value: effectiveStatusFilterForLevel(level),
+    },
+  ]);
+}
+
 const ORDER_ACTION_GROUPS = [
   ['omni_purchase'],
   ['purchase'],
@@ -402,6 +451,32 @@ async function graph<T>(
     );
   }
   return JSON.parse(text) as T;
+}
+
+async function graphWithStatusFallback<T>(
+  path: string,
+  token: string,
+  init: {
+    query: Record<string, string>;
+  },
+  fallbackKeys: string[],
+): Promise<T> {
+  try {
+    return await graph<T>(path, token, init);
+  } catch (err) {
+    if (!(err instanceof MetaApiError) || err.isTokenInvalid || err.isRateLimited) throw err;
+    const query = { ...init.query };
+    let changed = false;
+    for (const key of fallbackKeys) {
+      if (key in query) {
+        delete query[key];
+        changed = true;
+      }
+    }
+    if (!changed) throw err;
+    console.warn(`[meta] all-status query failed for ${path}, retrying without status filter: ${err.message}`);
+    return graph<T>(path, token, { query });
+  }
 }
 
 async function graphRoot<T>(
@@ -1418,13 +1493,15 @@ export const meta = {
       const q: Record<string, string> = {
         fields:
           'id,name,status,effective_status,objective,daily_budget,lifetime_budget,start_time,stop_time,updated_time,created_time',
+        effective_status: effectiveStatusQueryForLevel('campaign'),
         limit: String(limit),
       };
       if (after) q['after'] = after;
-      const page = await graph<MetaPagedEnvelope<MetaCampaignRaw>>(
+      const page = await graphWithStatusFallback<MetaPagedEnvelope<MetaCampaignRaw>>(
         `/${metaActId}/campaigns`,
         token,
         { query: q },
+        ['effective_status'],
       );
       for (const c of page.data) {
         out.push({
@@ -1629,13 +1706,15 @@ export const meta = {
       const q: Record<string, string> = {
         fields:
           'id,name,status,effective_status,campaign_id,daily_budget,lifetime_budget,optimization_goal,billing_event,bid_amount,start_time,end_time,updated_time',
+        effective_status: effectiveStatusQueryForLevel('adset'),
         limit: String(limit),
       };
       if (after) q['after'] = after;
-      const page = await graph<MetaPagedEnvelope<MetaAdSetRaw>>(
+      const page = await graphWithStatusFallback<MetaPagedEnvelope<MetaAdSetRaw>>(
         `/${campaignId}/adsets`,
         token,
         { query: q },
+        ['effective_status'],
       );
       for (const a of page.data) {
         out.push({
@@ -1687,10 +1766,16 @@ export const meta = {
       const q: Record<string, string> = {
         fields:
           'id,name,status,effective_status,campaign_id,daily_budget,lifetime_budget,optimization_goal,billing_event,bid_amount,start_time,end_time,updated_time',
+        effective_status: effectiveStatusQueryForLevel('adset'),
         limit: String(limit),
       };
       if (after) q['after'] = after;
-      const page = await graph<MetaPagedEnvelope<MetaAdSetRaw>>(accountPath, token, { query: q });
+      const page = await graphWithStatusFallback<MetaPagedEnvelope<MetaAdSetRaw>>(
+        accountPath,
+        token,
+        { query: q },
+        ['effective_status'],
+      );
       for (const a of page.data) {
         out.push({
           id: a.id,
@@ -1819,10 +1904,16 @@ export const meta = {
     do {
       const q: Record<string, string> = {
         fields: 'id,name,status,effective_status,adset_id,campaign_id,creative{id},updated_time',
+        effective_status: effectiveStatusQueryForLevel('ad'),
         limit: String(limit),
       };
       if (after) q['after'] = after;
-      const page = await graph<MetaPagedEnvelope<MetaAdRaw>>(`/${adsetId}/ads`, token, { query: q });
+      const page = await graphWithStatusFallback<MetaPagedEnvelope<MetaAdRaw>>(
+        `/${adsetId}/ads`,
+        token,
+        { query: q },
+        ['effective_status'],
+      );
       for (const a of page.data) {
         out.push({
           id: a.id,
@@ -1865,10 +1956,16 @@ export const meta = {
     do {
       const q: Record<string, string> = {
         fields: 'id,name,status,effective_status,adset_id,campaign_id,creative{id},updated_time',
+        effective_status: effectiveStatusQueryForLevel('ad'),
         limit: String(limit),
       };
       if (after) q['after'] = after;
-      const page = await graph<MetaPagedEnvelope<MetaAdRaw>>(accountPath, token, { query: q });
+      const page = await graphWithStatusFallback<MetaPagedEnvelope<MetaAdRaw>>(
+        accountPath,
+        token,
+        { query: q },
+        ['effective_status'],
+      );
       for (const a of page.data) {
         out.push({
           id: a.id,
@@ -2018,6 +2115,7 @@ export const meta = {
     const baseQuery: Record<string, string> = {
       ...insightsDateQuery(dateSpec),
       level,
+      filtering: insightsStatusFiltering(level),
       fields:
         (level === 'campaign'
           ? 'campaign_id,'
@@ -2032,9 +2130,9 @@ export const meta = {
     do {
       const query = { ...baseQuery };
       if (after) query['after'] = after;
-      const page = await graph<
+      const page = await graphWithStatusFallback<
         MetaPagedEnvelope<MetaInsightsRaw & { campaign_id?: string; adset_id?: string; ad_id?: string }>
-      >(`/${metaActId}/insights`, token, { query });
+      >(`/${metaActId}/insights`, token, { query }, ['filtering']);
       for (const row of page.data) {
         const key = (row.campaign_id ?? row.adset_id ?? row.ad_id ?? '') as string;
         if (!key) continue;

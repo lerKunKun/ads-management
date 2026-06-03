@@ -145,7 +145,11 @@ const AD_ERROR_STATUS_FILTER = 'group:AD_ERROR';
 const NO_ADS_STATUS_FILTER = 'group:NO_ADS';
 const CONFIGURED_STATUS_FILTER_PREFIX = 'configured:';
 const EFFECTIVE_STATUS_FILTER_PREFIX = 'effective:';
-const CONFIGURED_STATUS_OPTIONS = ['ACTIVE', 'PAUSED', 'ARCHIVED', 'DELETED'];
+const STATUS_OPTION_ACTIVE = 'group:ACTIVE';
+const STATUS_OPTION_PAUSED = 'group:PAUSED';
+const STATUS_OPTION_ARCHIVED = 'group:ARCHIVED';
+const STATUS_OPTION_DELIVERING = 'group:DELIVERING';
+const STATUS_OPTION_STOPPED = 'group:STOPPED';
 
 function isTerminalTaskStatus(status: string): status is TerminalTaskStatus {
   return (TASK_TERMINAL as readonly string[]).includes(status);
@@ -237,12 +241,31 @@ export function EntityListView<T extends EntityRow>({
   );
 
   const pager = usePagination(sortedRows, pageSize);
-  const allIds = useMemo(() => pager.pageItems.map((row) => row.id), [pager.pageItems]);
+  const rowById = useMemo(
+    () => new Map(patchedRows.map((row) => [row.id, row])),
+    [patchedRows],
+  );
+  const selectablePageItems = useMemo(
+    () => pager.pageItems.filter((row) => !isReadOnlyEntity(row)),
+    [pager.pageItems],
+  );
+  const allIds = useMemo(() => selectablePageItems.map((row) => row.id), [selectablePageItems]);
+  const selectedOperableIds = useMemo(
+    () => Array.from(selected).filter((id) => {
+      const row = rowById.get(id);
+      return row && !isReadOnlyEntity(row);
+    }),
+    [rowById, selected],
+  );
+  const selectedOperableIdSet = useMemo(
+    () => new Set(selectedOperableIds),
+    [selectedOperableIds],
+  );
   const allSelected = allIds.length > 0 && allIds.every((id) => selected.has(id));
   const summaryRows = useMemo(() => {
-    if (selected.size === 0) return pager.pageItems;
-    return patchedRows.filter((row) => selected.has(row.id));
-  }, [pager.pageItems, patchedRows, selected]);
+    if (selectedOperableIds.length === 0) return pager.pageItems;
+    return patchedRows.filter((row) => selectedOperableIdSet.has(row.id));
+  }, [pager.pageItems, patchedRows, selectedOperableIdSet, selectedOperableIds.length]);
   const summary = useMemo(
     () => summarizeInsights(summaryRows, insights),
     [insights, summaryRows],
@@ -250,7 +273,7 @@ export function EntityListView<T extends EntityRow>({
   const footerSummary = summaryOverride?.summary ?? summary;
   const footerSummaryLabel =
     summaryOverride?.label ??
-    (selected.size > 0 ? `已选 ${summary.rows} 项` : `本页 ${summary.rows} 项`);
+    (selectedOperableIds.length > 0 ? `已选 ${summary.rows} 项` : `本页 ${summary.rows} 项`);
   const visibleMetricColumns = METRIC_COLUMNS;
   const tableColumnCount = 4 + (enableBudget ? 1 : 0) + visibleMetricColumns.length + 1;
 
@@ -265,6 +288,8 @@ export function EntityListView<T extends EntityRow>({
   }
 
   function toggle(id: string) {
+    const row = rowById.get(id);
+    if (row && isReadOnlyEntity(row)) return;
     updateSelected((current) => {
       const next = new Set(current);
       if (next.has(id)) next.delete(id);
@@ -362,7 +387,7 @@ export function EntityListView<T extends EntityRow>({
   function runBatch(
     action: string,
     params: Record<string, unknown>,
-    ids = Array.from(selected),
+    ids = selectedOperableIds,
     targetLayer: EntityLayer = layer,
   ) {
     if (ids.length === 0) return;
@@ -378,12 +403,12 @@ export function EntityListView<T extends EntityRow>({
   }
 
   function batchCopyClicked() {
-    if (selected.size === 0) return;
-    const selectedIds = Array.from(selected);
+    if (selectedOperableIds.length === 0) return;
+    const selectedIds = selectedOperableIds;
     const copySelection: CopySelection = {
       layer,
       ids: selectedIds,
-      hint: `共 ${selected.size} 个来源`,
+      hint: `共 ${selectedIds.length} 个来源`,
     };
     setCopyOpen(resolveBatchCopySelection?.(copySelection) ?? copySelection);
   }
@@ -405,7 +430,7 @@ export function EntityListView<T extends EntityRow>({
     value === 0 ? '-' : `${value.toFixed(2)}${currency ? ` ${currency}` : ''}`;
 
   const layerActionLabel = layer === 'campaign' ? '广告系列' : layer === 'adset' ? '广告组' : '广告';
-  const selectedCrossesFilter = selected.size > 0 && filteredRows.length !== rows.length;
+  const selectedCrossesFilter = selectedOperableIds.length > 0 && filteredRows.length !== rows.length;
   const canOperateAdAccount =
     me.data?.scope.bypass || me.data?.scope.adAccounts.includes(adAccountId) || false;
   const hasPermission = (code: string) => me.data?.permissions.includes(code) ?? false;
@@ -468,7 +493,7 @@ export function EntityListView<T extends EntityRow>({
               size="sm"
               variant="outline"
               className="w-full gap-1.5 sm:w-auto"
-              disabled={selected.size === 0 || batch.isPending || !canChangeStatus}
+              disabled={selectedOperableIds.length === 0 || batch.isPending || !canChangeStatus}
               onClick={() => runBatch(`${layer}:status`, { status: 'PAUSED' })}
             >
               <Pause className="h-4 w-4" aria-hidden="true" />
@@ -477,7 +502,7 @@ export function EntityListView<T extends EntityRow>({
             <Button
               size="sm"
               className="w-full gap-1.5 sm:w-auto"
-              disabled={selected.size === 0 || batch.isPending || !canChangeStatus}
+              disabled={selectedOperableIds.length === 0 || batch.isPending || !canChangeStatus}
               onClick={() => runBatch(`${layer}:status`, { status: 'ACTIVE' })}
             >
               <Play className="h-4 w-4" aria-hidden="true" />
@@ -488,7 +513,7 @@ export function EntityListView<T extends EntityRow>({
                 size="sm"
                 variant="outline"
                 className="w-full gap-1.5 sm:w-auto"
-                disabled={selected.size === 0 || batch.isPending || !canChangeBudget}
+                disabled={selectedOperableIds.length === 0 || batch.isPending || !canChangeBudget}
                 onClick={() => setBatchBudgetOpen(true)}
               >
                 <Pencil className="h-4 w-4" aria-hidden="true" />
@@ -503,7 +528,7 @@ export function EntityListView<T extends EntityRow>({
                 size="sm"
                 variant="outline"
                 className="w-full gap-1.5 sm:w-auto"
-                disabled={selected.size === 0 || batch.isPending || !canCopy}
+                disabled={selectedOperableIds.length === 0 || batch.isPending || !canCopy}
                 onClick={batchCopyClicked}
               >
                 <Copy className="h-4 w-4" aria-hidden="true" />
@@ -514,9 +539,9 @@ export function EntityListView<T extends EntityRow>({
               size="sm"
               variant="destructive"
               className="w-full gap-1.5 sm:w-auto"
-              disabled={selected.size === 0 || batch.isPending || !canDelete}
+              disabled={selectedOperableIds.length === 0 || batch.isPending || !canDelete}
               onClick={() => {
-                if (!confirm(`批量删除 ${selected.size} 个${layerActionLabel}？`)) return;
+                if (!confirm(`批量删除 ${selectedOperableIds.length} 个${layerActionLabel}？`)) return;
                 runBatch(`${layer}:delete`, { hard: false });
               }}
             >
@@ -567,8 +592,9 @@ export function EntityListView<T extends EntityRow>({
                 <label className="flex min-h-10 cursor-pointer items-center justify-center">
                   <input
                     type="checkbox"
-                    className="h-5 w-5 cursor-pointer accent-primary"
+                    className="h-5 w-5 cursor-pointer accent-primary disabled:cursor-not-allowed disabled:opacity-50"
                     checked={allSelected}
+                    disabled={allIds.length === 0}
                     onChange={toggleAll}
                     aria-label={`选择全部${layerLabel}`}
                   />
@@ -602,17 +628,29 @@ export function EntityListView<T extends EntityRow>({
             )}
             {pager.pageItems.map((row) => {
               const insight = insights?.[row.id];
-              const isSelected = selected.has(row.id);
-              const archived = row.status === 'ARCHIVED' || row.status === 'DELETED';
+              const readOnly = isReadOnlyEntity(row);
+              const isSelected = !readOnly && selected.has(row.id);
               const drill = onRowOpen ? undefined : drillTo?.(row);
               return (
-                <TableRow key={row.id} className={isSelected ? 'bg-muted/30' : ''}>
+                <TableRow
+                  key={row.id}
+                  className={[
+                    isSelected ? 'bg-muted/30' : '',
+                    readOnly ? 'bg-muted/40 text-muted-foreground opacity-70' : '',
+                  ].filter(Boolean).join(' ')}
+                >
                   <TableCell data-label="选择" className={SELECT_COL_CLASS}>
-                    <label className="flex min-h-10 cursor-pointer items-center justify-center">
+                    <label
+                      className={[
+                        'flex min-h-10 items-center justify-center',
+                        readOnly ? 'cursor-not-allowed' : 'cursor-pointer',
+                      ].join(' ')}
+                    >
                       <input
                         type="checkbox"
-                        className="h-5 w-5 cursor-pointer accent-primary"
+                        className="h-5 w-5 cursor-pointer accent-primary disabled:cursor-not-allowed disabled:opacity-50"
                         checked={isSelected}
+                        disabled={readOnly}
                         onChange={() => toggle(row.id)}
                         aria-label={`选择${row.name}`}
                       />
@@ -622,7 +660,7 @@ export function EntityListView<T extends EntityRow>({
                     <Switch
                       size="sm"
                       checked={row.status === 'ACTIVE'}
-                      disabled={archived || setStatus.isPending || !canChangeStatus}
+                      disabled={readOnly || setStatus.isPending || !canChangeStatus}
                       onCheckedChange={() =>
                         setStatus.mutate({ id: row.id, status: statusFromSwitch(row.status) })
                       }
@@ -633,13 +671,17 @@ export function EntityListView<T extends EntityRow>({
                     {onRowOpen ? (
                       <button
                         type="button"
-                        className="block max-w-full whitespace-normal break-words text-left text-primary hover:underline"
+                        className={[
+                          'block max-w-full whitespace-normal break-words text-left',
+                          readOnly ? 'text-muted-foreground' : 'text-primary hover:underline',
+                        ].join(' ')}
                         title={row.name}
+                        disabled={readOnly}
                         onClick={() => onRowOpen(row)}
                       >
                         {row.name}
                       </button>
-                    ) : drill ? (
+                    ) : drill && !readOnly ? (
                       <Link
                         to={drill.to}
                         params={drill.params}
@@ -666,7 +708,7 @@ export function EntityListView<T extends EntityRow>({
                             ...(row.dailyBudget !== undefined ? { daily: row.dailyBudget } : {}),
                           })
                         }
-                        disabled={archived || !canChangeBudget}
+                        disabled={readOnly || !canChangeBudget}
                         className="block max-w-full whitespace-normal break-words text-left hover:underline disabled:opacity-50"
                       >
                         {fmtBudget(row.dailyBudget)}
@@ -704,7 +746,7 @@ export function EntityListView<T extends EntityRow>({
                           size="sm"
                           variant="outline"
                           className="h-9 px-2.5 text-sm"
-                          disabled={archived || batch.isPending || !canCopy}
+                          disabled={readOnly || batch.isPending || !canCopy}
                           onClick={() => singleCopyClicked(row)}
                         >
                           复制
@@ -714,7 +756,7 @@ export function EntityListView<T extends EntityRow>({
                         size="sm"
                         variant="destructive"
                         className="h-9 px-2.5 text-sm"
-                        disabled={archived || deleteMut.isPending || !canDelete}
+                        disabled={readOnly || deleteMut.isPending || !canDelete}
                         onClick={() => {
                           if (!confirm(`删除 "${row.name}"？`)) return;
                           deleteMut.mutate(row.id);
@@ -768,7 +810,7 @@ export function EntityListView<T extends EntityRow>({
         open={batchBudgetOpen}
         layer={layer}
         currency={currency ?? null}
-        target={{ id: '_batch_', name: `批量 ${selected.size} 个` }}
+        target={{ id: '_batch_', name: `批量 ${selectedOperableIds.length} 个` }}
         onCancel={() => setBatchBudgetOpen(false)}
         submitting={batch.isPending}
         onSubmit={(daily) => {
@@ -941,13 +983,12 @@ function buildStatusFilterOptions(rows: EntityRow[]): Array<{ value: string; lab
   const options: Array<{ value: string; label: string }> = [{ value: '', label: '全部' }];
   const seenValues = new Set(options.map((option) => option.value));
 
-  for (const status of CONFIGURED_STATUS_OPTIONS) {
-    addStatusFilterOption(options, seenValues, {
-      value: `${CONFIGURED_STATUS_FILTER_PREFIX}${status}`,
-      label: metaEntityStatusLabel(status),
-    });
-  }
-
+  addStatusFilterOption(options, seenValues, { value: STATUS_OPTION_ACTIVE, label: '启用' });
+  addStatusFilterOption(options, seenValues, { value: STATUS_OPTION_PAUSED, label: '暂停' });
+  addStatusFilterOption(options, seenValues, {
+    value: STATUS_OPTION_ARCHIVED,
+    label: '已归档/删除',
+  });
   addStatusFilterOption(options, seenValues, {
     value: AD_ERROR_STATUS_FILTER,
     label: '广告错误',
@@ -956,12 +997,14 @@ function buildStatusFilterOptions(rows: EntityRow[]): Array<{ value: string; lab
     value: NO_ADS_STATUS_FILTER,
     label: '无广告',
   });
+  addStatusFilterOption(options, seenValues, { value: STATUS_OPTION_DELIVERING, label: '投放中' });
+  addStatusFilterOption(options, seenValues, { value: STATUS_OPTION_STOPPED, label: '已暂停' });
 
   const effectiveStatuses = Array.from(
     new Set(rows.map((row) => normalizeStatus(row.effectiveStatus)).filter(Boolean)),
   ).sort();
   for (const status of effectiveStatuses) {
-    if (isAdErrorEffectiveStatus(status) || isNoAdsEffectiveStatus(status)) continue;
+    if (isHiddenEffectiveStatusOption(status)) continue;
     addStatusFilterOption(options, seenValues, {
       value: `${EFFECTIVE_STATUS_FILTER_PREFIX}${status}`,
       label: metaEffectiveStatusLabel(status),
@@ -991,11 +1034,26 @@ function matchesStatusFilter(row: EntityRow, filter: string): boolean {
   if (filter.startsWith(EFFECTIVE_STATUS_FILTER_PREFIX)) {
     return effectiveStatus === filter.slice(EFFECTIVE_STATUS_FILTER_PREFIX.length);
   }
+  if (filter === STATUS_OPTION_ACTIVE) {
+    return row.status === 'ACTIVE';
+  }
+  if (filter === STATUS_OPTION_PAUSED) {
+    return row.status === 'PAUSED';
+  }
+  if (filter === STATUS_OPTION_ARCHIVED) {
+    return isArchivedOrDeletedStatus(row.status) || isArchivedOrDeletedStatus(effectiveStatus);
+  }
   if (filter === AD_ERROR_STATUS_FILTER) {
     return isAdErrorEffectiveStatus(effectiveStatus);
   }
   if (filter === NO_ADS_STATUS_FILTER) {
     return isNoAdsEffectiveStatus(effectiveStatus);
+  }
+  if (filter === STATUS_OPTION_DELIVERING) {
+    return effectiveStatus === 'ACTIVE';
+  }
+  if (filter === STATUS_OPTION_STOPPED) {
+    return isPausedEffectiveStatus(effectiveStatus);
   }
 
   return row.status === filter || effectiveStatus === filter;
@@ -1003,6 +1061,31 @@ function matchesStatusFilter(row: EntityRow, filter: string): boolean {
 
 function normalizeStatus(status: string | null | undefined): string {
   return (status ?? '').trim().toUpperCase();
+}
+
+function isReadOnlyEntity(row: EntityRow): boolean {
+  const status = normalizeStatus(row.status);
+  const effectiveStatus = normalizeStatus(row.effectiveStatus);
+  return isArchivedOrDeletedStatus(status) || isArchivedOrDeletedStatus(effectiveStatus);
+}
+
+function isArchivedOrDeletedStatus(status: string | null | undefined): boolean {
+  const normalized = normalizeStatus(status);
+  return normalized === 'ARCHIVED' || normalized === 'DELETED';
+}
+
+function isPausedEffectiveStatus(status: string): boolean {
+  return status === 'PAUSED' || status.includes('PAUSED');
+}
+
+function isHiddenEffectiveStatusOption(status: string): boolean {
+  return (
+    status === 'ACTIVE' ||
+    isPausedEffectiveStatus(status) ||
+    isArchivedOrDeletedStatus(status) ||
+    isAdErrorEffectiveStatus(status) ||
+    isNoAdsEffectiveStatus(status)
+  );
 }
 
 function isAdErrorEffectiveStatus(status: string): boolean {
