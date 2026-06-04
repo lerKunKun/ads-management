@@ -107,8 +107,8 @@ export function summarizeAdAccountMetricTotals<T extends { id: string }>(
     total.orders += item.orders;
     total.addToCart += item.addToCart;
     total.initiateCheckout += item.initiateCheckout;
-    if (item.roiCount > 0 && item.spend > 0) {
-      total.roi += item.roi * item.spend;
+    if (item.spend > 0) {
+      total.roi += Math.max(item.roi, 0) * item.spend;
       total.roiCount += item.spend;
     }
   }
@@ -201,8 +201,8 @@ function summarizeAccountInsights(rows: Record<string, InsightsSummary>): Accoun
     total.orders += row.orders;
     total.addToCart += row.addToCart;
     total.initiateCheckout += row.initiateCheckout;
-    if (row.roi > 0 && row.spend > 0) {
-      total.roi += row.roi * row.spend;
+    if (row.spend > 0) {
+      total.roi += Math.max(row.roi, 0) * row.spend;
       total.roiCount += row.spend;
     }
   }

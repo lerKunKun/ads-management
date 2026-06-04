@@ -23,6 +23,7 @@ import { writeAudit } from '../iam/auth-service';
 import { resolveAdAccount, markTokenInvalid } from '../account/token-service';
 import { checkScope } from '../../middleware/auth';
 import { HttpError, Forbidden, NotFound } from '../../lib/http-error';
+import { redis } from '../../lib/redis';
 import type { AuthPrincipal } from '../iam/auth-service';
 import type { RenameOptions, CopyInput } from '@ads/shared';
 import {
@@ -32,6 +33,8 @@ import {
   hydrateAdsWithLocalAdSetSchedule,
   markSyncFailed,
   readLocalCampaignPage,
+  listLocalAds,
+  listLocalAdSets,
   readFreshAds,
   readFreshAdSets,
   readFreshCampaigns,
@@ -132,6 +135,8 @@ export interface PagedListResult<T> {
 }
 
 const campaignSyncInFlight = new Set<string>();
+const adsetSyncInFlight = new Set<string>();
+const adSyncInFlight = new Set<string>();
 
 // =================== Campaign list / 单操作 ===================
 export async function listCampaigns(
@@ -317,10 +322,23 @@ export async function listAdSets(
   options: ListOptions = {},
 ): Promise<MetaAdSet[]> {
   assertScope(principal, adAccountId);
-  const cached = options.force
-    ? null
-    : await readFreshAdSets(principal.companyId, adAccountId, campaignId);
-  if (cached) return cached;
+  if (!options.force) {
+    const cached = await readFreshAdSets(principal.companyId, adAccountId, campaignId);
+    if (cached) return cached;
+    const localRows = await listLocalAdSets(principal.companyId, adAccountId, campaignId);
+    if (localRows.length > 0) {
+      void refreshAdSetsInBackground(principal.companyId, adAccountId, campaignId);
+      return localRows;
+    }
+  }
+  return fetchAndStoreAdSets(principal, adAccountId, campaignId);
+}
+
+async function fetchAndStoreAdSets(
+  principal: AuthPrincipal,
+  adAccountId: string,
+  campaignId: string,
+): Promise<MetaAdSet[]> {
   const ctx = await resolveAdAccount(principal.companyId, adAccountId);
   await assertTargetOwnership(principal, ctx, adAccountId, 'campaign', campaignId);
   try {
@@ -330,6 +348,43 @@ export async function listAdSets(
   } catch (err) {
     await handleMetaError(err, principal.companyId, ctx.fbAccountId);
     throw err;
+  }
+}
+
+async function refreshAdSetsInBackground(
+  companyId: string,
+  adAccountId: string,
+  campaignId: string,
+): Promise<void> {
+  const key = syncKey(companyId, `${adAccountId}:adset:${campaignId}`);
+  if (adsetSyncInFlight.has(key)) return;
+  adsetSyncInFlight.add(key);
+  try {
+    const ctx = await resolveAdAccount(companyId, adAccountId);
+    const rows = await meta.listAdSets(ctx.token, campaignId);
+    await upsertAdSetSnapshots(companyId, adAccountId, campaignId, rows);
+  } catch (err) {
+    await markSyncFailed({
+      companyId,
+      adAccountId,
+      objectType: 'adset',
+      parentMetaId: campaignId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    console.error('[adset-sync] background refresh failed', {
+      companyId,
+      adAccountId,
+      campaignId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    try {
+      const ctx = await resolveAdAccount(companyId, adAccountId);
+      await handleMetaError(err, companyId, ctx.fbAccountId);
+    } catch {
+      // Local data has already been returned; keep the failure in sync state/logs.
+    }
+  } finally {
+    adsetSyncInFlight.delete(key);
   }
 }
 
@@ -435,8 +490,23 @@ export async function listAds(
   options: ListOptions = {},
 ): Promise<MetaAd[]> {
   assertScope(principal, adAccountId);
-  const cached = options.force ? null : await readFreshAds(principal.companyId, adAccountId, adsetId);
-  if (cached) return cached;
+  if (!options.force) {
+    const cached = await readFreshAds(principal.companyId, adAccountId, adsetId);
+    if (cached) return cached;
+    const localRows = await listLocalAds(principal.companyId, adAccountId, adsetId);
+    if (localRows.length > 0) {
+      void refreshAdsInBackground(principal.companyId, adAccountId, adsetId);
+      return hydrateAdsWithLocalAdSetSchedule(principal.companyId, adAccountId, localRows);
+    }
+  }
+  return fetchAndStoreAds(principal, adAccountId, adsetId);
+}
+
+async function fetchAndStoreAds(
+  principal: AuthPrincipal,
+  adAccountId: string,
+  adsetId: string,
+): Promise<MetaAd[]> {
   const ctx = await resolveAdAccount(principal.companyId, adAccountId);
   await assertTargetOwnership(principal, ctx, adAccountId, 'adset', adsetId);
   try {
@@ -446,6 +516,43 @@ export async function listAds(
   } catch (err) {
     await handleMetaError(err, principal.companyId, ctx.fbAccountId);
     throw err;
+  }
+}
+
+async function refreshAdsInBackground(
+  companyId: string,
+  adAccountId: string,
+  adsetId: string,
+): Promise<void> {
+  const key = syncKey(companyId, `${adAccountId}:ad:${adsetId}`);
+  if (adSyncInFlight.has(key)) return;
+  adSyncInFlight.add(key);
+  try {
+    const ctx = await resolveAdAccount(companyId, adAccountId);
+    const rows = await meta.listAds(ctx.token, adsetId);
+    await upsertAdSnapshots(companyId, adAccountId, adsetId, rows);
+  } catch (err) {
+    await markSyncFailed({
+      companyId,
+      adAccountId,
+      objectType: 'ad',
+      parentMetaId: adsetId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    console.error('[ad-sync] background refresh failed', {
+      companyId,
+      adAccountId,
+      adsetId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    try {
+      const ctx = await resolveAdAccount(companyId, adAccountId);
+      await handleMetaError(err, companyId, ctx.fbAccountId);
+    } catch {
+      // Local data has already been returned; keep the failure in sync state/logs.
+    }
+  } finally {
+    adSyncInFlight.delete(key);
   }
 }
 
@@ -659,11 +766,23 @@ export async function getInsightsByLevel(
   level: 'campaign' | 'adset' | 'ad',
   dateSpec: InsightsDateSpec,
   parentId?: string,
+  options: { force?: boolean } = {},
 ): Promise<Record<string, InsightsSummary>> {
   assertScope(principal, adAccountId);
   const localMock = await resolveLocalMockAdAccount(principal.companyId, adAccountId);
   if (localMock) return getLocalMockInsightsByLevel(localMock, level, dateSpec, parentId);
   const ctx = await resolveAdAccount(principal.companyId, adAccountId);
+  const cacheKey = insightsCacheKey(principal.companyId, adAccountId, level, dateSpec, parentId);
+  if (!options.force) {
+    const cached = await redis.get(cacheKey);
+    if (cached) {
+      try {
+        return JSON.parse(cached) as Record<string, InsightsSummary>;
+      } catch {
+        await redis.del(cacheKey);
+      }
+    }
+  }
   try {
     const objectId = await resolveInsightsObjectId(
       principal,
@@ -672,11 +791,38 @@ export async function getInsightsByLevel(
       level,
       parentId,
     );
-    return await meta.getInsightsByChild(ctx.token, objectId, level, dateSpec);
+    const data = await meta.getInsightsByChild(ctx.token, objectId, level, dateSpec);
+    await redis.set(cacheKey, JSON.stringify(data), 'EX', insightsCacheTtlSec(dateSpec));
+    return data;
   } catch (err) {
     await handleMetaError(err, principal.companyId, ctx.fbAccountId);
     throw err;
   }
+}
+
+function insightsCacheKey(
+  companyId: string,
+  adAccountId: string,
+  level: 'campaign' | 'adset' | 'ad',
+  dateSpec: InsightsDateSpec,
+  parentId?: string,
+): string {
+  const dateKey =
+    typeof dateSpec === 'string'
+      ? dateSpec
+      : `${dateSpec.since}_${dateSpec.until}`;
+  return `insights:${companyId}:${adAccountId}:${level}:${parentId ?? 'account'}:${dateKey}`;
+}
+
+function insightsCacheTtlSec(dateSpec: InsightsDateSpec): number {
+  if (dateSpec === 'today') return 120;
+  if (dateSpec === 'yesterday') return 300;
+  if (dateSpec === 'last_7d') return 600;
+  if (dateSpec === 'last_30d') return 900;
+  if (dateSpec === 'maximum') return 1800;
+
+  const today = new Date().toISOString().slice(0, 10);
+  return dateSpec.until >= today ? 120 : 1800;
 }
 
 async function resolveInsightsObjectId(

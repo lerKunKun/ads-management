@@ -53,6 +53,22 @@ async function invalidatePrincipalCache(userId: string): Promise<void> {
   if (keys.length > 0) await redis.del(...keys);
 }
 
+async function grantSelfAuthorizedFbAccount(
+  tx: typeof db,
+  principal: AuthPrincipal,
+  fbAccountId: string,
+): Promise<void> {
+  await tx
+    .insert(schema.userResourceGrants)
+    .values({
+      userId: principal.userId,
+      resourceType: 'fb_account',
+      resourceId: fbAccountId,
+      grantedBy: principal.userId,
+    })
+    .onConflictDoNothing();
+}
+
 async function resolveEffectiveScopeInTenant(
   tx: typeof db,
   principal: AuthPrincipal,
@@ -217,15 +233,9 @@ export async function bindFbAccount(args: {
       synced++;
     }
 
-    await tx
-      .insert(schema.userResourceGrants)
-      .values({
-        userId: principal.userId,
-        resourceType: 'fb_account',
-        resourceId: fbAccountId,
-        grantedBy: principal.userId,
-      })
-      .onConflictDoNothing();
+    // 用户自己完成 OAuth 授权后，只自动获得该 FB 个号权限。
+    // 个号下广告账户仍不自动授权，继续走权限申请审批。
+    await grantSelfAuthorizedFbAccount(tx, principal, fbAccountId);
 
     return { fbAccountId, adAccountsSynced: synced };
   }).then(async (res) => {

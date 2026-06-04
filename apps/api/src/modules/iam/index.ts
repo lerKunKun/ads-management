@@ -3,6 +3,7 @@ import { sign } from '../../lib/jwt';
 import { authenticate, loadPrincipal, writeAudit } from './auth-service';
 import { authGuard, requirePermission } from '../../middleware/auth';
 import * as users from './user-service';
+import * as approvals from './approval-service';
 
 function ipOf(request: Request): string | undefined {
   return (
@@ -128,6 +129,92 @@ export const iam = new Elysia({ name: 'iam', prefix: '/iam' })
         },
         {
           body: t.Object({ companyId: t.String({ format: 'uuid' }) }),
+          beforeHandle: requirePermission('iam:manage'),
+        },
+      )
+      // ===== Permission approval requests =====
+      .get('/approval-requests/resources', async ({ principal }) => ({
+        code: 0,
+        msg: 'ok',
+        data: await approvals.listMyApprovalResources(principal),
+      }))
+      .get('/approval-requests/mine', async ({ principal }) => ({
+        code: 0,
+        msg: 'ok',
+        data: await approvals.listMyApprovalRequests(principal),
+      }))
+      .post(
+        '/approval-requests',
+        async ({ principal, body, request }) => {
+          const r = await approvals.createApprovalRequest(principal, body);
+          await writeAudit({
+            companyId: principal.companyId,
+            userId: principal.userId,
+            action: 'iam:approval:create',
+            resource: `permission_approval_request:${r.id}`,
+            detail: {
+              fbAccountId: body.fbAccountId,
+              adAccountCount: r.requestedAdAccountIds.length,
+            },
+            ...(ipOf(request) ? { ip: ipOf(request)! } : {}),
+          });
+          return { code: 0, msg: 'ok', data: r };
+        },
+        {
+          body: t.Object({
+            fbAccountId: t.String({ format: 'uuid' }),
+            adAccountIds: t.Array(t.String({ format: 'uuid' }), { minItems: 1 }),
+            note: t.Optional(t.String({ maxLength: 2000 })),
+          }),
+        },
+      )
+      .get(
+        '/approval-requests',
+        async ({ principal, query }) => ({
+          code: 0,
+          msg: 'ok',
+          data: await approvals.listApprovalRequests(principal, {
+            status: query.status,
+          }),
+        }),
+        {
+          query: t.Object({
+            status: t.Optional(
+              t.Union([
+                t.Literal('pending'),
+                t.Literal('approved'),
+                t.Literal('rejected'),
+                t.Literal('cancelled'),
+              ]),
+            ),
+          }),
+          beforeHandle: requirePermission('iam:manage'),
+        },
+      )
+      .patch(
+        '/approval-requests/:id/review',
+        async ({ principal, params, body, request }) => {
+          const r = await approvals.reviewApprovalRequest(principal, params.id, body);
+          await writeAudit({
+            companyId: principal.companyId,
+            userId: principal.userId,
+            action: 'iam:approval:review',
+            resource: `permission_approval_request:${params.id}`,
+            detail: {
+              status: body.status,
+              approvedAdAccountCount: r.approvedAdAccountIds.length,
+            },
+            ...(ipOf(request) ? { ip: ipOf(request)! } : {}),
+          });
+          return { code: 0, msg: 'ok', data: r };
+        },
+        {
+          params: t.Object({ id: t.String({ format: 'uuid' }) }),
+          body: t.Object({
+            status: t.Union([t.Literal('approved'), t.Literal('rejected')]),
+            approvedAdAccountIds: t.Optional(t.Array(t.String({ format: 'uuid' }))),
+            reviewNote: t.Optional(t.String({ maxLength: 2000 })),
+          }),
           beforeHandle: requirePermission('iam:manage'),
         },
       )

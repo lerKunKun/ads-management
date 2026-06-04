@@ -39,6 +39,7 @@ import {
   listReleaseAnnouncements,
   markReleaseAnnouncementRead,
   publishReleaseAnnouncement,
+  setReleaseAnnouncementPinned,
   updateReleaseAnnouncement,
 } from './release-announcement-service';
 import { authGuard, requirePermission } from '../../middleware/auth';
@@ -210,6 +211,27 @@ export const admin = new Elysia({ name: 'admin' }).group('', (g) =>
         return { code: 0, msg: 'ok', data };
       },
       { params: t.Object({ id: t.String({ format: 'uuid' }) }) },
+    )
+    .post(
+      '/_admin/release-announcements/:id/pin',
+      async ({ principal, params, body, request }) => {
+        const data = await setReleaseAnnouncementPinned(principal, params.id, body.isPinned);
+        await writeAudit({
+          companyId: principal.companyId,
+          userId: principal.userId,
+          action: body.isPinned ? 'admin:release-announcement:pin' : 'admin:release-announcement:unpin',
+          resource: `release_announcement:${data.id}`,
+          detail: { title: data.title, version: data.version, isPinned: data.isPinned },
+          ...(request.headers.get('x-forwarded-for')
+            ? { ip: request.headers.get('x-forwarded-for')!.split(',')[0]!.trim() }
+            : {}),
+        });
+        return { code: 0, msg: 'ok', data };
+      },
+      {
+        params: t.Object({ id: t.String({ format: 'uuid' }) }),
+        body: t.Object({ isPinned: t.Boolean() }),
+      },
     )
     .delete(
       '/_admin/release-announcements/:id',
@@ -490,7 +512,7 @@ export const admin = new Elysia({ name: 'admin' }).group('', (g) =>
     .get(
       '/_admin/tasks',
       async ({ principal, query }) => {
-        const limit = Math.min(Math.max(Number(query.limit ?? '50'), 1), 200);
+        const limit = Math.min(Math.max(Number(query.limit ?? '50'), 1), 100);
         const data = await taskQuery.listAdminTasks(principal, limit);
         return { code: 0, msg: 'ok', data };
       },

@@ -26,7 +26,7 @@ function OperationTaskDetailPage() {
     queryFn: () => api.adminTaskStatus(taskId),
     refetchInterval: (query) => {
       const status = query.state.data?.status;
-      return status === 'running' || status === 'pending' ? 2000 : false;
+      return status === 'running' || status === 'pending' ? 30000 : false;
     },
   });
   const currentStatus = q.data?.status;

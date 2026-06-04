@@ -86,6 +86,26 @@ export function MetaAdsManagerPanel({
     }, 3000);
     return () => window.clearInterval(timer);
   }, [adAccountId, campaigns.data?.syncStatus, queryClient]);
+  useEffect(() => {
+    if (activeLayer !== 'adset' || campaignIds.length === 0) return;
+    let ticks = 0;
+    const timer = window.setInterval(() => {
+      ticks += 1;
+      void queryClient.invalidateQueries({ queryKey: ['adsets', adAccountId] });
+      if (ticks >= 4) window.clearInterval(timer);
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [activeLayer, adAccountId, campaignScopeKey, campaignIds.length, queryClient]);
+  useEffect(() => {
+    if (activeLayer !== 'ad' || adsetIds.length === 0) return;
+    let ticks = 0;
+    const timer = window.setInterval(() => {
+      ticks += 1;
+      void queryClient.invalidateQueries({ queryKey: ['ads', adAccountId] });
+      if (ticks >= 4) window.clearInterval(timer);
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [activeLayer, adAccountId, adsetScopeKey, adsetIds.length, queryClient]);
   const campaignInsights = useQuery({
     queryKey: ['insights', adAccountId, 'campaign', insightsDateKey],
     queryFn: () => api.insightsByLevel(adAccountId, 'campaign', insightsDateSpec),
@@ -163,7 +183,10 @@ export function MetaAdsManagerPanel({
         }, 3000);
       })
       .catch(() => undefined);
-    void campaignInsights.refetch();
+    void queryClient.fetchQuery({
+      queryKey: ['insights', adAccountId, 'campaign', insightsDateKey],
+      queryFn: () => api.insightsByLevel(adAccountId, 'campaign', insightsDateSpec, undefined, { force: true }),
+    });
   }
 
   function refreshAdsets() {
@@ -176,7 +199,15 @@ export function MetaAdsManagerPanel({
         }),
       ),
     ).catch(() => undefined);
-    void queryClient.invalidateQueries({ queryKey: ['insights', adAccountId, 'adset'] });
+    void Promise.all(
+      campaignIds.map((campaignId) =>
+        queryClient.fetchQuery({
+          queryKey: ['insights', adAccountId, 'adset', campaignId, insightsDateKey],
+          queryFn: () =>
+            api.insightsByLevel(adAccountId, 'adset', insightsDateSpec, campaignId, { force: true }),
+        }),
+      ),
+    ).catch(() => undefined);
   }
 
   function refreshAds() {
@@ -189,7 +220,15 @@ export function MetaAdsManagerPanel({
         }),
       ),
     ).catch(() => undefined);
-    void queryClient.invalidateQueries({ queryKey: ['insights', adAccountId, 'ad'] });
+    void Promise.all(
+      adsetIds.map((adsetId) =>
+        queryClient.fetchQuery({
+          queryKey: ['insights', adAccountId, 'ad', adsetId, insightsDateKey],
+          queryFn: () =>
+            api.insightsByLevel(adAccountId, 'ad', insightsDateSpec, adsetId, { force: true }),
+        }),
+      ),
+    ).catch(() => undefined);
   }
 
   function clearCampaignSelection() {

@@ -40,9 +40,9 @@ function MyOperationsPage() {
   const navigate = useNavigate();
   const q = useQuery({
     queryKey: ['my', 'tasks'],
-    queryFn: () => api.myTasks(200),
+    queryFn: () => api.myTasks(50),
     refetchInterval: (query) =>
-      (query.state.data ?? []).some((task) => !isTerminalTaskStatus(task.status)) ? 2000 : false,
+      (query.state.data ?? []).some((task) => !isTerminalTaskStatus(task.status)) ? 10000 : false,
   });
   const data = q.data ?? [];
   const [nowMs, setNowMs] = useState(() => Date.now());

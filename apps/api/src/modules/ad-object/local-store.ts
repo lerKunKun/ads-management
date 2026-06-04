@@ -49,7 +49,8 @@ const LOCAL_SNAPSHOT_FALLBACK =
   process.env['META_FAKE'] === '1' || env.nodeEnv !== 'production';
 const MAX_PAGE_SIZE = 100;
 const DEFAULT_PAGE_SIZE = 100;
-const UPSERT_CHUNK_SIZE = 500;
+const UPSERT_CHUNK_SIZE = 100;
+const IN_QUERY_CHUNK_SIZE = 1000;
 
 export async function readFreshCampaigns(
   companyId: string,
@@ -370,20 +371,28 @@ export async function hydrateAdsWithLocalAdSetSchedule(
 
   const schedules = await db.transaction(async (tx) => {
     await setTenant(tx, companyId);
-    const adsets = await tx
-      .select({
-        metaId: schema.adSetObjects.metaId,
-        startTime: schema.adSetObjects.startTime,
-        endTime: schema.adSetObjects.endTime,
-      })
-      .from(schema.adSetObjects)
-      .where(
-        and(
-          eq(schema.adSetObjects.companyId, companyId),
-          eq(schema.adSetObjects.adAccountId, adAccountId),
-          inArray(schema.adSetObjects.metaId, adsetIds),
-        ),
-      );
+    const adsets: Array<{
+      metaId: string;
+      startTime: Date | null;
+      endTime: Date | null;
+    }> = [];
+    for (const chunk of chunks(adsetIds, IN_QUERY_CHUNK_SIZE)) {
+      const rows = await tx
+        .select({
+          metaId: schema.adSetObjects.metaId,
+          startTime: schema.adSetObjects.startTime,
+          endTime: schema.adSetObjects.endTime,
+        })
+        .from(schema.adSetObjects)
+        .where(
+          and(
+            eq(schema.adSetObjects.companyId, companyId),
+            eq(schema.adSetObjects.adAccountId, adAccountId),
+            inArray(schema.adSetObjects.metaId, chunk),
+          ),
+        );
+      adsets.push(...rows);
+    }
     return new Map(adsets.map((adset) => [adset.metaId, adset]));
   });
 
@@ -877,7 +886,7 @@ function toMetaCampaign(row: typeof schema.adCampaigns.$inferSelect): MetaCampai
   };
 }
 
-async function listLocalAdSets(
+export async function listLocalAdSets(
   companyId: string,
   adAccountId: string,
   campaignId: string,
@@ -913,7 +922,7 @@ async function listLocalAdSets(
   });
 }
 
-async function listLocalAds(
+export async function listLocalAds(
   companyId: string,
   adAccountId: string,
   adsetId: string,
@@ -932,22 +941,28 @@ async function listLocalAds(
       )
       .orderBy(schema.adObjects.createdAt);
     const adsetIds = Array.from(new Set(rows.map((row) => row.adsetMetaId)));
-    const adsets = adsetIds.length
-      ? await tx
-          .select({
-            metaId: schema.adSetObjects.metaId,
-            startTime: schema.adSetObjects.startTime,
-            endTime: schema.adSetObjects.endTime,
-          })
-          .from(schema.adSetObjects)
-          .where(
-            and(
-              eq(schema.adSetObjects.companyId, companyId),
-              eq(schema.adSetObjects.adAccountId, adAccountId),
-              inArray(schema.adSetObjects.metaId, adsetIds),
-            ),
-          )
-      : [];
+    const adsets: Array<{
+      metaId: string;
+      startTime: Date | null;
+      endTime: Date | null;
+    }> = [];
+    for (const chunk of chunks(adsetIds, IN_QUERY_CHUNK_SIZE)) {
+      const rowsByChunk = await tx
+        .select({
+          metaId: schema.adSetObjects.metaId,
+          startTime: schema.adSetObjects.startTime,
+          endTime: schema.adSetObjects.endTime,
+        })
+        .from(schema.adSetObjects)
+        .where(
+          and(
+            eq(schema.adSetObjects.companyId, companyId),
+            eq(schema.adSetObjects.adAccountId, adAccountId),
+            inArray(schema.adSetObjects.metaId, chunk),
+          ),
+        );
+      adsets.push(...rowsByChunk);
+    }
     const scheduleByAdSet = new Map(adsets.map((adset) => [adset.metaId, adset]));
     return rows.map((row) => {
       const schedule = scheduleByAdSet.get(row.adsetMetaId);

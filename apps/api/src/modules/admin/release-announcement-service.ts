@@ -1,5 +1,6 @@
 import { and, desc, eq, sql as dsql } from 'drizzle-orm';
 import { db, schema } from '../../lib/db';
+import { redis } from '../../lib/redis';
 import { Forbidden, HttpError, NotFound } from '../../lib/http-error';
 import type { AuthPrincipal } from '../iam/auth-service';
 
@@ -12,6 +13,7 @@ export interface ReleaseAnnouncementDTO {
   content: string;
   nextUpdateAt: Date | null;
   status: ReleaseAnnouncementStatus;
+  isPinned: boolean;
   publishedAt: Date | null;
   createdBy: string | null;
   createdAt: Date;
@@ -33,6 +35,19 @@ interface AnnouncementPatch {
 }
 
 type AnnouncementRow = typeof schema.releaseAnnouncements.$inferSelect;
+type CachedAnnouncement = Omit<
+  ReleaseAnnouncementDTO,
+  'nextUpdateAt' | 'publishedAt' | 'createdAt' | 'updatedAt'
+> & {
+  nextUpdateAt: string | null;
+  publishedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+const PUBLISHED_ANNOUNCEMENT_LIST_CACHE_KEY = 'release-announcements:published:list';
+const PUBLISHED_ANNOUNCEMENT_LATEST_CACHE_KEY = 'release-announcements:published:latest';
+const PUBLISHED_ANNOUNCEMENT_CACHE_TTL_SEC = 300;
 
 function assertPlatformAdmin(principal: AuthPrincipal): void {
   if (!principal.roles.includes('PlatformAdmin')) {
@@ -68,11 +83,56 @@ function toDTO(row: AnnouncementRow): ReleaseAnnouncementDTO {
     content: row.content,
     nextUpdateAt: row.nextUpdateAt,
     status,
+    isPinned: row.isPinned,
     publishedAt: row.publishedAt,
     createdBy: row.createdBy,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
+}
+
+function toCachedDTO(row: ReleaseAnnouncementDTO): CachedAnnouncement {
+  return {
+    ...row,
+    nextUpdateAt: row.nextUpdateAt ? row.nextUpdateAt.toISOString() : null,
+    publishedAt: row.publishedAt ? row.publishedAt.toISOString() : null,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+function fromCachedDTO(row: CachedAnnouncement): ReleaseAnnouncementDTO {
+  return {
+    ...row,
+    nextUpdateAt: row.nextUpdateAt ? new Date(row.nextUpdateAt) : null,
+    publishedAt: row.publishedAt ? new Date(row.publishedAt) : null,
+    createdAt: new Date(row.createdAt),
+    updatedAt: new Date(row.updatedAt),
+  };
+}
+
+async function readCache<T>(key: string): Promise<T | null> {
+  try {
+    const cached = await redis.get(key);
+    return cached ? (JSON.parse(cached) as T) : null;
+  } catch {
+    await redis.del(key).catch(() => undefined);
+    return null;
+  }
+}
+
+async function writeCache(key: string, value: unknown): Promise<void> {
+  try {
+    await redis.set(key, JSON.stringify(value), 'EX', PUBLISHED_ANNOUNCEMENT_CACHE_TTL_SEC);
+  } catch {
+    // Cache is only a load-shedding layer.
+  }
+}
+
+async function invalidatePublishedAnnouncementCache(): Promise<void> {
+  await redis
+    .del(PUBLISHED_ANNOUNCEMENT_LIST_CACHE_KEY, PUBLISHED_ANNOUNCEMENT_LATEST_CACHE_KEY)
+    .catch(() => undefined);
 }
 
 async function withBypass<T>(fn: (tx: typeof db) => Promise<T>): Promise<T> {
@@ -86,17 +146,27 @@ export async function getUnreadReleaseAnnouncement(
   principal: AuthPrincipal,
 ): Promise<ReleaseAnnouncementDTO | null> {
   return withBypass(async (tx) => {
-    const announcement = (
-      await tx
-        .select()
-        .from(schema.releaseAnnouncements)
+    let announcement = await readCache<CachedAnnouncement>(
+      PUBLISHED_ANNOUNCEMENT_LATEST_CACHE_KEY,
+    ).then((row) => (row ? fromCachedDTO(row) : null));
+    if (!announcement) {
+      const row = (
+        await tx
+          .select()
+          .from(schema.releaseAnnouncements)
         .where(eq(schema.releaseAnnouncements.status, 'published'))
         .orderBy(
+          desc(schema.releaseAnnouncements.isPinned),
           desc(schema.releaseAnnouncements.publishedAt),
           desc(schema.releaseAnnouncements.createdAt),
         )
-        .limit(1)
-    )[0];
+          .limit(1)
+      )[0];
+      announcement = row ? toDTO(row) : null;
+      if (announcement) {
+        await writeCache(PUBLISHED_ANNOUNCEMENT_LATEST_CACHE_KEY, toCachedDTO(announcement));
+      }
+    }
     if (!announcement) return null;
 
     const read = (
@@ -111,7 +181,7 @@ export async function getUnreadReleaseAnnouncement(
         )
         .limit(1)
     )[0];
-    return read ? null : toDTO(announcement);
+    return read ? null : announcement;
   });
 }
 
@@ -149,7 +219,7 @@ export async function listReleaseAnnouncements(
     const rows = await tx
       .select()
       .from(schema.releaseAnnouncements)
-      .orderBy(desc(schema.releaseAnnouncements.createdAt))
+      .orderBy(desc(schema.releaseAnnouncements.isPinned), desc(schema.releaseAnnouncements.createdAt))
       .limit(100);
     return rows.map(toDTO);
   });
@@ -158,17 +228,22 @@ export async function listReleaseAnnouncements(
 export async function listPublishedReleaseAnnouncements(
   _principal: AuthPrincipal,
 ): Promise<ReleaseAnnouncementDTO[]> {
+  const cached = await readCache<CachedAnnouncement[]>(PUBLISHED_ANNOUNCEMENT_LIST_CACHE_KEY);
+  if (cached) return cached.map(fromCachedDTO);
   return withBypass(async (tx) => {
     const rows = await tx
       .select()
       .from(schema.releaseAnnouncements)
       .where(eq(schema.releaseAnnouncements.status, 'published'))
       .orderBy(
+        desc(schema.releaseAnnouncements.isPinned),
         desc(schema.releaseAnnouncements.publishedAt),
         desc(schema.releaseAnnouncements.createdAt),
       )
       .limit(50);
-    return rows.map(toDTO);
+    const data = rows.map(toDTO);
+    await writeCache(PUBLISHED_ANNOUNCEMENT_LIST_CACHE_KEY, data.map(toCachedDTO));
+    return data;
   });
 }
 
@@ -193,6 +268,7 @@ export async function createReleaseAnnouncement(
         .returning()
     )[0];
     if (!row) throw new HttpError(500, 500, 'failed to create release announcement');
+    await invalidatePublishedAnnouncementCache();
     return toDTO(row);
   });
 }
@@ -222,6 +298,7 @@ export async function updateReleaseAnnouncement(
         .returning()
     )[0];
     if (!row) throw NotFound('release announcement not found');
+    await invalidatePublishedAnnouncementCache();
     return toDTO(row);
   });
 }
@@ -244,6 +321,7 @@ export async function publishReleaseAnnouncement(
         .returning()
     )[0];
     if (!row) throw NotFound('release announcement not found');
+    await invalidatePublishedAnnouncementCache();
     return toDTO(row);
   });
 }
@@ -257,11 +335,54 @@ export async function archiveReleaseAnnouncement(
     const row = (
       await tx
         .update(schema.releaseAnnouncements)
-        .set({ status: 'archived', updatedAt: new Date() })
+        .set({ status: 'archived', isPinned: false, updatedAt: new Date() })
         .where(eq(schema.releaseAnnouncements.id, id))
         .returning()
     )[0];
     if (!row) throw NotFound('release announcement not found');
+    await invalidatePublishedAnnouncementCache();
+    return toDTO(row);
+  });
+}
+
+export async function setReleaseAnnouncementPinned(
+  principal: AuthPrincipal,
+  id: string,
+  isPinned: boolean,
+): Promise<ReleaseAnnouncementDTO> {
+  assertPlatformAdmin(principal);
+  const now = new Date();
+  return withBypass(async (tx) => {
+    if (isPinned) {
+      const current = (
+        await tx
+          .select({
+            id: schema.releaseAnnouncements.id,
+            status: schema.releaseAnnouncements.status,
+          })
+          .from(schema.releaseAnnouncements)
+          .where(eq(schema.releaseAnnouncements.id, id))
+          .limit(1)
+      )[0];
+      if (!current) throw NotFound('release announcement not found');
+      if (current.status !== 'published') {
+        throw new HttpError(409, 409, 'only published announcement can be pinned');
+      }
+      await tx
+        .update(schema.releaseAnnouncements)
+        .set({ isPinned: false, updatedAt: now })
+        .where(eq(schema.releaseAnnouncements.isPinned, true));
+    }
+
+    const row = (
+      await tx
+        .update(schema.releaseAnnouncements)
+        .set({ isPinned, updatedAt: now })
+        .where(eq(schema.releaseAnnouncements.id, id))
+        .returning()
+    )[0];
+    if (!row) throw NotFound('release announcement not found');
+    await invalidatePublishedAnnouncementCache();
     return toDTO(row);
   });
 }
@@ -279,5 +400,6 @@ export async function deleteReleaseAnnouncement(
         .returning({ id: schema.releaseAnnouncements.id })
     )[0];
     if (!row) throw NotFound('release announcement not found');
+    await invalidatePublishedAnnouncementCache();
   });
 }

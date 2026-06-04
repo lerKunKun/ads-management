@@ -739,11 +739,11 @@ async function acquireCopyItemBudget(msg: OperationMessage): Promise<void> {
 
 function isRetryableBatchCopyError(err: unknown): { reason: string; bumpAttempt: boolean } | null {
   const reason = err instanceof Error ? err.message : String(err);
+  if (isCopyV2VerificationFailure(reason)) return null;
   if (err instanceof HttpError) {
     if (err.status === 429) return { reason, bumpAttempt: false };
     if (err.status >= 500) return { reason, bumpAttempt: true };
     if (err.status === 409 && (
-      reason.includes('copy v2 verification failed') ||
       reason.includes('leased')
     )) {
       return { reason, bumpAttempt: true };
@@ -763,6 +763,10 @@ function isRetryableBatchCopyError(err: unknown): { reason: string; bumpAttempt:
     return { reason, bumpAttempt: true };
   }
   return { reason, bumpAttempt: true };
+}
+
+function isCopyV2VerificationFailure(reason: string): boolean {
+  return reason.includes('copy v2 verification failed');
 }
 
 async function markRetryingItem(

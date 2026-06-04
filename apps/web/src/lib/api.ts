@@ -317,6 +317,7 @@ export interface ReleaseAnnouncement {
   content: string;
   nextUpdateAt: string | null;
   status: ReleaseAnnouncementStatus;
+  isPinned: boolean;
   publishedAt: string | null;
   createdBy: string | null;
   createdAt: string;
@@ -328,6 +329,49 @@ export interface ReleaseAnnouncementInput {
   version: string;
   content: string;
   nextUpdateAt?: string;
+}
+
+export type PermissionApprovalStatus = 'pending' | 'approved' | 'rejected' | 'cancelled';
+
+export interface PermissionApprovalResources {
+  fbAccounts: Array<{ id: string; name: string; status: string; adAccountCount: number }>;
+  adAccounts: Array<{
+    id: string;
+    name: string;
+    metaActId: string;
+    fbAccountId: string;
+    status: string;
+    currency: string | null;
+    timezoneName: string | null;
+    businessCountryCode: string | null;
+    granted: boolean;
+    pending: boolean;
+  }>;
+}
+
+export interface PermissionApprovalRequest {
+  id: string;
+  requesterId: string;
+  requesterEmail: string;
+  fbAccountId: string;
+  fbAccountName: string;
+  requestedAdAccountIds: string[];
+  approvedAdAccountIds: string[];
+  status: PermissionApprovalStatus;
+  note: string | null;
+  reviewNote: string | null;
+  reviewedBy: string | null;
+  reviewerEmail: string | null;
+  reviewedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  adAccounts: Array<{
+    id: string;
+    name: string;
+    metaActId: string;
+    status: string;
+    alreadyGranted: boolean;
+  }>;
 }
 
 export const api = {
@@ -454,6 +498,7 @@ export const api = {
     level: 'campaign' | 'adset' | 'ad',
     dateSpec: InsightsDateSpec,
     parentId?: string,
+    opts: { force?: boolean } = {},
   ) => {
     const query: Record<string, string> = { level };
     const dateParams =
@@ -462,6 +507,7 @@ export const api = {
         : { since: dateSpec.since, until: dateSpec.until };
     Object.assign(query, dateParams);
     if (parentId) query['parentId'] = parentId;
+    if (opts.force) query['force'] = '1';
     return call<Record<string, InsightsSummary>>(
       `/ad-accounts/${adAccountId}/insights?${new URLSearchParams(query).toString()}`,
     );
@@ -563,6 +609,38 @@ export const api = {
         businessCountryCode: string | null;
       }>;
     }>('/iam/grant-resources'),
+  myPermissionApprovalResources: () =>
+    call<PermissionApprovalResources>('/iam/approval-requests/resources'),
+  myPermissionApprovalRequests: () =>
+    call<PermissionApprovalRequest[]>('/iam/approval-requests/mine'),
+  submitPermissionApprovalRequest: (args: {
+    fbAccountId: string;
+    adAccountIds: string[];
+    note?: string;
+  }) =>
+    call<{ id: string; requestedAdAccountIds: string[] }>('/iam/approval-requests', {
+      method: 'POST',
+      body: JSON.stringify(args),
+    }),
+  listPermissionApprovalRequests: (status?: PermissionApprovalStatus) =>
+    call<PermissionApprovalRequest[]>(
+      `/iam/approval-requests${status ? `?status=${encodeURIComponent(status)}` : ''}`,
+    ),
+  reviewPermissionApprovalRequest: (
+    id: string,
+    args: {
+      status: 'approved' | 'rejected';
+      approvedAdAccountIds?: string[];
+      reviewNote?: string;
+    },
+  ) =>
+    call<{ id: string; status: PermissionApprovalStatus; approvedAdAccountIds: string[] }>(
+      `/iam/approval-requests/${id}/review`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify(args),
+      },
+    ),
 
   // M4: 管理端点 (权限 iam:manage)
   listCompanies: () => call<Company[]>('/_admin/companies'),
@@ -585,6 +663,11 @@ export const api = {
   archiveReleaseAnnouncement: (id: string) =>
     call<ReleaseAnnouncement>(`/_admin/release-announcements/${id}/archive`, {
       method: 'POST',
+    }),
+  setReleaseAnnouncementPinned: (id: string, isPinned: boolean) =>
+    call<ReleaseAnnouncement>(`/_admin/release-announcements/${id}/pin`, {
+      method: 'POST',
+      body: JSON.stringify({ isPinned }),
     }),
   deleteReleaseAnnouncement: (id: string) =>
     call<null>(`/_admin/release-announcements/${id}`, {

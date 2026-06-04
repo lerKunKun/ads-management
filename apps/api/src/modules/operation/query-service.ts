@@ -90,8 +90,20 @@ const taskSummaryColumns = {
   payload: schema.operationTasks.payload,
 };
 
+const MAX_TASK_LIST_LIMIT = 100;
+const IN_QUERY_CHUNK_SIZE = 1000;
+
 function clampTaskLimit(limit: number): number {
-  return Math.min(Math.max(limit, 1), 200);
+  return Math.min(Math.max(limit, 1), MAX_TASK_LIST_LIMIT);
+}
+
+function chunks<T>(rows: T[], size: number): T[][] {
+  if (rows.length === 0) return [];
+  const out: T[][] = [];
+  for (let i = 0; i < rows.length; i += size) {
+    out.push(rows.slice(i, i + size));
+  }
+  return out;
 }
 
 function isPlatformAdmin(principal: AuthPrincipal): boolean {
@@ -594,37 +606,37 @@ async function readLocalResultNames(
     await applyTaskReadScope(tx, { companyId });
 
     const campaignIds = Array.from(idsByType.get('campaign')!);
-    if (campaignIds.length > 0) {
+    for (const chunk of chunks(campaignIds, IN_QUERY_CHUNK_SIZE)) {
       const rows = await tx
         .select({ metaId: schema.adCampaigns.metaId, name: schema.adCampaigns.name })
         .from(schema.adCampaigns)
         .where(and(
           eq(schema.adCampaigns.companyId, companyId),
-          inArray(schema.adCampaigns.metaId, campaignIds),
+          inArray(schema.adCampaigns.metaId, chunk),
         ));
       for (const row of rows) names.set(resultNameKey('campaign', row.metaId), row.name);
     }
 
     const adsetIds = Array.from(idsByType.get('adset')!);
-    if (adsetIds.length > 0) {
+    for (const chunk of chunks(adsetIds, IN_QUERY_CHUNK_SIZE)) {
       const rows = await tx
         .select({ metaId: schema.adSetObjects.metaId, name: schema.adSetObjects.name })
         .from(schema.adSetObjects)
         .where(and(
           eq(schema.adSetObjects.companyId, companyId),
-          inArray(schema.adSetObjects.metaId, adsetIds),
+          inArray(schema.adSetObjects.metaId, chunk),
         ));
       for (const row of rows) names.set(resultNameKey('adset', row.metaId), row.name);
     }
 
     const adIds = Array.from(idsByType.get('ad')!);
-    if (adIds.length > 0) {
+    for (const chunk of chunks(adIds, IN_QUERY_CHUNK_SIZE)) {
       const rows = await tx
         .select({ metaId: schema.adObjects.metaId, name: schema.adObjects.name })
         .from(schema.adObjects)
         .where(and(
           eq(schema.adObjects.companyId, companyId),
-          inArray(schema.adObjects.metaId, adIds),
+          inArray(schema.adObjects.metaId, chunk),
         ));
       for (const row of rows) names.set(resultNameKey('ad', row.metaId), row.name);
     }

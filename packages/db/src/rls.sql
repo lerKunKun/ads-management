@@ -104,6 +104,13 @@ CREATE POLICY p_grants_all ON user_resource_grants
     )
   );
 
+-- ---------- permission_approval_requests ----------
+ALTER TABLE permission_approval_requests ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS p_permission_approval_requests_all ON permission_approval_requests;
+CREATE POLICY p_permission_approval_requests_all ON permission_approval_requests
+  FOR ALL USING (app_bypass_rls() OR company_id = app_current_company())
+            WITH CHECK (app_bypass_rls() OR company_id = app_current_company());
+
 -- ---------- fb_accounts ----------
 ALTER TABLE fb_accounts ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS p_fb_all ON fb_accounts;

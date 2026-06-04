@@ -455,7 +455,14 @@ export const operation = new Elysia({ name: 'operation' })
             ...(query.since ? { since: query.since } : {}),
             ...(query.until ? { until: query.until } : {}),
           });
-          const data = await svc.getInsightsByLevel(principal, params.id, level, dateSpec, query.parentId);
+          const data = await svc.getInsightsByLevel(
+            principal,
+            params.id,
+            level,
+            dateSpec,
+            query.parentId,
+            { force: isForceRefresh(query.force) },
+          );
           return { code: 0, msg: 'ok', data };
         },
         {
@@ -468,6 +475,7 @@ export const operation = new Elysia({ name: 'operation' })
             since: t.Optional(t.String()),
             until: t.Optional(t.String()),
             parentId: t.Optional(t.String({ minLength: 1 })),
+            force: t.Optional(t.String()),
           }),
           beforeHandle: requirePermission('ad_account:read'),
         },
@@ -477,7 +485,7 @@ export const operation = new Elysia({ name: 'operation' })
       .get(
         '/operations/tasks',
         async ({ principal, query }) => {
-          const limit = Math.min(Math.max(Number(query.limit ?? '50'), 1), 200);
+          const limit = Math.min(Math.max(Number(query.limit ?? '50'), 1), 100);
           const data = await q.listMyTasks(principal, limit);
           return { code: 0, msg: 'ok', data };
         },

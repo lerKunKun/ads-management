@@ -1,4 +1,4 @@
-import { index, pgTable, primaryKey, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { boolean, index, pgTable, primaryKey, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { users } from './iam';
 
 export const releaseAnnouncements = pgTable(
@@ -10,6 +10,7 @@ export const releaseAnnouncements = pgTable(
     content: text('content').notNull(),
     nextUpdateAt: timestamp('next_update_at', { withTimezone: true }),
     status: text('status').notNull().default('draft'),
+    isPinned: boolean('is_pinned').notNull().default(false),
     publishedAt: timestamp('published_at', { withTimezone: true }),
     createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -21,6 +22,11 @@ export const releaseAnnouncements = pgTable(
       t.publishedAt,
     ),
     createdIdx: index('release_announcements_created_idx').on(t.createdAt),
+    pinnedPublishedIdx: index('release_announcements_pinned_published_idx').on(
+      t.isPinned,
+      t.status,
+      t.publishedAt,
+    ),
   }),
 );
 

@@ -4,6 +4,7 @@ import type { LucideIcon } from 'lucide-react';
 import {
   Activity,
   Building2,
+  ClipboardCheck,
   ClipboardList,
   KeyRound,
   LayoutDashboard,
@@ -25,6 +26,7 @@ export const Route = createFileRoute('/admin')({
 type AdminMenuPath =
   | '/admin/company'
   | '/admin/iam'
+  | '/admin/iam-approvals'
   | '/admin/users'
   | '/admin/operations'
   | '/admin/audit'
@@ -48,6 +50,12 @@ const adminMenus: Array<{
     description: '按用户、FB个人号、广告账户三栏联动分配权限。',
     to: '/admin/iam',
     icon: ShieldCheck,
+  },
+  {
+    title: '权限审批',
+    description: '处理用户提交的广告账户授权申请，支持编辑勾选后通过或一键通过。',
+    to: '/admin/iam-approvals',
+    icon: ClipboardCheck,
   },
   {
     title: '用户目录',

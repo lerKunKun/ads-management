@@ -179,8 +179,9 @@ function TasksSection() {
   const navigate = useNavigate();
   const q = useQuery({
     queryKey: ['admin', 'tasks'],
-    queryFn: () => api.listTasks(200),
-    refetchInterval: 2000,
+    queryFn: () => api.listTasks(50),
+    refetchInterval: (query) =>
+      (query.state.data ?? []).some((task) => !isTerminalTaskStatus(task.status)) ? 10000 : false,
   });
   const data = q.data ?? [];
   const liveTasks = data.some((task) => !isTerminalTaskStatus(task.status));

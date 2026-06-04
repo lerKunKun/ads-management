@@ -7,8 +7,10 @@ import {
   primaryKey,
   uniqueIndex,
   index,
+  jsonb,
 } from 'drizzle-orm/pg-core';
 import { companies } from './companies';
+import { fbAccounts } from './fb';
 
 export const userStatus = pgEnum('user_status', ['active', 'disabled']);
 
@@ -79,6 +81,12 @@ export const userRoles = pgTable(
 );
 
 export const grantResourceType = pgEnum('grant_resource_type', ['fb_account', 'ad_account']);
+export const permissionApprovalStatus = pgEnum('permission_approval_status', [
+  'pending',
+  'approved',
+  'rejected',
+  'cancelled',
+]);
 
 export const userResourceGrants = pgTable(
   'user_resource_grants',
@@ -92,5 +100,39 @@ export const userResourceGrants = pgTable(
   },
   (t) => ({
     userResourceIdx: uniqueIndex('grants_user_resource_idx').on(t.userId, t.resourceType, t.resourceId),
+  }),
+);
+
+export const permissionApprovalRequests = pgTable(
+  'permission_approval_requests',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    companyId: uuid('company_id').notNull().references(() => companies.id, { onDelete: 'cascade' }),
+    requesterId: uuid('requester_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    fbAccountId: uuid('fb_account_id').notNull().references(() => fbAccounts.id, { onDelete: 'cascade' }),
+    requestedAdAccountIds: jsonb('requested_ad_account_ids').$type<string[]>().notNull().default([]),
+    approvedAdAccountIds: jsonb('approved_ad_account_ids').$type<string[]>().notNull().default([]),
+    status: permissionApprovalStatus('status').notNull().default('pending'),
+    note: text('note'),
+    reviewNote: text('review_note'),
+    reviewedBy: uuid('reviewed_by').references(() => users.id),
+    reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    companyStatusCreatedIdx: index('permission_approval_company_status_created_idx').on(
+      t.companyId,
+      t.status,
+      t.createdAt,
+    ),
+    requesterCreatedIdx: index('permission_approval_requester_created_idx').on(
+      t.requesterId,
+      t.createdAt,
+    ),
+    fbAccountCreatedIdx: index('permission_approval_fb_account_created_idx').on(
+      t.fbAccountId,
+      t.createdAt,
+    ),
   }),
 );

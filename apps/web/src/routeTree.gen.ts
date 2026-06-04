@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as PermissionRequestsRouteImport } from './routes/permission-requests'
 import { Route as OperationsRouteImport } from './routes/operations'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as FbAccountsRouteImport } from './routes/fb-accounts'
@@ -20,6 +21,7 @@ import { Route as OperationsTaskIdRouteImport } from './routes/operations_.$task
 import { Route as FbAccountsIdRouteImport } from './routes/fb-accounts_.$id'
 import { Route as AdminUsersRouteImport } from './routes/admin_.users'
 import { Route as AdminOperationsRouteImport } from './routes/admin_.operations'
+import { Route as AdminIamApprovalsRouteImport } from './routes/admin_.iam-approvals'
 import { Route as AdminIamRouteImport } from './routes/admin_.iam'
 import { Route as AdminCompanyRouteImport } from './routes/admin_.company'
 import { Route as AdminAuditRouteImport } from './routes/admin_.audit'
@@ -30,6 +32,11 @@ import { Route as AdminOperationsTaskIdRouteImport } from './routes/admin_.opera
 import { Route as AdAccountsIdCampaignsCidRouteImport } from './routes/ad-accounts_.$id_.campaigns_.$cid'
 import { Route as AdAccountsIdCampaignsCidAdsetsAsidRouteImport } from './routes/ad-accounts_.$id_.campaigns_.$cid_.adsets_.$asid'
 
+const PermissionRequestsRoute = PermissionRequestsRouteImport.update({
+  id: '/permission-requests',
+  path: '/permission-requests',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const OperationsRoute = OperationsRouteImport.update({
   id: '/operations',
   path: '/operations',
@@ -83,6 +90,11 @@ const AdminUsersRoute = AdminUsersRouteImport.update({
 const AdminOperationsRoute = AdminOperationsRouteImport.update({
   id: '/admin_/operations',
   path: '/admin/operations',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminIamApprovalsRoute = AdminIamApprovalsRouteImport.update({
+  id: '/admin_/iam-approvals',
+  path: '/admin/iam-approvals',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminIamRoute = AdminIamRouteImport.update({
@@ -141,11 +153,13 @@ export interface FileRoutesByFullPath {
   '/fb-accounts': typeof FbAccountsRoute
   '/login': typeof LoginRoute
   '/operations': typeof OperationsRoute
+  '/permission-requests': typeof PermissionRequestsRoute
   '/ad-accounts/$id': typeof AdAccountsIdRoute
   '/admin/announcements': typeof AdminAnnouncementsRoute
   '/admin/audit': typeof AdminAuditRoute
   '/admin/company': typeof AdminCompanyRoute
   '/admin/iam': typeof AdminIamRoute
+  '/admin/iam-approvals': typeof AdminIamApprovalsRoute
   '/admin/operations': typeof AdminOperationsRoute
   '/admin/users': typeof AdminUsersRoute
   '/fb-accounts/$id': typeof FbAccountsIdRoute
@@ -163,11 +177,13 @@ export interface FileRoutesByTo {
   '/fb-accounts': typeof FbAccountsRoute
   '/login': typeof LoginRoute
   '/operations': typeof OperationsRoute
+  '/permission-requests': typeof PermissionRequestsRoute
   '/ad-accounts/$id': typeof AdAccountsIdRoute
   '/admin/announcements': typeof AdminAnnouncementsRoute
   '/admin/audit': typeof AdminAuditRoute
   '/admin/company': typeof AdminCompanyRoute
   '/admin/iam': typeof AdminIamRoute
+  '/admin/iam-approvals': typeof AdminIamApprovalsRoute
   '/admin/operations': typeof AdminOperationsRoute
   '/admin/users': typeof AdminUsersRoute
   '/fb-accounts/$id': typeof FbAccountsIdRoute
@@ -186,11 +202,13 @@ export interface FileRoutesById {
   '/fb-accounts': typeof FbAccountsRoute
   '/login': typeof LoginRoute
   '/operations': typeof OperationsRoute
+  '/permission-requests': typeof PermissionRequestsRoute
   '/ad-accounts_/$id': typeof AdAccountsIdRoute
   '/admin_/announcements': typeof AdminAnnouncementsRoute
   '/admin_/audit': typeof AdminAuditRoute
   '/admin_/company': typeof AdminCompanyRoute
   '/admin_/iam': typeof AdminIamRoute
+  '/admin_/iam-approvals': typeof AdminIamApprovalsRoute
   '/admin_/operations': typeof AdminOperationsRoute
   '/admin_/users': typeof AdminUsersRoute
   '/fb-accounts_/$id': typeof FbAccountsIdRoute
@@ -210,11 +228,13 @@ export interface FileRouteTypes {
     | '/fb-accounts'
     | '/login'
     | '/operations'
+    | '/permission-requests'
     | '/ad-accounts/$id'
     | '/admin/announcements'
     | '/admin/audit'
     | '/admin/company'
     | '/admin/iam'
+    | '/admin/iam-approvals'
     | '/admin/operations'
     | '/admin/users'
     | '/fb-accounts/$id'
@@ -232,11 +252,13 @@ export interface FileRouteTypes {
     | '/fb-accounts'
     | '/login'
     | '/operations'
+    | '/permission-requests'
     | '/ad-accounts/$id'
     | '/admin/announcements'
     | '/admin/audit'
     | '/admin/company'
     | '/admin/iam'
+    | '/admin/iam-approvals'
     | '/admin/operations'
     | '/admin/users'
     | '/fb-accounts/$id'
@@ -254,11 +276,13 @@ export interface FileRouteTypes {
     | '/fb-accounts'
     | '/login'
     | '/operations'
+    | '/permission-requests'
     | '/ad-accounts_/$id'
     | '/admin_/announcements'
     | '/admin_/audit'
     | '/admin_/company'
     | '/admin_/iam'
+    | '/admin_/iam-approvals'
     | '/admin_/operations'
     | '/admin_/users'
     | '/fb-accounts_/$id'
@@ -277,11 +301,13 @@ export interface RootRouteChildren {
   FbAccountsRoute: typeof FbAccountsRoute
   LoginRoute: typeof LoginRoute
   OperationsRoute: typeof OperationsRoute
+  PermissionRequestsRoute: typeof PermissionRequestsRoute
   AdAccountsIdRoute: typeof AdAccountsIdRoute
   AdminAnnouncementsRoute: typeof AdminAnnouncementsRoute
   AdminAuditRoute: typeof AdminAuditRoute
   AdminCompanyRoute: typeof AdminCompanyRoute
   AdminIamRoute: typeof AdminIamRoute
+  AdminIamApprovalsRoute: typeof AdminIamApprovalsRoute
   AdminOperationsRoute: typeof AdminOperationsRoute
   AdminUsersRoute: typeof AdminUsersRoute
   FbAccountsIdRoute: typeof FbAccountsIdRoute
@@ -294,6 +320,13 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/permission-requests': {
+      id: '/permission-requests'
+      path: '/permission-requests'
+      fullPath: '/permission-requests'
+      preLoaderRoute: typeof PermissionRequestsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/operations': {
       id: '/operations'
       path: '/operations'
@@ -371,6 +404,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminOperationsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin_/iam-approvals': {
+      id: '/admin_/iam-approvals'
+      path: '/admin/iam-approvals'
+      fullPath: '/admin/iam-approvals'
+      preLoaderRoute: typeof AdminIamApprovalsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/admin_/iam': {
       id: '/admin_/iam'
       path: '/admin/iam'
@@ -445,11 +485,13 @@ const rootRouteChildren: RootRouteChildren = {
   FbAccountsRoute: FbAccountsRoute,
   LoginRoute: LoginRoute,
   OperationsRoute: OperationsRoute,
+  PermissionRequestsRoute: PermissionRequestsRoute,
   AdAccountsIdRoute: AdAccountsIdRoute,
   AdminAnnouncementsRoute: AdminAnnouncementsRoute,
   AdminAuditRoute: AdminAuditRoute,
   AdminCompanyRoute: AdminCompanyRoute,
   AdminIamRoute: AdminIamRoute,
+  AdminIamApprovalsRoute: AdminIamApprovalsRoute,
   AdminOperationsRoute: AdminOperationsRoute,
   AdminUsersRoute: AdminUsersRoute,
   FbAccountsIdRoute: FbAccountsIdRoute,

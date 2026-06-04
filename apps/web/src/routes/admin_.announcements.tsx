@@ -8,6 +8,8 @@ import {
   ChevronRight,
   Megaphone,
   Pencil,
+  Pin,
+  PinOff,
   Plus,
   RefreshCw,
   Send,
@@ -95,6 +97,11 @@ function AnnouncementsPage() {
     mutationFn: api.archiveReleaseAnnouncement,
     onSuccess: invalidate,
   });
+  const pin = useMutation({
+    mutationFn: ({ id, isPinned }: { id: string; isPinned: boolean }) =>
+      api.setReleaseAnnouncementPinned(id, isPinned),
+    onSuccess: invalidate,
+  });
   const deleteAnnouncement = useMutation({
     mutationFn: api.deleteReleaseAnnouncement,
     onSuccess: () => {
@@ -122,6 +129,7 @@ function AnnouncementsPage() {
     (update.error as Error | null)?.message ??
     (publish.error as Error | null)?.message ??
     (archive.error as Error | null)?.message ??
+    (pin.error as Error | null)?.message ??
     (deleteAnnouncement.error as Error | null)?.message;
 
   if (me.data && !isPlatformAdmin) {
@@ -205,6 +213,7 @@ function AnnouncementsPage() {
               <TableHead>标识</TableHead>
               <TableHead>标题</TableHead>
               <TableHead>状态</TableHead>
+              <TableHead>置顶</TableHead>
               <TableHead>计划时间</TableHead>
               <TableHead>发布时间</TableHead>
               <TableHead>更新时间</TableHead>
@@ -231,6 +240,15 @@ function AnnouncementsPage() {
                 <TableCell>
                   <StatusBadge status={item.status} />
                 </TableCell>
+                <TableCell>
+                  {item.isPinned ? (
+                    <span className="inline-flex rounded border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs text-amber-700">
+                      置顶
+                    </span>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">-</span>
+                  )}
+                </TableCell>
                 <TableCell className="text-xs text-muted-foreground">
                   {formatDate(item.nextUpdateAt)}
                 </TableCell>
@@ -255,6 +273,21 @@ function AnnouncementsPage() {
                       <Send className="mr-1 h-3 w-3" />
                       {item.status === 'published' ? '重新发布' : '发布'}
                     </Button>
+                    {item.status === 'published' && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={pin.isPending}
+                        onClick={() => pin.mutate({ id: item.id, isPinned: !item.isPinned })}
+                      >
+                        {item.isPinned ? (
+                          <PinOff className="mr-1 h-3 w-3" />
+                        ) : (
+                          <Pin className="mr-1 h-3 w-3" />
+                        )}
+                        {item.isPinned ? '取消置顶' : '置顶'}
+                      </Button>
+                    )}
                     {item.status !== 'archived' && (
                       <Button
                         size="sm"
@@ -616,7 +649,7 @@ function formatDate(value: string | null): string {
 function EmptyRow({ text }: { text: string }) {
   return (
     <TableRow>
-      <TableCell colSpan={7} className="text-muted-foreground">
+      <TableCell colSpan={8} className="text-muted-foreground">
         {text}
       </TableCell>
     </TableRow>

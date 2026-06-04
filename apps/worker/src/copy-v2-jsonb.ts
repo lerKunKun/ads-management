@@ -1342,6 +1342,7 @@ async function verifyCreatedWorkflowWithRetry(
 
 function shouldRetryVerifyMismatches(mismatches: FieldMismatch[]): boolean {
   if (mismatches.length === 0) return false;
+  if (mismatches.length > 25) return false;
   return mismatches.every(isEventuallyConsistentMismatch);
 }
 

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { Copy, Pause, Pencil, Play, RefreshCw, Trash2 } from 'lucide-react';
 import {
@@ -178,7 +178,7 @@ function syncInfoText(info: {
   stale: boolean;
   lastError?: string | null;
 }): string {
-  if (info.status === 'syncing') return '数据同步中，当前显示本地缓存';
+  if (info.status === 'syncing') return '数据持续同步中';
   if (info.status === 'failed') return '同步失败，当前显示本地缓存';
   if (!info.lastSyncedAt) return '暂无同步记录';
   const time = new Date(info.lastSyncedAt).toLocaleString();
@@ -212,6 +212,7 @@ export function EntityListView<T extends EntityRow>({
   serverSearch,
   summaryOverride,
 }: EntityListViewProps<T>) {
+  const queryClient = useQueryClient();
   const [internalSelected, setInternalSelected] = useState<Set<string>>(new Set());
   const [rowPatches, setRowPatches] = useState<Map<string, RowPatch>>(new Map());
   const [budgetEditing, setBudgetEditing] = useState<{ id: string; name: string; daily?: number } | null>(null);
@@ -421,8 +422,49 @@ export function EntityListView<T extends EntityRow>({
     queryKey: ['task-status', trackedTaskId],
     queryFn: () => api.taskStatus(trackedTaskId!),
     enabled: !!trackedTaskId,
-    refetchInterval: 2000,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status && !isTerminalTaskStatus(status) ? 30000 : false;
+    },
   });
+
+  useEffect(() => {
+    if (!trackedTaskId) return;
+    if (trackedTask.data?.status && isTerminalTaskStatus(trackedTask.data.status)) return;
+    const stream = openTaskStream(trackedTaskId);
+    stream.addEventListener('progress', (event) => {
+      try {
+        const snap = JSON.parse((event as MessageEvent).data) as Pick<
+          Awaited<ReturnType<typeof api.taskStatus>>,
+          'taskId' | 'total' | 'success' | 'failed' | 'status' | 'updatedAt'
+        >;
+        queryClient.setQueryData<Awaited<ReturnType<typeof api.taskStatus>>>(
+          ['task-status', trackedTaskId],
+          (current) =>
+            current
+              ? {
+                  ...current,
+                  total: snap.total,
+                  success: snap.success,
+                  failed: snap.failed,
+                  status: snap.status,
+                  updatedAt: snap.updatedAt,
+                }
+              : current,
+        );
+        if (isTerminalTaskStatus(snap.status)) {
+          stream.close();
+          void queryClient.invalidateQueries({ queryKey: ['task-status', trackedTaskId] });
+        }
+      } catch {
+        /* ignore malformed progress event */
+      }
+    });
+    stream.onerror = () => {
+      stream.close();
+    };
+    return () => stream.close();
+  }, [queryClient, trackedTask.data?.status, trackedTaskId]);
 
   useEffect(() => {
     const task = trackedTask.data;
@@ -1391,8 +1433,8 @@ function addInsightToSummary(total: InsightSummaryTotal, insight: InsightsSummar
   total.orders += insight.orders;
   total.addToCart += insight.addToCart;
   total.initiateCheckout += insight.initiateCheckout;
-  if (insight.roi > 0 && insight.spend > 0) {
-    total.roi += insight.roi * insight.spend;
+  if (insight.spend > 0) {
+    total.roi += Math.max(insight.roi, 0) * insight.spend;
     total.roiCount += insight.spend;
   }
 }

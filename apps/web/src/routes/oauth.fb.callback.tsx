@@ -23,7 +23,9 @@ function FbCallback() {
     api
       .fbCallback(search.code)
       .then((r) => {
-        setMsg(`FB个人号绑定成功，同步广告账户 ${r.adAccountsSynced} 个，3 秒后跳转…`);
+        setMsg(
+          `FB个人号绑定成功，已拥有该FB个人号权限；同步广告账户 ${r.adAccountsSynced} 个，广告账户权限仍需申请审批。3 秒后跳转…`,
+        );
         setTimeout(() => nav({ to: '/fb-accounts' }), 3000);
       })
       .catch((e) => setMsg(`绑定失败: ${e.message}`));

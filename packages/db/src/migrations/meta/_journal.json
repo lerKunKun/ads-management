@@ -57,6 +57,13 @@
       "when": 1780041600000,
       "tag": "0007_release_announcements",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1780550400000,
+      "tag": "0008_release_announcement_pin",
+      "breakpoints": true
     }
   ]
 }
