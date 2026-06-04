@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { and, eq, inArray, sql as dsql } from 'drizzle-orm';
+import { and, asc, desc, eq, ilike, inArray, sql as dsql } from 'drizzle-orm';
 import { db, schema } from '../../lib/db';
 import { env } from '../../env';
 import type {
@@ -13,12 +13,43 @@ import type {
 
 type ObjectType = 'campaign' | 'adset' | 'ad';
 type SyncObjectType = ObjectType;
+type SyncStatus = 'idle' | 'success' | 'failed' | 'syncing';
+type SortDirection = 'asc' | 'desc';
+
+interface SyncStateSnapshot {
+  status: SyncStatus;
+  lastSyncedAt: Date | null;
+  lastError: string | null;
+}
+
+export interface LocalPageInput {
+  page?: number;
+  pageSize?: number;
+  search?: string;
+  status?: EntityStatus;
+  sortBy?: 'createdAt' | 'name' | 'status';
+  sortDir?: SortDirection;
+}
+
+export interface LocalPageResult<T> {
+  rows: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+  syncStatus: SyncStatus;
+  lastSyncedAt: string | null;
+  lastError: string | null;
+  stale: boolean;
+}
 
 const CACHE_TTL_MS = Number.isFinite(env.adObjectCacheTtlMs)
   ? env.adObjectCacheTtlMs
   : 30_000;
 const LOCAL_SNAPSHOT_FALLBACK =
   process.env['META_FAKE'] === '1' || env.nodeEnv !== 'production';
+const MAX_PAGE_SIZE = 100;
+const DEFAULT_PAGE_SIZE = 100;
+const UPSERT_CHUNK_SIZE = 500;
 
 export async function readFreshCampaigns(
   companyId: string,
@@ -58,6 +89,69 @@ export async function readFreshAds(
   return null;
 }
 
+export async function readLocalCampaignPage(
+  companyId: string,
+  adAccountId: string,
+  input: LocalPageInput = {},
+): Promise<LocalPageResult<MetaCampaign>> {
+  const page = normalizePage(input.page);
+  const pageSize = normalizePageSize(input.pageSize);
+  const offset = (page - 1) * pageSize;
+  const search = input.search?.trim();
+  const status = input.status;
+  const sortBy = input.sortBy ?? 'createdAt';
+  const sortDir = input.sortDir ?? 'desc';
+
+  return db.transaction(async (tx) => {
+    await setTenant(tx, companyId);
+    const conditions = [
+      eq(schema.adCampaigns.companyId, companyId),
+      eq(schema.adCampaigns.adAccountId, adAccountId),
+    ];
+    if (search) conditions.push(ilike(schema.adCampaigns.name, `%${escapeLike(search)}%`));
+    if (status) conditions.push(eq(schema.adCampaigns.status, status));
+    const where = and(...conditions);
+    const totalRows = await tx
+      .select({ total: dsql<number>`count(*)::int` })
+      .from(schema.adCampaigns)
+      .where(where);
+    const orderBy =
+      sortBy === 'name'
+        ? sortDir === 'asc'
+          ? asc(schema.adCampaigns.name)
+          : desc(schema.adCampaigns.name)
+        : sortBy === 'status'
+          ? sortDir === 'asc'
+            ? asc(schema.adCampaigns.status)
+            : desc(schema.adCampaigns.status)
+          : sortDir === 'asc'
+            ? asc(schema.adCampaigns.createdAt)
+            : desc(schema.adCampaigns.createdAt);
+    const rowsQuery = tx
+      .select()
+      .from(schema.adCampaigns)
+      .where(where)
+      .orderBy(orderBy)
+      .limit(pageSize)
+      .offset(offset);
+    const [rows, state] = await Promise.all([
+      rowsQuery,
+      readSyncStateTx(tx, companyId, adAccountId, 'campaign', ''),
+    ]);
+    const total = Number(totalRows[0]?.total ?? 0);
+    return {
+      rows: rows.map(toMetaCampaign),
+      total,
+      page,
+      pageSize,
+      syncStatus: state?.status ?? 'idle',
+      lastSyncedAt: state?.lastSyncedAt ? state.lastSyncedAt.toISOString() : null,
+      lastError: state?.lastError ?? null,
+      stale: !isFreshSyncState(state),
+    };
+  });
+}
+
 export async function upsertCampaignSnapshots(
   companyId: string,
   adAccountId: string,
@@ -67,11 +161,11 @@ export async function upsertCampaignSnapshots(
   await db.transaction(async (tx) => {
     await setTenant(tx, companyId);
     const now = new Date();
-    if (uniqueRows.length > 0) {
+    for (const chunk of chunks(uniqueRows, UPSERT_CHUNK_SIZE)) {
       await tx
         .insert(schema.adCampaigns)
         .values(
-          uniqueRows.map((row) => ({
+          chunk.map((row) => ({
             companyId,
             adAccountId,
             metaId: row.id,
@@ -126,11 +220,11 @@ export async function upsertAdSetSnapshots(
   await db.transaction(async (tx) => {
     await setTenant(tx, companyId);
     const now = new Date();
-    if (uniqueRows.length > 0) {
+    for (const chunk of chunks(uniqueRows, UPSERT_CHUNK_SIZE)) {
       await tx
         .insert(schema.adSetObjects)
         .values(
-          uniqueRows.map((row) => ({
+          chunk.map((row) => ({
             companyId,
             adAccountId,
             campaignMetaId: row.campaignId ?? campaignId,
@@ -189,11 +283,11 @@ export async function upsertAdSnapshots(
   await db.transaction(async (tx) => {
     await setTenant(tx, companyId);
     const now = new Date();
-    if (uniqueRows.length > 0) {
+    for (const chunk of chunks(uniqueRows, UPSERT_CHUNK_SIZE)) {
       await tx
         .insert(schema.adObjects)
         .values(
-          uniqueRows.map((row) => ({
+          chunk.map((row) => ({
             companyId,
             adAccountId,
             campaignMetaId: row.campaignId ?? null,
@@ -239,6 +333,29 @@ function uniqueByMetaId<T extends { id: string }>(rows: T[]): T[] {
     byId.set(row.id, row);
   }
   return Array.from(byId.values());
+}
+
+function chunks<T>(rows: T[], size: number): T[][] {
+  if (rows.length === 0) return [];
+  const out: T[][] = [];
+  for (let i = 0; i < rows.length; i += size) {
+    out.push(rows.slice(i, i + size));
+  }
+  return out;
+}
+
+function normalizePage(page: number | undefined): number {
+  if (!Number.isFinite(page) || !page || page < 1) return 1;
+  return Math.floor(page);
+}
+
+function normalizePageSize(pageSize: number | undefined): number {
+  if (!Number.isFinite(pageSize) || !pageSize) return DEFAULT_PAGE_SIZE;
+  return Math.min(Math.max(Math.floor(pageSize), 1), MAX_PAGE_SIZE);
+}
+
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (match) => `\\${match}`);
 }
 
 export async function hydrateAdsWithLocalAdSetSchedule(
@@ -740,20 +857,24 @@ async function listLocalCampaigns(
         ),
       )
       .orderBy(schema.adCampaigns.createdAt);
-    return rows.map((row) => ({
-      id: row.metaId,
-      name: row.name,
-      status: row.status,
-      ...(row.effectiveStatus ? { effectiveStatus: row.effectiveStatus } : {}),
-      ...(row.objective ? { objective: row.objective } : {}),
-      ...(row.dailyBudget !== null ? { dailyBudget: row.dailyBudget } : {}),
-      ...(row.lifetimeBudget !== null ? { lifetimeBudget: row.lifetimeBudget } : {}),
-      ...(row.startTime ? { startTime: row.startTime.toISOString() } : {}),
-      ...(row.stopTime ? { stopTime: row.stopTime.toISOString() } : {}),
-      ...(row.metaUpdatedTime ? { updatedTime: row.metaUpdatedTime.toISOString() } : {}),
-      ...(row.metaCreatedTime ? { createdTime: row.metaCreatedTime.toISOString() } : {}),
-    }));
+    return rows.map(toMetaCampaign);
   });
+}
+
+function toMetaCampaign(row: typeof schema.adCampaigns.$inferSelect): MetaCampaign {
+  return {
+    id: row.metaId,
+    name: row.name,
+    status: row.status,
+    ...(row.effectiveStatus ? { effectiveStatus: row.effectiveStatus } : {}),
+    ...(row.objective ? { objective: row.objective } : {}),
+    ...(row.dailyBudget !== null ? { dailyBudget: row.dailyBudget } : {}),
+    ...(row.lifetimeBudget !== null ? { lifetimeBudget: row.lifetimeBudget } : {}),
+    ...(row.startTime ? { startTime: row.startTime.toISOString() } : {}),
+    ...(row.stopTime ? { stopTime: row.stopTime.toISOString() } : {}),
+    ...(row.metaUpdatedTime ? { updatedTime: row.metaUpdatedTime.toISOString() } : {}),
+    ...(row.metaCreatedTime ? { createdTime: row.metaCreatedTime.toISOString() } : {}),
+  };
 }
 
 async function listLocalAdSets(
@@ -854,24 +975,46 @@ async function hasFreshSync(
 ): Promise<boolean> {
   return db.transaction(async (tx) => {
     await setTenant(tx, companyId);
-    const rows = await tx
-      .select({
-        status: schema.adAccountSyncState.status,
-        lastSyncedAt: schema.adAccountSyncState.lastSyncedAt,
-      })
-      .from(schema.adAccountSyncState)
-      .where(
-        and(
-          eq(schema.adAccountSyncState.adAccountId, adAccountId),
-          eq(schema.adAccountSyncState.objectType, objectType),
-          eq(schema.adAccountSyncState.parentMetaId, parentMetaId),
-        ),
-      )
-      .limit(1);
-    const row = rows[0];
-    if (!row || row.status !== 'success' || !row.lastSyncedAt) return false;
-    return Date.now() - row.lastSyncedAt.getTime() <= CACHE_TTL_MS;
+    return isFreshSyncState(await readSyncStateTx(tx, companyId, adAccountId, objectType, parentMetaId));
   });
+}
+
+async function readSyncStateTx(
+  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  companyId: string,
+  adAccountId: string,
+  objectType: SyncObjectType,
+  parentMetaId: string,
+): Promise<SyncStateSnapshot | null> {
+  const rows = await tx
+    .select({
+      status: schema.adAccountSyncState.status,
+      lastSyncedAt: schema.adAccountSyncState.lastSyncedAt,
+      lastError: schema.adAccountSyncState.lastError,
+    })
+    .from(schema.adAccountSyncState)
+    .where(
+      and(
+        eq(schema.adAccountSyncState.companyId, companyId),
+        eq(schema.adAccountSyncState.adAccountId, adAccountId),
+        eq(schema.adAccountSyncState.objectType, objectType),
+        eq(schema.adAccountSyncState.parentMetaId, parentMetaId),
+      ),
+    )
+    .limit(1);
+  const row = rows[0];
+  return row
+    ? {
+        status: row.status,
+        lastSyncedAt: row.lastSyncedAt,
+        lastError: row.lastError,
+      }
+    : null;
+}
+
+function isFreshSyncState(row: SyncStateSnapshot | null): boolean {
+  if (!row || row.status !== 'success' || !row.lastSyncedAt) return false;
+  return Date.now() - row.lastSyncedAt.getTime() <= CACHE_TTL_MS;
 }
 
 async function markSyncSuccessTx(

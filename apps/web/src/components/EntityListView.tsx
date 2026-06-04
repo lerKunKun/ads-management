@@ -76,6 +76,23 @@ export interface EntityListViewProps<T extends EntityRow> {
   scopeLabel?: string;
   emptyText?: string;
   showDatePreset?: boolean;
+  pagination?: {
+    page: number;
+    pageSize: number;
+    total: number;
+    onPageChange: (page: number) => void;
+    onPageSizeChange: (pageSize: number) => void;
+  };
+  syncInfo?: {
+    status: 'idle' | 'success' | 'failed' | 'syncing';
+    lastSyncedAt: string | null;
+    stale: boolean;
+    lastError?: string | null;
+  };
+  serverSearch?: {
+    value: string;
+    onChange: (value: string) => void;
+  };
   summaryOverride?: {
     label: string;
     summary: InsightSummaryTotal;
@@ -155,6 +172,19 @@ function isTerminalTaskStatus(status: string): status is TerminalTaskStatus {
   return (TASK_TERMINAL as readonly string[]).includes(status);
 }
 
+function syncInfoText(info: {
+  status: 'idle' | 'success' | 'failed' | 'syncing';
+  lastSyncedAt: string | null;
+  stale: boolean;
+  lastError?: string | null;
+}): string {
+  if (info.status === 'syncing') return '数据同步中，当前显示本地缓存';
+  if (info.status === 'failed') return '同步失败，当前显示本地缓存';
+  if (!info.lastSyncedAt) return '暂无同步记录';
+  const time = new Date(info.lastSyncedAt).toLocaleString();
+  return info.stale ? `本地缓存，最后同步 ${time}` : `已同步 ${time}`;
+}
+
 export function EntityListView<T extends EntityRow>({
   layer,
   layerLabel,
@@ -177,6 +207,9 @@ export function EntityListView<T extends EntityRow>({
   scopeLabel,
   emptyText,
   showDatePreset = true,
+  pagination,
+  syncInfo,
+  serverSearch,
   summaryOverride,
 }: EntityListViewProps<T>) {
   const [internalSelected, setInternalSelected] = useState<Set<string>>(new Set());
@@ -196,6 +229,16 @@ export function EntityListView<T extends EntityRow>({
   const me = useQuery<Me>({ queryKey: ['me'], queryFn: api.me });
   const selected = selectedIds ?? internalSelected;
   const selectionControlled = selectedIds !== undefined;
+  const effectiveSearch = serverSearch?.value ?? search;
+
+  function changeSearch(next: string) {
+    if (serverSearch) {
+      serverSearch.onChange(next);
+      setActivePage(1);
+      return;
+    }
+    setSearch(next);
+  }
 
   function replaceSelected(next: Set<string>) {
     if (!selectionControlled) setInternalSelected(next);
@@ -229,10 +272,10 @@ export function EntityListView<T extends EntityRow>({
     () =>
       patchedRows.filter(
         (row) =>
-          matchText(row.name, search) &&
+          (!serverSearch || matchText(row.name, effectiveSearch)) &&
           matchesStatusFilter(row, statusFilter),
       ),
-    [patchedRows, search, statusFilter],
+    [effectiveSearch, patchedRows, serverSearch, statusFilter],
   );
 
   const sortedRows = useMemo(
@@ -241,13 +284,19 @@ export function EntityListView<T extends EntityRow>({
   );
 
   const pager = usePagination(sortedRows, pageSize);
+  const activePageItems = pagination ? sortedRows : pager.pageItems;
+  const activePage = pagination?.page ?? pager.page;
+  const activePageSize = pagination?.pageSize ?? pager.pageSize;
+  const activeTotal = pagination?.total ?? sortedRows.length;
+  const activePageCount = Math.max(1, Math.ceil(activeTotal / activePageSize));
+  const setActivePage = pagination?.onPageChange ?? pager.setPage;
   const rowById = useMemo(
     () => new Map(patchedRows.map((row) => [row.id, row])),
     [patchedRows],
   );
   const selectablePageItems = useMemo(
-    () => pager.pageItems.filter((row) => !isReadOnlyEntity(row)),
-    [pager.pageItems],
+    () => activePageItems.filter((row) => !isReadOnlyEntity(row)),
+    [activePageItems],
   );
   const allIds = useMemo(() => selectablePageItems.map((row) => row.id), [selectablePageItems]);
   const selectedOperableIds = useMemo(
@@ -263,9 +312,9 @@ export function EntityListView<T extends EntityRow>({
   );
   const allSelected = allIds.length > 0 && allIds.every((id) => selected.has(id));
   const summaryRows = useMemo(() => {
-    if (selectedOperableIds.length === 0) return pager.pageItems;
+    if (selectedOperableIds.length === 0) return activePageItems;
     return patchedRows.filter((row) => selectedOperableIdSet.has(row.id));
-  }, [pager.pageItems, patchedRows, selectedOperableIdSet, selectedOperableIds.length]);
+  }, [activePageItems, patchedRows, selectedOperableIdSet, selectedOperableIds.length]);
   const summary = useMemo(
     () => summarizeInsights(summaryRows, insights),
     [insights, summaryRows],
@@ -315,12 +364,16 @@ export function EntityListView<T extends EntityRow>({
       if (current?.metric !== metric) return { metric, direction: 'desc' };
       return { metric, direction: current.direction === 'desc' ? 'asc' : 'desc' };
     });
-    pager.setPage(1);
+    setActivePage(1);
   }
 
   function changePageSize(nextPageSize: number) {
+    if (pagination) {
+      pagination.onPageSizeChange(nextPageSize);
+      return;
+    }
     setPageSize(nextPageSize);
-    pager.setPage(1);
+    setActivePage(1);
   }
 
   const setStatus = useMutation({
@@ -455,6 +508,11 @@ export function EntityListView<T extends EntityRow>({
             detail={selectedCrossesFilter ? '跨筛选' : undefined}
             onClear={() => replaceSelected(new Set())}
           />
+          {syncInfo && (
+            <span className="rounded bg-muted px-2 py-1 text-xs text-muted-foreground">
+              {syncInfoText(syncInfo)}
+            </span>
+          )}
         </div>
         <div className="flex flex-col gap-2 xl:items-end">
           <div className="flex w-full flex-wrap items-center gap-2 xl:w-auto xl:justify-end">
@@ -464,7 +522,7 @@ export function EntityListView<T extends EntityRow>({
                 checked={activeFirst}
                 onCheckedChange={(next) => {
                   setActiveFirst(next);
-                  pager.setPage(1);
+                  setActivePage(1);
                 }}
                 aria-label="active-first"
               />
@@ -553,8 +611,8 @@ export function EntityListView<T extends EntityRow>({
       </div>
 
       <SearchFilterBar
-        searchValue={search}
-        onSearchChange={setSearch}
+        searchValue={effectiveSearch}
+        onSearchChange={changeSearch}
         searchPlaceholder={`搜索${layerLabel}名称...`}
         filters={[
           {
@@ -569,6 +627,8 @@ export function EntityListView<T extends EntityRow>({
         filtered={filteredRows.length}
         onReset={() => {
           setSearch('');
+          serverSearch?.onChange('');
+          setActivePage(1);
           setStatusFilter('');
         }}
       />
@@ -626,7 +686,7 @@ export function EntityListView<T extends EntityRow>({
             {!isLoading && rows.length > 0 && filteredRows.length === 0 && (
               <EmptyTableRow colSpan={tableColumnCount} text="无匹配项，请清除筛选条件" />
             )}
-            {pager.pageItems.map((row) => {
+            {activePageItems.map((row) => {
               const insight = insights?.[row.id];
               const readOnly = isReadOnlyEntity(row);
               const isSelected = !readOnly && selected.has(row.id);
@@ -780,12 +840,12 @@ export function EntityListView<T extends EntityRow>({
           </TableFooter>
         </Table>
         <Pagination
-          page={pager.page}
-          pageCount={pager.pageCount}
-          total={sortedRows.length}
-          pageSize={pager.pageSize}
+          page={activePage}
+          pageCount={activePageCount}
+          total={activeTotal}
+          pageSize={activePageSize}
           pageSizeOptions={PAGE_SIZE_OPTIONS}
-          onPageChange={pager.setPage}
+          onPageChange={setActivePage}
           onPageSizeChange={changePageSize}
         />
       </div>

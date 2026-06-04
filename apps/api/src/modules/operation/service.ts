@@ -30,6 +30,8 @@ import {
   markLocalDeleted,
   markLocalStatus,
   hydrateAdsWithLocalAdSetSchedule,
+  markSyncFailed,
+  readLocalCampaignPage,
   readFreshAds,
   readFreshAdSets,
   readFreshCampaigns,
@@ -108,6 +110,29 @@ interface ListOptions {
   force?: boolean;
 }
 
+export interface PagedListOptions {
+  force?: boolean;
+  page?: number;
+  pageSize?: number;
+  search?: string;
+  status?: 'ACTIVE' | 'PAUSED' | 'ARCHIVED' | 'DELETED';
+  sortBy?: 'createdAt' | 'name' | 'status';
+  sortDir?: 'asc' | 'desc';
+}
+
+export interface PagedListResult<T> {
+  rows: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+  syncStatus: 'idle' | 'success' | 'failed' | 'syncing';
+  lastSyncedAt: string | null;
+  lastError: string | null;
+  stale: boolean;
+}
+
+const campaignSyncInFlight = new Set<string>();
+
 // =================== Campaign list / 单操作 ===================
 export async function listCampaigns(
   principal: AuthPrincipal,
@@ -126,6 +151,67 @@ export async function listCampaigns(
     await handleMetaError(err, principal.companyId, ctx.fbAccountId);
     throw err;
   }
+}
+
+export async function listCampaignPage(
+  principal: AuthPrincipal,
+  adAccountId: string,
+  options: PagedListOptions = {},
+): Promise<PagedListResult<MetaCampaign>> {
+  assertScope(principal, adAccountId);
+  const page = await readLocalCampaignPage(principal.companyId, adAccountId, {
+    page: options.page,
+    pageSize: options.pageSize,
+    search: options.search,
+    status: options.status,
+    sortBy: options.sortBy,
+    sortDir: options.sortDir,
+  });
+  if (options.force || page.stale || page.total === 0) {
+    void refreshCampaignsInBackground(principal.companyId, adAccountId);
+  }
+  return {
+    ...page,
+    syncStatus: campaignSyncInFlight.has(syncKey(principal.companyId, adAccountId))
+      ? 'syncing'
+      : page.syncStatus,
+  };
+}
+
+async function refreshCampaignsInBackground(companyId: string, adAccountId: string): Promise<void> {
+  const key = syncKey(companyId, adAccountId);
+  if (campaignSyncInFlight.has(key)) return;
+  campaignSyncInFlight.add(key);
+  try {
+    const ctx = await resolveAdAccount(companyId, adAccountId);
+    const rows = await meta.listCampaigns(ctx.token, ctx.metaActId);
+    await upsertCampaignSnapshots(companyId, adAccountId, rows);
+  } catch (err) {
+    await markSyncFailed({
+      companyId,
+      adAccountId,
+      objectType: 'campaign',
+      parentMetaId: '',
+      error: err instanceof Error ? err.message : String(err),
+    });
+    console.error('[campaign-sync] background refresh failed', {
+      companyId,
+      adAccountId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    try {
+      const ctx = await resolveAdAccount(companyId, adAccountId);
+      await handleMetaError(err, companyId, ctx.fbAccountId);
+    } catch {
+      // The page already returned local data; keep the error in logs.
+    }
+  } finally {
+    campaignSyncInFlight.delete(key);
+  }
+}
+
+function syncKey(companyId: string, adAccountId: string): string {
+  return `${companyId}:${adAccountId}`;
 }
 
 export async function setCampaignStatus(

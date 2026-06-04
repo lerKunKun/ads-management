@@ -55,6 +55,16 @@ async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
   return body.data;
 }
 
+function qs(params: Record<string, string | number | boolean | undefined>): string {
+  const out = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === '') continue;
+    out.set(key, String(value));
+  }
+  const text = out.toString();
+  return text ? `?${text}` : '';
+}
+
 export interface Me {
   id: string;
   email: string;
@@ -216,6 +226,27 @@ export interface Campaign {
   updatedTime?: string;
 }
 
+export interface PagedList<T> {
+  rows: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+  syncStatus: 'idle' | 'success' | 'failed' | 'syncing';
+  lastSyncedAt: string | null;
+  lastError: string | null;
+  stale: boolean;
+}
+
+export interface CampaignPageOptions {
+  force?: boolean;
+  page?: number;
+  pageSize?: number;
+  search?: string;
+  status?: Campaign['status'];
+  sortBy?: 'createdAt' | 'name' | 'status';
+  sortDir?: 'asc' | 'desc';
+}
+
 export interface TaskLayerProgress {
   targetType: 'campaign' | 'adset' | 'ad';
   label: string;
@@ -338,6 +369,18 @@ export const api = {
   adAccountSummary: (id: string) => call<AdAccountSummary>(`/ad-accounts/${id}/summary`),
   campaigns: (id: string, opts: { force?: boolean } = {}) =>
     call<Campaign[]>(`/ad-accounts/${id}/campaigns${opts.force ? '?force=1' : ''}`),
+  campaignPage: (id: string, opts: CampaignPageOptions = {}) =>
+    call<PagedList<Campaign>>(
+      `/ad-accounts/${id}/campaigns${qs({
+        force: opts.force ? 1 : undefined,
+        page: opts.page ?? 1,
+        page_size: opts.pageSize ?? 100,
+        search: opts.search,
+        status: opts.status,
+        sort_by: opts.sortBy,
+        sort_dir: opts.sortDir,
+      })}`,
+    ),
   setCampaignStatus: (
     campaignId: string,
     adAccountId: string,

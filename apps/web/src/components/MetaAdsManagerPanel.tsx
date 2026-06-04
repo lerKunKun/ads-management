@@ -36,12 +36,17 @@ export function MetaAdsManagerPanel({
     return { mode: 'today', since: today, until: today };
   });
   const [activeLayer, setActiveLayer] = useState<ActiveLayer>('campaign');
+  const [campaignPage, setCampaignPage] = useState(1);
+  const [campaignPageSize, setCampaignPageSize] = useState(100);
+  const [campaignSearch, setCampaignSearch] = useState('');
   const [selectedCampaignIds, setSelectedCampaignIds] = useState<Set<string>>(() => new Set());
   const [selectedAdsetIds, setSelectedAdsetIds] = useState<Set<string>>(() => new Set());
   const [selectedAdIds, setSelectedAdIds] = useState<Set<string>>(() => new Set());
 
   useEffect(() => {
     setActiveLayer('campaign');
+    setCampaignPage(1);
+    setCampaignSearch('');
     setSelectedCampaignIds(new Set());
     setSelectedAdsetIds(new Set());
     setSelectedAdIds(new Set());
@@ -64,9 +69,23 @@ export function MetaAdsManagerPanel({
       : `${insightsDateSpec.since}_${insightsDateSpec.until}`;
 
   const campaigns = useQuery({
-    queryKey: ['campaigns', adAccountId],
-    queryFn: () => api.campaigns(adAccountId),
+    queryKey: ['campaigns', adAccountId, campaignPage, campaignPageSize, campaignSearch],
+    queryFn: () =>
+      api.campaignPage(adAccountId, {
+        page: campaignPage,
+        pageSize: campaignPageSize,
+        search: campaignSearch,
+      }),
   });
+  const campaignRows = campaigns.data?.rows ?? [];
+
+  useEffect(() => {
+    if (campaigns.data?.syncStatus !== 'syncing') return;
+    const timer = window.setInterval(() => {
+      void queryClient.invalidateQueries({ queryKey: ['campaigns', adAccountId] });
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [adAccountId, campaigns.data?.syncStatus, queryClient]);
   const campaignInsights = useQuery({
     queryKey: ['insights', adAccountId, 'campaign', insightsDateKey],
     queryFn: () => api.insightsByLevel(adAccountId, 'campaign', insightsDateSpec),
@@ -130,10 +149,18 @@ export function MetaAdsManagerPanel({
   }
 
   function refreshCampaigns() {
-    void queryClient
-      .fetchQuery({
-        queryKey: ['campaigns', adAccountId],
-        queryFn: () => api.campaigns(adAccountId, { force: true }),
+    void api
+      .campaignPage(adAccountId, {
+        force: true,
+        page: campaignPage,
+        pageSize: campaignPageSize,
+        search: campaignSearch,
+      })
+      .then(() => {
+        void queryClient.invalidateQueries({ queryKey: ['campaigns', adAccountId] });
+        window.setTimeout(() => {
+          void queryClient.invalidateQueries({ queryKey: ['campaigns', adAccountId] });
+        }, 3000);
       })
       .catch(() => undefined);
     void campaignInsights.refetch();
@@ -262,7 +289,7 @@ export function MetaAdsManagerPanel({
               label="广告系列"
               active={activeLayer === 'campaign'}
               selectedCount={selectedCampaignIds.size}
-              totalCount={campaigns.data?.length ?? 0}
+              totalCount={campaigns.data?.total ?? 0}
               onClick={() => switchLayer('campaign')}
               onClearSelected={clearCampaignSelection}
             />
@@ -297,7 +324,7 @@ export function MetaAdsManagerPanel({
               layer="campaign"
               layerLabel="广告系列"
               adAccountId={adAccountId}
-              rows={campaigns.data ?? []}
+              rows={campaignRows}
               isLoading={campaigns.isLoading}
               error={campaigns.error}
               refetch={refreshCampaigns}
@@ -313,6 +340,33 @@ export function MetaAdsManagerPanel({
               onSelectedIdsChange={onCampaignSelectionChange}
               scopeLabel="选中广告系列后切到广告组"
               showDatePreset={false}
+              pagination={{
+                page: campaignPage,
+                pageSize: campaignPageSize,
+                total: campaigns.data?.total ?? 0,
+                onPageChange: setCampaignPage,
+                onPageSizeChange: (next) => {
+                  setCampaignPageSize(next);
+                  setCampaignPage(1);
+                },
+              }}
+              syncInfo={
+                campaigns.data
+                  ? {
+                      status: campaigns.data.syncStatus,
+                      lastSyncedAt: campaigns.data.lastSyncedAt,
+                      stale: campaigns.data.stale,
+                      lastError: campaigns.data.lastError,
+                    }
+                  : undefined
+              }
+              serverSearch={{
+                value: campaignSearch,
+                onChange: (next) => {
+                  setCampaignSearch(next);
+                  setCampaignPage(1);
+                },
+              }}
               summaryOverride={{ label: '广告账户数据', summary: adAccountSummary }}
             />
           )}

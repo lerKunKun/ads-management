@@ -48,6 +48,29 @@ function isForceRefresh(value: string | undefined): boolean {
   return value === '1' || value === 'true';
 }
 
+function parsePositiveInt(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 1) return undefined;
+  return Math.floor(parsed);
+}
+
+function isCampaignStatus(
+  value: string | undefined,
+): value is 'ACTIVE' | 'PAUSED' | 'ARCHIVED' | 'DELETED' {
+  return value === 'ACTIVE' || value === 'PAUSED' || value === 'ARCHIVED' || value === 'DELETED';
+}
+
+function isCampaignSortBy(
+  value: string | undefined,
+): value is 'createdAt' | 'name' | 'status' {
+  return value === 'createdAt' || value === 'name' || value === 'status';
+}
+
+function isSortDir(value: string | undefined): value is 'asc' | 'desc' {
+  return value === 'asc' || value === 'desc';
+}
+
 export const operation = new Elysia({ name: 'operation' })
   .get('/_operation/ping', () => ({ code: 0, msg: 'ok', data: 'operation' }))
   .group('', (g) =>
@@ -71,14 +94,41 @@ export const operation = new Elysia({ name: 'operation' })
       .get(
         '/ad-accounts/:id/campaigns',
         async ({ principal, params, query }) => {
-          const data = await svc.listCampaigns(principal, params.id, {
-            force: isForceRefresh(query.force),
-          });
+          const sortBy = query.sort_by ?? query.sortBy;
+          const sortDir = query.sort_dir ?? query.sortDir;
+          const data = query.page || query.page_size || query.pageSize
+            ? await svc.listCampaignPage(principal, params.id, {
+                force: isForceRefresh(query.force),
+                page: parsePositiveInt(query.page),
+                pageSize: parsePositiveInt(query.page_size ?? query.pageSize),
+                ...(query.search ? { search: query.search } : {}),
+                ...(isCampaignStatus(query.status) ? { status: query.status } : {}),
+                ...(isCampaignSortBy(sortBy)
+                  ? { sortBy }
+                  : {}),
+                ...(isSortDir(sortDir)
+                  ? { sortDir }
+                  : {}),
+              })
+            : await svc.listCampaigns(principal, params.id, {
+                force: isForceRefresh(query.force),
+              });
           return { code: 0, msg: 'ok', data };
         },
         {
           params: t.Object({ id: t.String({ format: 'uuid' }) }),
-          query: t.Object({ force: t.Optional(t.String()) }),
+          query: t.Object({
+            force: t.Optional(t.String()),
+            page: t.Optional(t.String()),
+            page_size: t.Optional(t.String()),
+            pageSize: t.Optional(t.String()),
+            search: t.Optional(t.String()),
+            status: t.Optional(t.String()),
+            sort_by: t.Optional(t.String()),
+            sortBy: t.Optional(t.String()),
+            sort_dir: t.Optional(t.String()),
+            sortDir: t.Optional(t.String()),
+          }),
           beforeHandle: requirePermission('ad_account:read'),
         },
       )
